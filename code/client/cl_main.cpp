@@ -393,14 +393,14 @@ void CL_Record_f( void ) {
 	if ( Cmd_Argc() == 2 ) {
 		s = Cmd_Argv(1);
 		Q_strncpyz( demoName, s, sizeof( demoName ) );
-		Com_sprintf (name, sizeof(name), "demos/%s.dm_%d", demoName, com_protocol->integer );
+		Com_sprintf (name, sizeof(name), "demos/%s." DEMOEXT, demoName);
 	} else {
 		int		number;
 
 		// scan for a free demo name
 		for ( number = 0 ; number <= 9999 ; number++ ) {
 			CL_DemoFilename( number, demoName );
-			Com_sprintf (name, sizeof(name), "demos/%s.dm_%d", demoName, com_protocol->integer );
+			Com_sprintf (name, sizeof(name), "demos/%s." DEMOEXT, demoName);
 
 			if (!FS_FileExists_HomeData(name))
 				break;	// file doesn't exist
@@ -646,30 +646,6 @@ void CL_ReadDemoMessage( void ) {
 
 /*
 ====================
-CL_WalkDemoExt
-====================
-*/
-static void CL_WalkDemoExt(char *arg, char *name, int *demofile)
-{
-	int i = 0;
-	*demofile = 0;
-	while(demo_protocols[i])
-	{
-		Com_sprintf (name, MAX_OSPATH, "demos/%s.dm_%d", arg, demo_protocols[i]);
-		FS_FOpenFileRead( name, demofile, qtrue, qtrue );
-		if (*demofile)
-		{
-			Com_Printf("Demo file: %s\n", name);
-			break;
-		}
-		else
-			Com_Printf("Not found: %s\n", name);
-		i++;
-	}
-}
-
-/*
-====================
 CL_PlayDemo_f
 
 demo <demoname>
@@ -678,9 +654,7 @@ demo <demoname>
 */
 void CL_PlayDemo_f( void ) {
 	char		name[MAX_OSPATH];
-	char		*arg, *ext_test;
-	int			protocol, i;
-	char		retry[MAX_OSPATH];
+	char		*arg;
 
 	if (Cmd_Argc() != 2) {
 		Com_Printf ("playdemo <demoname>\n");
@@ -696,31 +670,13 @@ void CL_PlayDemo_f( void ) {
 	// open the demo file
 	arg = Cmd_Argv(1);
 
-	// check for an extension .dm_?? (?? is protocol)
-	ext_test = arg + strlen(arg) - 6;
-	if ((strlen(arg) > 6) && (ext_test[0] == '.') && ((ext_test[1] == 'd') || (ext_test[1] == 'D')) && ((ext_test[2] == 'm') || (ext_test[2] == 'M')) && (ext_test[3] == '_'))
-	{
-		protocol = atoi(ext_test+4);
-		i=0;
-		while(demo_protocols[i])
-		{
-			if (demo_protocols[i] == protocol)
-				break;
-			i++;
-		}
-		if (demo_protocols[i])
-		{
-			Com_sprintf (name, sizeof(name), "demos/%s", arg);
-			FS_FOpenFileRead( name, &clc.demofile, qtrue, qtrue );
-		} else {
-			Com_Printf("Protocol %d not supported for demos\n", protocol);
-			Q_strncpyz(retry, arg, sizeof(retry));
-			retry[strlen(retry)-6] = 0;
-			CL_WalkDemoExt( retry, name, &clc.demofile );
-		}
-	} else {
-		CL_WalkDemoExt( arg, name, &clc.demofile );
+	// Changed in OPM
+	//  Demos use the original .dm3 extension, which can be left out
+	Com_sprintf (name, sizeof(name), "demos/%s", arg);
+	if (!COM_CompareExtension(name, "." DEMOEXT)) {
+		Q_strcat(name, sizeof(name), "." DEMOEXT);
 	}
+	FS_FOpenFileRead( name, &clc.demofile, qtrue, qtrue );
 
 	if (!clc.demofile) {
 		Com_Error( ERR_DROP, "couldn't open %s", name);

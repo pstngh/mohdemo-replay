@@ -372,10 +372,6 @@ PROTOCOL
 #define PROTOCOL_LEGACY_VERSION		PROTOCOL_VERSION
 // su44: MoHAA v 1.00 uses protocol version 6
 
-// maintain a list of compatible protocols for demo playing
-// NOTE: that stuff only works with two digits protocols
-extern int demo_protocols[];
-
 // fixme : we need a new master server address
 
 #define	UPDATE_SERVER_NAME	"updatemoh.2015.com"
