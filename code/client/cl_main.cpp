@@ -713,6 +713,61 @@ void CL_StartDemoLoop( void ) {
 	Key_SetCatcher( 0 );
 }
 
+// Added in OPM
+//====
+// next demo played by loopdemos, -1 when not looping
+static int loopDemoIndex = -1;
+
+/*
+==================
+CL_PlayLoopDemo
+
+Plays the next demo of the demos folder, in alphabetical order
+==================
+*/
+static void CL_PlayLoopDemo( void ) {
+	char	**demos;
+	int		numDemos;
+
+	demos = FS_ListFiles("demos", "." DEMOEXT, qfalse, &numDemos);
+	if (loopDemoIndex < numDemos) {
+		FS_SortFileList(demos, numDemos);
+		Com_Printf("Playing demo %d of %d: %s\n", loopDemoIndex + 1, numDemos, demos[loopDemoIndex]);
+		Cbuf_AddText(va("demo \"%s\"\n", demos[loopDemoIndex]));
+		loopDemoIndex++;
+	} else {
+		if (numDemos) {
+			Com_Printf("Played all %d demos\n", numDemos);
+		} else {
+			Com_Printf("No demos found in demos/\n");
+		}
+		loopDemoIndex = -1;
+	}
+	FS_FreeFileList(demos);
+}
+
+/*
+==================
+CL_LoopDemos_f
+
+Plays all demos one after the other, until stoploopdemos
+==================
+*/
+static void CL_LoopDemos_f( void ) {
+	loopDemoIndex = 0;
+	CL_PlayLoopDemo();
+}
+
+/*
+==================
+CL_StopLoopDemos_f
+==================
+*/
+static void CL_StopLoopDemos_f( void ) {
+	loopDemoIndex = -1;
+}
+//====
+
 /*
 ==================
 CL_NextDemo
@@ -723,6 +778,12 @@ If the "nextdemo" cvar is set, that command will be issued
 */
 void CL_NextDemo( void ) {
 	char	v[MAX_STRING_CHARS];
+
+	// Added in OPM
+	if (loopDemoIndex >= 0) {
+		CL_PlayLoopDemo();
+		return;
+	}
 
 	Q_strncpyz( v, Cvar_VariableString ("nextdemo"), sizeof(v) );
 	v[MAX_STRING_CHARS-1] = 0;
@@ -3673,6 +3734,8 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("disconnect", CL_Disconnect_f);
 	Cmd_AddCommand ("record", CL_Record_f);
 	Cmd_AddCommand ("demo", CL_PlayDemo_f);
+	Cmd_AddCommand ("loopdemos", CL_LoopDemos_f);
+	Cmd_AddCommand ("stoploopdemos", CL_StopLoopDemos_f);
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
@@ -3775,6 +3838,8 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("disconnect");
 	Cmd_RemoveCommand ("record");
 	Cmd_RemoveCommand ("demo");
+	Cmd_RemoveCommand ("loopdemos");
+	Cmd_RemoveCommand ("stoploopdemos");
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");

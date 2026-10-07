@@ -753,6 +753,7 @@ char	**FS_ListFiles( const char *directory, const char *extension, qboolean want
 // the returned files will not include any directories or /
 
 void	FS_FreeFileList( char **list );
+void	FS_SortFileList( char **filelist, int numfiles );
 
 qboolean FS_FileExists_HomeConfig( const char *file );
 qboolean FS_FileExists_HomeData( const char *file );
