@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   build-all:
+   if: github.ref_name != 'main'
    uses: ./.github/workflows/shared-build.yml
    with:
       environment: 'testing'
