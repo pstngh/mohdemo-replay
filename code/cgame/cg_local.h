@@ -513,6 +513,7 @@ extern "C" {
     //
     extern cvar_t *cg_fov;
     extern cvar_t *cg_cheats;
+    extern cvar_t *cg_followplayer;
 
     //
     // cg_main.c
@@ -609,6 +610,7 @@ extern "C" {
     qboolean CG_SimpleDistanceCull(const vec3_t origin, float maxDist);
     void  CG_OffsetFirstPersonView(refEntity_t *pREnt, qboolean bUseWorldPosition);
     void  CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView, qboolean demoPlayback);
+    void  CG_ReleaseFollowKey(void);
 
     //
     // cg_viewmodelanim.c

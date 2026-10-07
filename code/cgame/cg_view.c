@@ -815,6 +815,107 @@ qboolean CG_SimpleDistanceCull(const vec3_t origin, float maxDist) {
     return VectorLengthSquared(delta) > maxDist;
 }
 
+/*
+=================
+CG_UpdateFollowPlayer
+
+Added in OPM
+  While spectating, presses the key that switches to the next player until the
+  player named by cg_followplayer is followed. The server only sees key presses,
+  so this works on any server and keeps to its spectating rules.
+=================
+*/
+static struct {
+    const char *key;         // key held down to switch players
+    int         keyTime;     // when it was pressed
+    int         keyFollowed; // player followed then
+    int         numPresses;  // since the search started
+    int         pauseTime;   // don't search before then
+} cg_follow = {NULL, 0, -1, 0, 0};
+
+void CG_ReleaseFollowKey(void)
+{
+    if (cg_follow.key) {
+        cgi.SendConsoleCommand(va("-%s\n", cg_follow.key));
+        cg_follow.key = NULL;
+    }
+}
+
+static void CG_UpdateFollowPlayer(void)
+{
+    const char *name = cg_followplayer->string;
+    int         now  = cgi.Milliseconds();
+    int         followed;
+    int         numPlayers;
+    int         i;
+    qboolean    found;
+
+    if (cg_follow.key) {
+        // the server only looks at jump once per frame, so hold it for a few
+        if (now - cg_follow.keyTime >= 200) {
+            CG_ReleaseFollowKey();
+        }
+        return;
+    }
+
+    if (!name[0] || cg.demoPlayback || !(cg.snap->ps.pm_flags & PMF_SPECTATING) || now < cg_follow.pauseTime) {
+        cg_follow.numPresses = 0;
+        return;
+    }
+
+    followed = -1;
+    if (cg.snap->ps.pm_flags & PMF_CAMERA_VIEW) {
+        followed = cg.snap->ps.stats[STAT_INFOCLIENT];
+    }
+
+    found      = qfalse;
+    numPlayers = 0;
+    for (i = 0; i < cgs.maxclients; i++) {
+        if (!cg.clientinfo[i].name[0]) {
+            continue;
+        }
+
+        numPlayers++;
+        if (!Q_stricmp(cg.clientinfo[i].name, name)) {
+            if (i == followed) {
+                cg_follow.numPresses = 0;
+                return;
+            }
+            found = qtrue;
+        }
+    }
+
+    if (!found) {
+        cg_follow.numPresses = 0;
+        return;
+    }
+
+    if (followed == cg_follow.keyFollowed && now - cg_follow.keyTime < 1000) {
+        // give the server time to switch players
+        return;
+    }
+
+    if (cg_follow.numPresses >= numPlayers) {
+        // went past everyone, they can't be followed right now (dead, on the
+        // other team...), so leave the view alone for a while
+        cg_follow.numPresses = 0;
+        cg_follow.pauseTime  = now + 5000;
+        return;
+    }
+
+    if ((cg.snap->ps.pm_flags & PMF_CAMERA_VIEW) && cg_protocol >= PROTOCOL_MOHTA_MIN) {
+        // since 2.0, jump goes to the next player and use stops following
+        cg_follow.key = "moveup";
+    } else {
+        cg_follow.key = "use";
+    }
+
+    cgi.SendConsoleCommand(va("+%s\n", cg_follow.key));
+    cg_follow.keyTime     = now;
+    cg_follow.keyFollowed = followed;
+    cg_follow.numPresses++;
+}
+
 //=========================================================================
 
 /*
@@ -875,6 +976,9 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
 
     // update cg.predicted_player_state
     CG_PredictPlayerState();
+
+    // Added in OPM
+    CG_UpdateFollowPlayer();
 
     // build cg.refdef
     CG_CalcViewValues();
