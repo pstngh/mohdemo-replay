@@ -169,6 +169,10 @@ void CG_SetInitialSnapshot(snapshot_t *snap)
 
     CG_InitRadar();
     cgi.CL_RestoreSavedCgameState();
+
+    // Added in OPM
+    //  Same as CG_TransitionSnapshot(), so the first snapshot can bob the view
+    cg.snap->ps.walking = cg.snap->ps.groundEntityNum != ENTITYNUM_NONE;
 }
 
 /*
