@@ -1339,8 +1339,9 @@ void UI_PrintConsole(const char *msg)
 
         //
         // print to the deathmatch console
+        // Changed in OPM: skip when ui_hud is disabled
         //
-        if (dm_console && !bNormalMessage) {
+        if (dm_console && !bNormalMessage && ui_hud) {
             if (bDMMessage) {
                 dm_console->AddDMMessageText(pszString, pColor);
             } else {
@@ -1365,15 +1366,20 @@ void UI_PrintConsole(const char *msg)
             */
 
             if (bDMMessage || bDeathMessage) {
-                dmbox->Print(msg);
+                // Changed in OPM: skip when ui_hud is disabled, but still
+                // count it as printed so it doesn't go to the game message box
+                if (ui_hud) {
+                    dmbox->Print(msg);
+                }
                 bPrintedDMBox = qtrue;
             }
         }
 
         //
         // print to the game message box
+        // Changed in OPM: skip when ui_hud is disabled
         //
-        if (gmbox && !bPrintedDMBox) {
+        if (gmbox && !bPrintedDMBox && ui_hud) {
             if (bBold) {
                 // Changed in OPM
                 //  Avoid touching/copying buffers
