@@ -854,6 +854,14 @@ class TestRealGame(FakeGameCase):
         self.settings.setValue("demos", REAL_DEMOS)
         self.settings.setValue("size", "640x360")
         self.demo = os.environ.get("MOHREPLAY_TEST_DEMO") or "d482684ec556d1c3-obj-obj_team1"
+        # quiet: the recorder's own volume comes after
+        start = mohreplay.Game.start
+
+        def quiet(game, exe, game_dir, demos, width, height, extra=(), driver=None):
+            return start(game, exe, game_dir, demos, width, height, ("+set", "s_volume", "0", *extra), driver)
+        patch = mock.patch.object(mohreplay.Game, "start", quiet)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def test_play_seek_and_record(self):
         window = self.window()
