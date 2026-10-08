@@ -33,6 +33,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 #include "unzip.h"
 
+// Added in OPM
+#include <signal.h>
+
 #ifndef _WIN32
 #   include <sys/types.h>
 #   include <sys/stat.h>
@@ -296,6 +299,8 @@ typedef struct {
 	int			zipFileLen;
 	qboolean	zipFile;
 	char		name[MAX_ZPATH];
+	// Added in OPM
+	qboolean	isPipe;		// written to the input of a command, see FS_PipeOpenWrite
 } fileHandleData_t;
 
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
@@ -758,6 +763,64 @@ void FS_Remove_HomeData( const char *homePath ) {
 
 /*
 ===========
+FS_PipeOpenWrite
+
+Added in OPM
+Runs a command through the shell and returns a handle writing to its input,
+which FS_FCloseFile closes waiting for the command to end
+===========
+*/
+fileHandle_t FS_PipeOpenWrite( const char *command, const char *filename ) {
+	fileHandle_t	f;
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
+	}
+
+	f = FS_HandleForFile();
+	fsh[f].zipFile = qfalse;
+	fsh[f].handleSync = qfalse;
+	Q_strncpyz( fsh[f].name, filename, sizeof( fsh[f].name ) );
+
+	if ( fs_debug->integer ) {
+		Com_Printf( "FS_PipeOpenWrite: %s\n", command );
+	}
+
+#ifdef _WIN32
+	fsh[f].handleFiles.file.o = _popen( command, "wb" );
+#else
+	// writing to a command that ended mustn't end the game
+	signal( SIGPIPE, SIG_IGN );
+	fsh[f].handleFiles.file.o = popen( command, "w" );
+#endif
+
+	if ( !fsh[f].handleFiles.file.o ) {
+		return 0;
+	}
+
+	fsh[f].isPipe = qtrue;
+	return f;
+}
+
+/*
+===========
+FS_OSPath_HomeData
+
+Added in OPM
+The path of a file of the current gamedir for other programs, with its
+folders created
+===========
+*/
+const char *FS_OSPath_HomeData( const char *filename ) {
+	char	*ospath;
+
+	ospath = FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, filename );
+	FS_CreatePath( ospath );
+	return ospath;
+}
+
+/*
+===========
 FS_Rename_HomeData
 
 Added in OPM
@@ -1029,7 +1092,17 @@ void FS_FCloseFile( fileHandle_t f ) {
 
 	// we didn't find it as a pak, so close it as a unique file
 	if (fsh[f].handleFiles.file.o) {
-		fclose (fsh[f].handleFiles.file.o);
+		// Changed in OPM
+		//  A pipe waits for its command to end
+		if (fsh[f].isPipe) {
+#ifdef _WIN32
+			_pclose (fsh[f].handleFiles.file.o);
+#else
+			pclose (fsh[f].handleFiles.file.o);
+#endif
+		} else {
+			fclose (fsh[f].handleFiles.file.o);
+		}
 	}
 	Com_Memset( &fsh[f], 0, sizeof( fsh[f] ) );
 }
@@ -1694,6 +1767,12 @@ size_t FS_Write( const void *buffer, size_t len, fileHandle_t h ) {
 	}
 	if ( fsh[h].handleSync ) {
 		fflush( f );
+	}
+	// Added in OPM
+	//  After an error, like writing to a command that ended, fwrite can
+	//  still return what it buffered
+	if ( ferror( f ) ) {
+		return 0;
 	}
 	return len;
 }

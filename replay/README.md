@@ -45,6 +45,24 @@ binds, without the app:
 | `demoonly watched <player>` | play only while that player is shown |
 | `demoonly` | play everything again |
 | `timescale <speed>` | playback speed, 1 is normal |
+| `demovideo <name> [end time]` | record into an MP4, see below |
 
 `cl_demoKillBefore` and `cl_demoKillAfter` set how many seconds of each kill
 are shown (4 and 2).
+
+## Recording
+
+`demovideo <name> [end time]` records the demo from now on into
+`videos/<name>.mp4` in the game's home folder, through FFmpeg, until the end
+time, `stopvideo`, the end of the demo or the end of what `demoonly` plays.
+Seeks and pauses aren't recorded, so `demoseek 12:30; demovideo clip 12:45`
+records exactly 15 seconds, and `demoonly kills t-; demovideo frags` all of
+a player's kills one after the other.
+
+The game steps exactly 1/`cl_aviFrameRate` of a second per frame, so videos
+are smooth whatever the screen does; it records faster than real time when
+it can. The sound is recorded when the game is started with
+`+set s_loopback 1`: it is then rendered for the video and not played.
+`cl_aviPipeFormat` holds FFmpeg's output options (H.264, CRF 20, AAC 192k by
+default) and `cl_aviFFmpeg` the FFmpeg program; FFmpeg's errors go to
+`<name>.mp4.log`.

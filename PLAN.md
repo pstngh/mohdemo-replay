@@ -50,7 +50,7 @@ argument): the demo and its sound stop and go on from the same time, and
 seeking keeps it paused. No more snapshots dropped when the recorder's
 connection lagged, and no "connection interrupted" icon in demos. Step 2: the
 demo index. Step 3: kill, round and player navigation. Step 4: the app,
-`replay/mohreplay.py`.
+`replay/mohreplay.py`. Step 5, engine: `demovideo`, MP4 with sound.
 
 ## Steps, in order
 
@@ -76,7 +76,8 @@ demo index. Step 3: kill, round and player navigation. Step 4: the app,
      one, like at the start of a match) and `roundEnds` (`text`: "Axis
      win!", "Allies win!", "It's a draw!").
    - `demostate.json`: `demo` (empty when none plays), `time`, `duration`,
-     `paused`, `seeking`, `only` and `player` (what `demoonly` plays);
+     `paused`, `seeking`, `only` and `player` (what `demoonly` plays),
+     `recording` (the video being written, empty once FFmpeg is done);
      written when one of them changes, at most every 100 ms while the time
      goes on.
 
@@ -120,12 +121,19 @@ demo index. Step 3: kill, round and player navigation. Step 4: the app,
    game windows covered them (fresh copies exit fine; suspected: VSync on
    Wayland blocking while the window isn't shown). The record button comes
    with step 5.
-5. **Recording (engine).** Port ioquake3's `video-pipe` command
-   (`cl_aviPipeFormat`, `FS_PipeOpenWrite`) into `code/client/cl_avi.cpp` and
-   `cl_main.cpp`: the AVI stream goes into `ffmpeg -i pipe:0` and comes out as
-   an H.264 MP4. Check that sound is recorded: the AVI writer gets its audio
-   from the software mixer (`snd_mix.c`), so OpenAL sound may need turning off
-   while recording. Settings in the app:
+5. **Recording (engine).** Engine done. OpenMoHAA had the AVI writer
+   (`cl_avi.cpp`) turned off; it's back, and like ioquake3's `video-pipe`
+   (`cl_aviPipeFormat`, `FS_PipeOpenWrite`) its stream can go into FFmpeg:
+   `demovideo <name> [end time]` writes `videos/<name>.mp4`, see
+   `replay/README.md`. Only the OpenAL sound system is built, so there is no
+   software mixer to take the sound from: with `s_loopback 1` at startup,
+   OpenAL Soft's loopback device renders it (`ALC_SOFT_loopback`), exactly
+   `rate / cl_aviFrameRate` samples per frame, and nothing is played. So the
+   app records in a second game, offscreen. Frames step exactly
+   1/`cl_aviFrameRate` s (they were rounded up, 2% fast at 60), seeks and
+   pauses aren't recorded, and a write error (FFmpeg missing or quitting)
+   stops the recording instead of the demo. 30 s at 960x540 and 60 fps take
+   about 10 s to record. Settings in the app:
    - resolution: the game's window size (`r_mode -1`, `r_customwidth`,
      `r_customheight`), optionally drawn larger and scaled down;
    - frame rate: 60 (`cl_aviFrameRate 60`); the recorder steps the game 1/60 s

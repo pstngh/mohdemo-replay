@@ -55,6 +55,8 @@ cvar_t *s_obstruction_cal_time;
 cvar_t *s_lastSoundTime;
 // Added in OPM
 cvar_t *s_openaldriver;
+// Added in OPM
+cvar_t *s_loopback;
 cvar_t *s_alAvailableDevices;
 
 static float reverb_table[] = {
@@ -72,6 +74,8 @@ static float        al_current_volume          = 0;
 static unsigned int al_frequency               = 22050;
 static ALCcontext  *al_context_id              = NULL;
 static ALCdevice   *al_device                  = NULL;
+// Added in OPM
+static LPALCRENDERSAMPLESSOFT al_renderSamples  = NULL; // set when the sound is rendered, not played
 static ALsizei      al_default_resampler_index = 0;
 static ALsizei      al_resampler_index         = 0;
 
@@ -261,6 +265,8 @@ static void S_OPENAL_NukeContext()
 
         qalcCloseDevice(al_device);
         al_device = NULL;
+        // Added in OPM
+        al_renderSamples = NULL;
 
         Com_Printf("OpenAL: Device closed successfully.\n");
     }
@@ -344,12 +350,37 @@ static bool S_OPENAL_InitContext()
         s_alAvailableDevices = Cvar_Get("s_alAvailableDevices", devicenames, CVAR_ROM | CVAR_NORESTART);
     }
 
-    Com_Printf("OpenAL: Opening device \"%s\"...\n", dev ? dev : "{default}");
+    // Added in OPM
+    //  The loopback device renders the sound for video recording
+    al_renderSamples = NULL;
+    if (s_loopback->integer) {
+        LPALCLOOPBACKOPENDEVICESOFT loopbackOpenDevice;
 
-    al_device = qalcOpenDevice(dev);
-    if (!al_device && dev) {
-        Com_Printf("Failed to open OpenAL device '%s', trying default.\n", dev);
-        al_device = qalcOpenDevice(NULL);
+        loopbackOpenDevice = NULL;
+        if (qalcIsExtensionPresent(NULL, "ALC_SOFT_loopback")) {
+            loopbackOpenDevice = (LPALCLOOPBACKOPENDEVICESOFT)qalcGetProcAddress(NULL, "alcLoopbackOpenDeviceSOFT");
+            al_renderSamples = (LPALCRENDERSAMPLESSOFT)qalcGetProcAddress(NULL, "alcRenderSamplesSOFT");
+        }
+
+        if (loopbackOpenDevice && al_renderSamples) {
+            Com_Printf("OpenAL: Opening a loopback device, the sound is rendered for videos and not played\n");
+            al_device = loopbackOpenDevice(NULL);
+        }
+
+        if (!al_device) {
+            Com_Printf("OpenAL: Couldn't open a loopback device, videos will have no sound\n");
+            al_renderSamples = NULL;
+        }
+    }
+
+    if (!al_device) {
+        Com_Printf("OpenAL: Opening device \"%s\"...\n", dev ? dev : "{default}");
+
+        al_device = qalcOpenDevice(dev);
+        if (!al_device && dev) {
+            Com_Printf("Failed to open OpenAL device '%s', trying default.\n", dev);
+            al_device = qalcOpenDevice(NULL);
+        }
     }
 
     if (!al_device) {
@@ -425,6 +456,19 @@ static bool S_OPENAL_InitContext()
 #endif
     attrlist[10] = 0;
     attrlist[11] = 0;
+
+    // Added in OPM
+    //  A loopback device renders 16-bit stereo
+    if (al_renderSamples) {
+        attrlist[0]  = ALC_FREQUENCY;
+        attrlist[1]  = al_frequency;
+        attrlist[2]  = ALC_FORMAT_CHANNELS_SOFT;
+        attrlist[3]  = ALC_STEREO_SOFT;
+        attrlist[4]  = ALC_FORMAT_TYPE_SOFT;
+        attrlist[5]  = ALC_SHORT_SOFT;
+        attrlist[6]  = 0;
+        attrlist[7]  = 0;
+    }
 
     Com_Printf("OpenAL: Creating AL context...\n");
     al_context_id = qalcCreateContext(al_device, attrlist);
@@ -596,6 +640,9 @@ qboolean S_OPENAL_Init()
     // Added in OPM
     //  Initialize the AL driver DLL
     s_openaldriver = Cvar_Get("s_openaldriver", ALDRIVER_DEFAULT, CVAR_LATCH | CVAR_PROTECTED);
+    // Added in OPM
+    //  Render the sound for video recording instead of playing it
+    s_loopback = Cvar_Get("s_loopback", "0", CVAR_SOUND_LATCH | CVAR_PROTECTED);
 
     if (!QAL_Init(s_openaldriver->string)) {
         Com_Printf("Failed to load library: \"%s\".\n", s_openaldriver->string);
@@ -2492,6 +2539,59 @@ void S_OPENAL_SetReverb(int iType, float fLevel)
 
 /*
 ==============
+S_LoopbackRate
+
+Added in OPM
+The sample rate of the rendered sound, 0 if it's played
+==============
+*/
+int S_LoopbackRate()
+{
+    return al_renderSamples ? al_frequency : 0;
+}
+
+/*
+==============
+S_RenderLoopback
+
+Added in OPM
+Renders the next samples of 16-bit stereo sound, if it isn't played
+==============
+*/
+qboolean S_RenderLoopback(short *buffer, int samples)
+{
+    if (!al_renderSamples || samples <= 0) {
+        return qfalse;
+    }
+
+    al_renderSamples(al_device, buffer, samples);
+    return qtrue;
+}
+
+/*
+==============
+S_OPENAL_DiscardLoopback
+
+Added in OPM
+Renders the sound of the frame when it isn't recorded, so the sounds
+end and free their channels
+==============
+*/
+static void S_OPENAL_DiscardLoopback()
+{
+    static short buffer[44100 / 10 * 2];
+    int          samples;
+
+    if (!al_renderSamples || CL_VideoRecording()) {
+        return;
+    }
+
+    samples = Q_min((int)(cls.frametime * al_frequency / 1000), (int)ARRAY_LEN(buffer) / 2);
+    S_RenderLoopback(buffer, samples);
+}
+
+/*
+==============
 S_OPENAL_Update
 ==============
 */
@@ -2510,6 +2610,9 @@ void S_OPENAL_Update()
     // Changed in OPM
     //  Also pause with a paused demo
     bPaused = paused->integer || (clc.demoplaying && cl_freezeDemo->integer);
+
+    // Added in OPM
+    S_OPENAL_DiscardLoopback();
 
     if (bPaused && !s_bSoundPaused) {
         S_PauseSound();

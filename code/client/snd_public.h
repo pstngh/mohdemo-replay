@@ -101,6 +101,10 @@ extern "C" {
 void S_SoundInfo_f();
 void S_SoundDump_f();
 void S_Init(qboolean full_startup);
+// Added in OPM
+//  The sound rendered for video recording instead of played, see s_loopback
+int S_LoopbackRate(void);
+qboolean S_RenderLoopback(short *buffer, int samples);
 void S_Shutdown(qboolean full_shutdown);
 qboolean S_NameExists(const char* name);
 void S_BeginRegistration();

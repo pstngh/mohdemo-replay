@@ -483,6 +483,9 @@ extern	cvar_t	*j_up_axis;
 extern	cvar_t	*cl_timedemo;
 extern	cvar_t	*cl_aviFrameRate;
 extern	cvar_t	*cl_aviMotionJpeg;
+// Added in OPM
+extern	cvar_t	*cl_aviFFmpeg;
+extern	cvar_t	*cl_aviPipeFormat;
 
 extern	cvar_t	*cl_activeAction;
 
@@ -769,7 +772,10 @@ void CL_NET_OutOfBandPrint( netadr_t adr, const char* format, ... );
 //
 // cl_avi.c
 //
-qboolean CL_OpenAVIForWriting( const char *filename );
+qboolean CL_OpenAVIForWriting( const char *filename, qboolean pipe );
+// Added in OPM
+int CL_VideoFrameMsec( void );
+const char *CL_VideoFileName( void );
 void CL_TakeVideoFrame( void );
 void CL_WriteAVIVideoFrame( const byte *imageBuffer, int size );
 void CL_WriteAVIAudioFrame( const byte *pcmBuffer, int size );

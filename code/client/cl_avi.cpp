@@ -25,6 +25,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #define INDEX_FILE_EXTENSION ".index.dat"
 
+// Added in OPM
+//  Only defined with the old sound system
+#ifndef WAV_FORMAT_PCM
+#define WAV_FORMAT_PCM 1
+#endif
+
 #define MAX_RIFF_CHUNKS 16
 
 typedef struct audioFormat_s
@@ -65,6 +71,12 @@ typedef struct aviFileData_s
   int           chunkStackTop;
 
   byte          *cBuffer, *eBuffer;
+
+  // Added in OPM
+  qboolean      pipe;           // going into FFmpeg, which writes the video
+  qboolean      failed;         // couldn't write, FFmpeg may have quit
+  int           framesTaken;
+  double        gameTime;       // what CL_VideoFrameMsec didn't give yet
 } aviFileData_t;
 
 static aviFileData_t afd;
@@ -81,8 +93,13 @@ SafeFS_Write
 */
 static ID_INLINE void SafeFS_Write( const void *buf, int len, fileHandle_t f )
 {
+  // Changed in OPM
+  //  The recording stops at the next frame, as FFmpeg may have quit
+  if( afd.failed )
+    return;
+
   if( FS_Write( buf, len, f ) < len )
-    Com_Error( ERR_DROP, "Failed to write avi file\n" );
+    afd.failed = qtrue;
 }
 
 /*
@@ -332,11 +349,43 @@ Creates an AVI file and gets it into a state where
 writing the actual data can begin
 ===============
 */
-qboolean CL_OpenAVIForWriting( const char *fileName )
+/*
+===============
+CL_ShellQuote
+
+Added in OPM
+A path quoted for the shell
+===============
+*/
+static void CL_ShellQuote( const char *s, char *out, int size )
 {
-    return qfalse;
-    // Removed in OPM
-#if 0
+  int len = 0;
+
+  out[ len++ ] = '\'';
+  for( ; *s && len < size - 6; s++ )
+  {
+    if( *s == '\'' )
+    {
+      memcpy( &out[ len ], "'\\''", 4 );
+      len += 4;
+    }
+    else
+      out[ len++ ] = *s;
+  }
+  out[ len++ ] = '\'';
+  out[ len ] = 0;
+}
+
+qboolean CL_OpenAVIForWriting( const char *fileName, qboolean pipe )
+{
+  // Changed in OPM
+  //  Restored, with pipes into FFmpeg (as in ioquake3) and the sound of
+  //  the loopback device
+  char  command[ MAX_STRING_CHARS * 2 ];
+  char  video[ MAX_OSPATH * 2 ];
+  char  log[ MAX_OSPATH * 2 ];
+  const char *ospath;
+
   if( afd.fileOpen )
     return qfalse;
 
@@ -349,14 +398,32 @@ qboolean CL_OpenAVIForWriting( const char *fileName )
     return qfalse;
   }
 
-  if( ( afd.f = FS_FOpenFileWrite_HomeData( fileName ) ) <= 0 )
-    return qfalse;
-
-  if( ( afd.idxF = FS_FOpenFileWrite_HomeData(
-          va( "%s" INDEX_FILE_EXTENSION, fileName ) ) ) <= 0 )
+  if( pipe )
   {
-    FS_FCloseFile( afd.f );
-    return qfalse;
+    ospath = FS_OSPath_HomeData( fileName );
+    CL_ShellQuote( ospath, video, sizeof( video ) );
+    CL_ShellQuote( va( "%s.log", ospath ), log, sizeof( log ) );
+    Com_sprintf( command, sizeof( command ), "%s -nostdin -loglevel error -f avi -i - -threads 0 -y %s %s 2> %s",
+        cl_aviFFmpeg->string, cl_aviPipeFormat->string, video, log );
+
+    if( !( afd.f = FS_PipeOpenWrite( command, fileName ) ) )
+    {
+      Com_Printf( S_COLOR_RED "Couldn't run %s\n", cl_aviFFmpeg->string );
+      return qfalse;
+    }
+    afd.pipe = qtrue;
+  }
+  else
+  {
+    if( ( afd.f = FS_FOpenFileWrite_HomeData( fileName ) ) <= 0 )
+      return qfalse;
+
+    if( ( afd.idxF = FS_FOpenFileWrite_HomeData(
+            va( "%s" INDEX_FILE_EXTENSION, fileName ) ) ) <= 0 )
+    {
+      FS_FCloseFile( afd.f );
+      return qfalse;
+    }
   }
 
   Q_strncpyz( afd.fileName, fileName, MAX_QPATH );
@@ -366,51 +433,23 @@ qboolean CL_OpenAVIForWriting( const char *fileName )
   afd.width = cls.glconfig.vidWidth;
   afd.height = cls.glconfig.vidHeight;
 
-  if( cl_aviMotionJpeg->integer )
-    afd.motionJpeg = qtrue;
-  else
-    afd.motionJpeg = qfalse;
+  // FFmpeg gets the frames as they are
+  afd.motionJpeg = !afd.pipe && cl_aviMotionJpeg->integer;
 
   afd.cBuffer = ( byte * )Z_Malloc( afd.width * afd.height * 4 );
   afd.eBuffer = ( byte * )Z_Malloc( afd.width * afd.height * 4 );
 
-  afd.a.rate = dma.speed;
+  afd.a.rate = S_LoopbackRate( );
   afd.a.format = WAV_FORMAT_PCM;
-  afd.a.channels = dma.channels;
-  afd.a.bits = dma.samplebits;
+  afd.a.channels = 2;
+  afd.a.bits = 16;
   afd.a.sampleSize = ( afd.a.bits / 8 ) * afd.a.channels;
+  afd.audio = afd.a.rate > 0;
 
-  if( afd.a.rate % afd.frameRate )
+  if( !afd.audio )
   {
-    int suggestRate = afd.frameRate;
-
-    while( ( afd.a.rate % suggestRate ) && suggestRate >= 1 )
-      suggestRate--;
-
-    Com_Printf( S_COLOR_YELLOW "WARNING: cl_aviFrameRate is not a divisor "
-        "of the audio rate, suggest %d\n", suggestRate );
-  }
-
-  if( !Cvar_VariableIntegerValue( "s_initsound" ) )
-  {
-    afd.audio = qfalse;
-  }
-  else if( Q_stricmp( Cvar_VariableString( "s_backend" ), "OpenAL" ) )
-  {
-    if( afd.a.bits != 16 || afd.a.channels != 2 )
-    {
-      Com_Printf( S_COLOR_YELLOW "WARNING: Audio format of %d bit/%d channels not supported",
-          afd.a.bits, afd.a.channels );
-      afd.audio = qfalse;
-    }
-    else
-      afd.audio = qtrue;
-  }
-  else
-  {
-    afd.audio = qfalse;
-    Com_Printf( S_COLOR_YELLOW "WARNING: Audio capture is not supported "
-        "with OpenAL. Set s_useOpenAL to 0 for audio capture\n" );
+    Com_Printf( S_COLOR_YELLOW "WARNING: The video has no sound, "
+        "start the game with s_loopback 1 to record it\n" );
   }
 
   // This doesn't write a real header, but allocates the
@@ -420,15 +459,17 @@ qboolean CL_OpenAVIForWriting( const char *fileName )
   SafeFS_Write( buffer, bufIndex, afd.f );
   afd.fileSize = bufIndex;
 
-  bufIndex = 0;
-  START_CHUNK( "idx1" );
-  SafeFS_Write( buffer, bufIndex, afd.idxF );
+  if( !afd.pipe )
+  {
+    bufIndex = 0;
+    START_CHUNK( "idx1" );
+    SafeFS_Write( buffer, bufIndex, afd.idxF );
+  }
 
   afd.moviSize = 4; // For the "movi"
   afd.fileOpen = qtrue;
 
   return qtrue;
-#endif
 }
 
 /*
@@ -439,6 +480,10 @@ CL_CheckFileSize
 static qboolean CL_CheckFileSize( int bytesToAdd )
 {
   unsigned int newFileSize;
+
+  // Added in OPM
+  if( afd.pipe )
+    return qfalse;
 
   newFileSize =
     afd.fileSize +                // Current file size
@@ -454,7 +499,7 @@ static qboolean CL_CheckFileSize( int bytesToAdd )
     CL_CloseAVI( );
 
     // ...And open a new one
-    CL_OpenAVIForWriting( va( "%s_", afd.fileName ) );
+    CL_OpenAVIForWriting( va( "%s_", afd.fileName ), qfalse );
 
     return qtrue;
   }
@@ -497,14 +542,19 @@ void CL_WriteAVIVideoFrame( const byte *imageBuffer, int size )
     afd.maxRecordSize = size;
 
   // Index
-  bufIndex = 0;
-  WRITE_STRING( "00dc" );           //dwIdentifier
-  WRITE_4BYTES( 0x00000010 );       //dwFlags (all frames are KeyFrames)
-  WRITE_4BYTES( chunkOffset );      //dwOffset
-  WRITE_4BYTES( size );             //dwLength
-  SafeFS_Write( buffer, 16, afd.idxF );
+  // Changed in OPM
+  //  FFmpeg doesn't need it
+  if( !afd.pipe )
+  {
+    bufIndex = 0;
+    WRITE_STRING( "00dc" );           //dwIdentifier
+    WRITE_4BYTES( 0x00000010 );       //dwFlags (all frames are KeyFrames)
+    WRITE_4BYTES( chunkOffset );      //dwOffset
+    WRITE_4BYTES( size );             //dwLength
+    SafeFS_Write( buffer, 16, afd.idxF );
 
-  afd.numIndices++;
+    afd.numIndices++;
+  }
 }
 
 #define PCM_BUFFER_SIZE 44100
@@ -559,17 +609,23 @@ void CL_WriteAVIAudioFrame( const byte *pcmBuffer, int size )
 
     afd.numAudioFrames++;
     afd.moviSize += ( chunkSize + paddingSize );
-    afd.a.totalBytes =+ bytesInBuffer;
+    // Fixed in OPM
+    afd.a.totalBytes += bytesInBuffer;
 
     // Index
-    bufIndex = 0;
-    WRITE_STRING( "01wb" );           //dwIdentifier
-    WRITE_4BYTES( 0 );                //dwFlags
-    WRITE_4BYTES( chunkOffset );      //dwOffset
-    WRITE_4BYTES( bytesInBuffer );    //dwLength
-    SafeFS_Write( buffer, 16, afd.idxF );
+    // Changed in OPM
+    //  FFmpeg doesn't need it
+    if( !afd.pipe )
+    {
+      bufIndex = 0;
+      WRITE_STRING( "01wb" );           //dwIdentifier
+      WRITE_4BYTES( 0 );                //dwFlags
+      WRITE_4BYTES( chunkOffset );      //dwOffset
+      WRITE_4BYTES( bytesInBuffer );    //dwLength
+      SafeFS_Write( buffer, 16, afd.idxF );
 
-    afd.numIndices++;
+      afd.numIndices++;
+    }
 
     bytesInBuffer = 0;
   }
@@ -582,12 +638,72 @@ CL_TakeVideoFrame
 */
 void CL_TakeVideoFrame( void )
 {
+  // Added in OPM
+  static short  pcm[ 48000 * 2 ];
+  int           samples;
+
   // AVI file isn't open
   if( !afd.fileOpen )
     return;
 
-//  RE_TakeVideoFrame( afd.width, afd.height,
-//      afd.cBuffer, afd.eBuffer, afd.motionJpeg );
+  // Added in OPM
+  if( afd.failed )
+  {
+    Com_Printf( S_COLOR_RED "Couldn't write %s%s, the recording stopped\n",
+        afd.fileName, afd.pipe ? ", see its .log file" : "" );
+    CL_CloseAVI( );
+    return;
+  }
+
+  // Changed in OPM
+  //  Restored
+  re.TakeVideoFrame( afd.width, afd.height,
+      afd.cBuffer, afd.eBuffer, afd.motionJpeg );
+
+  // Added in OPM
+  //  The sound of the frame, the samples adding up to the exact time
+  if( afd.audio )
+  {
+    samples = (int)( (long long)( afd.framesTaken + 1 ) * afd.a.rate / afd.frameRate )
+        - (int)( (long long)afd.framesTaken * afd.a.rate / afd.frameRate );
+    samples = Q_min( samples, (int)ARRAY_LEN( pcm ) / 2 );
+    if( S_RenderLoopback( pcm, samples ) )
+      CL_WriteAVIAudioFrame( ( byte * )pcm, samples * afd.a.sampleSize );
+  }
+
+  afd.framesTaken++;
+}
+
+/*
+===============
+CL_VideoFrameMsec
+
+Added in OPM
+The game time of a recorded frame, 1000 / cl_aviFrameRate msec rounded so
+the frames add up to the exact time
+===============
+*/
+int CL_VideoFrameMsec( void )
+{
+  int msec;
+
+  afd.gameTime += 1000.0 * com_timescale->value / afd.frameRate;
+  msec = (int)afd.gameTime;
+  afd.gameTime -= msec;
+
+  return msec > 0 ? msec : 1;
+}
+
+/*
+===============
+CL_VideoFileName
+
+Added in OPM
+===============
+*/
+const char *CL_VideoFileName( void )
+{
+  return afd.fileOpen ? afd.fileName : "";
 }
 
 /*
@@ -608,6 +724,17 @@ qboolean CL_CloseAVI( void )
     return qfalse;
 
   afd.fileOpen = qfalse;
+
+  // Added in OPM
+  //  FFmpeg reads it as a stream, and writes the video when it ends
+  if( afd.pipe )
+  {
+    FS_FCloseFile( afd.f );
+    Z_Free( afd.cBuffer );
+    Z_Free( afd.eBuffer );
+    Com_Printf( "Wrote %d frames to %s\n", afd.numVideoFrames, afd.fileName );
+    return qtrue;
+  }
 
   FS_Seek( afd.idxF, 4, FS_SEEK_SET );
   bufIndex = 0;

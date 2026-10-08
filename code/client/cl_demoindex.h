@@ -65,8 +65,16 @@ void DemoIndex_Build(demoIndex_t *index, demoIndexRead_t read, void *ctx);
 void DemoIndex_Free(demoIndex_t *index);
 // returns the index as JSON, to free with free()
 char *DemoIndex_ToJSON(const demoIndex_t *index, const char *demoName);
-// returns what is playing as JSON, to free with free(), demoName is empty
-// when no demo plays, only is what demoonly plays ("", "kills", "watched")
-char *DemoIndex_StateJSON(
-    const char *demoName, int time, int duration, qboolean isPaused, qboolean isSeeking, const char *only, const char *player
-);
+typedef struct {
+    const char *demo; // empty when no demo plays
+    int         time;
+    int         duration;
+    qboolean    paused;
+    qboolean    seeking;
+    const char *only;      // what demoonly plays: "", "kills" or "watched"
+    const char *player;    // the player demoonly is about
+    const char *recording; // the video being recorded, if any
+} demoState_t;
+
+// returns what is playing as JSON, to free with free()
+char *DemoIndex_StateJSON(const demoState_t *state);

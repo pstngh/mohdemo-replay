@@ -1118,27 +1118,27 @@ DemoIndex_StateJSON
 What is playing, for the app's clock
 ===============
 */
-char *DemoIndex_StateJSON(
-    const char *demoName, int time, int duration, qboolean isPaused, qboolean isSeeking, const char *only, const char *player
-)
+char *DemoIndex_StateJSON(const demoState_t *state)
 {
     diBuffer_t b;
 
     memset(&b, 0, sizeof(b));
 
     DI_Append(&b, "{\"demo\": ", 9);
-    DI_String(&b, demoName);
+    DI_String(&b, state->demo);
     DI_Printf(
         &b,
         ", \"time\": %d, \"duration\": %d, \"paused\": %s, \"seeking\": %s, \"only\": ",
-        time,
-        duration,
-        isPaused ? "true" : "false",
-        isSeeking ? "true" : "false"
+        state->time,
+        state->duration,
+        state->paused ? "true" : "false",
+        state->seeking ? "true" : "false"
     );
-    DI_String(&b, only);
+    DI_String(&b, state->only);
     DI_Append(&b, ", \"player\": ", 12);
-    DI_String(&b, only[0] ? player : "");
+    DI_String(&b, state->only[0] ? state->player : "");
+    DI_Append(&b, ", \"recording\": ", 15);
+    DI_String(&b, state->recording);
     DI_Append(&b, "}\n", 2);
     return b.data;
 }

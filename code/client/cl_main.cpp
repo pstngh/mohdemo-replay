@@ -76,6 +76,9 @@ cvar_t	*cl_timedemoLog;
 cvar_t	*cl_autoRecordDemo;
 cvar_t	*cl_aviFrameRate;
 cvar_t	*cl_aviMotionJpeg;
+// Added in OPM
+cvar_t	*cl_aviFFmpeg;
+cvar_t	*cl_aviPipeFormat;
 cvar_t	*cl_forceavidemo;
 
 cvar_t	*cl_freelook;
@@ -995,6 +998,26 @@ static void CL_IndexDemo( void ) {
 
 /*
 ====================
+CL_DemoStateTimeOnly
+
+Whether two states differ only by their time
+====================
+*/
+static qboolean CL_DemoStateTimeOnly( const char *a, const char *b ) {
+	const char	*timeA = strstr( a, "\"time\": " );
+	const char	*timeB = strstr( b, "\"time\": " );
+
+	if ( !timeA || !timeB || timeA - a != timeB - b || strncmp( a, b, timeA - a ) ) {
+		return qfalse;
+	}
+
+	timeA = strchr( timeA, ',' );
+	timeB = strchr( timeB, ',' );
+	return timeA && timeB && !strcmp( timeA, timeB );
+}
+
+/*
+====================
 CL_UpdateDemoState
 
 Writes demostate.json when what plays changes, and at most every 100 msec
@@ -1003,41 +1026,36 @@ while the time goes on
 */
 static void CL_UpdateDemoState( void ) {
 	static const char	*only[] = { "", "kills", "watched" };
-	static char		lastDemo[MAX_QPATH];
-	static int		lastTime, lastWrite;
-	static qboolean	lastPaused, lastSeeking;
-	static int		lastOnly;
-	const char		*demo;
+	static char		last[MAX_STRING_CHARS];
+	static int		lastWrite;
+	demoState_t		state;
 	char			*json;
-	int				time;
-	qboolean		isPaused, isSeeking;
 
 	if ( !cl_demoFiles->integer ) {
 		return;
 	}
 
-	demo = clc.demoplaying ? clc.demoName : "";
-	time = clc.demoplaying ? CL_DemoTime() : 0;
-	isPaused = clc.demoplaying && cl_freezeDemo->integer;
-	isSeeking = clc.demoplaying && clc.demoSeeking;
+	state.demo = clc.demoplaying ? clc.demoName : "";
+	state.time = clc.demoplaying ? CL_DemoTime() : 0;
+	state.duration = clc.demoplaying ? cl_demoIndex.duration : 0;
+	state.paused = clc.demoplaying && cl_freezeDemo->integer;
+	state.seeking = clc.demoplaying && clc.demoSeeking;
+	state.only = only[clc.demoplaying ? cl_demoOnly : DEMOONLY_ALL];
+	state.player = cl_demoOnlyPlayer;
+	state.recording = CL_VideoFileName();
 
-	if ( !strcmp( demo, lastDemo ) && isPaused == lastPaused && isSeeking == lastSeeking && cl_demoOnly == lastOnly && lastWrite ) {
-		if ( time == lastTime || cls.realtime - lastWrite < 100 ) {
-			return;
-		}
+	json = DemoIndex_StateJSON( &state );
+
+	// the time goes on: every 100 msec at most, anything else: right away
+	if ( !strcmp( json, last ) || ( lastWrite && cls.realtime - lastWrite < 100 && CL_DemoStateTimeOnly( json, last ) ) ) {
+		free( json );
+		return;
 	}
 
-	json = DemoIndex_StateJSON( demo, time, clc.demoplaying ? cl_demoIndex.duration : 0, isPaused, isSeeking,
-		only[clc.demoplaying ? cl_demoOnly : DEMOONLY_ALL], cl_demoOnlyPlayer );
 	CL_WriteDemoFile( "demostate.json", json );
-	free( json );
-
-	Q_strncpyz( lastDemo, demo, sizeof( lastDemo ) );
-	lastTime = time;
-	lastPaused = isPaused;
-	lastSeeking = isSeeking;
-	lastOnly = cl_demoOnly;
+	Q_strncpyz( last, json, sizeof( last ) );
 	lastWrite = cls.realtime;
+	free( json );
 }
 
 /*
@@ -1156,6 +1174,7 @@ static void CL_RunDemoOnly( void ) {
 		Com_Printf( "Nothing more to play, paused\n" );
 		cl_demoOnly = DEMOONLY_ALL;
 		Cvar_Set( "cl_freezeDemo", "1" );
+		CL_CloseAVI();
 		return;
 	}
 
@@ -1316,6 +1335,72 @@ static void CL_DemoNextRound_f( void ) {
 
 static void CL_DemoPrevRound_f( void ) {
 	CL_DemoJumpToRound( qfalse );
+}
+
+static int	cl_demoVideoEnd = -1;	// demo time demovideo stops at
+
+/*
+====================
+CL_DemoVideo_f
+
+demovideo <name> [end time]
+
+Records the demo from now on through FFmpeg into videos/<name>.mp4, until
+the end time, stopvideo, the end of the demo or of what demoonly plays.
+Seeks and pauses aren't recorded.
+====================
+*/
+static void CL_DemoVideo_f( void ) {
+	char		videoName[MAX_QPATH];
+	const char	*s;
+	int			i, end;
+
+	if ( !clc.demoplaying ) {
+		Com_Printf( "Not playing a demo.\n" );
+		return;
+	}
+
+	end = -1;
+	if ( Cmd_Argc() < 2 || Cmd_Argc() > 3 || ( Cmd_Argc() == 3 && !CL_ParseDemoTime( Cmd_Argv( 2 ), &end ) ) ) {
+		Com_Printf( "demovideo <name> [end time]: record from now into videos/<name>.mp4, until the end time or stopvideo\n" );
+		return;
+	}
+
+	if ( CL_VideoRecording() ) {
+		Com_Printf( "Already recording %s\n", CL_VideoFileName() );
+		return;
+	}
+
+	// the name goes into a shell command
+	for ( s = Cmd_Argv( 1 ), i = 0; *s && i < (int)sizeof( videoName ) - 1; s++ ) {
+		videoName[i++] = isalnum( (unsigned char)*s ) || *s == '-' || *s == '_' || *s == '.' ? *s : '_';
+	}
+	videoName[i] = 0;
+
+	if ( !CL_OpenAVIForWriting( va( "videos/%s.mp4", videoName ), qtrue ) ) {
+		return;
+	}
+
+	cl_demoVideoEnd = end;
+	Com_Printf( "Recording videos/%s.mp4%s%s\n", videoName, end >= 0 ? " until " : "", end >= 0 ? CL_DemoTimeString( end ) : "" );
+}
+
+/*
+====================
+CL_RunDemoVideo
+
+Stops demovideo at its end time
+====================
+*/
+static void CL_RunDemoVideo( void ) {
+	if ( !CL_VideoRecording() || cl_demoVideoEnd < 0 || !clc.demoplaying || clc.demoSeeking ) {
+		return;
+	}
+
+	if ( CL_DemoTime() >= cl_demoVideoEnd ) {
+		cl_demoVideoEnd = -1;
+		CL_CloseAVI();
+	}
 }
 //====
 
@@ -3356,14 +3441,16 @@ void CL_Frame ( int msec ) {
 	// if recording an avi, lock to a fixed fps
 	if ( CL_VideoRecording( ) && cl_aviFrameRate->integer && msec) {
 		// save the current screen
-		if ( clc.state == CA_ACTIVE || cl_forceavidemo->integer) {
+		// Changed in OPM
+		//  Not while a demo seeks or is paused
+		if ( ( clc.state == CA_ACTIVE || cl_forceavidemo->integer )
+			&& !( clc.demoplaying && ( clc.demoSeeking || cl_freezeDemo->integer ) ) ) {
 			CL_TakeVideoFrame( );
 
 			// fixed time for next frame'
-			msec = (int)ceil( (1000.0f / cl_aviFrameRate->value) * com_timescale->value );
-			if (msec == 0) {
-				msec = 1;
-			}
+			// Changed in OPM
+			//  Rounded so the frames add up to the exact time
+			msec = CL_VideoFrameMsec();
 		}
 	}
 
@@ -3484,6 +3571,7 @@ void CL_Frame ( int msec ) {
 
 	// Added in OPM
 	CL_RunDemoOnly();
+	CL_RunDemoVideo();
 	CL_UpdateDemoState();
 
 	cls.framecount++;
@@ -4125,7 +4213,7 @@ void CL_Video_f( void )
     }
   }
 
-  CL_OpenAVIForWriting( filename );
+  CL_OpenAVIForWriting( filename, qfalse );
 }
 
 /*
@@ -4243,6 +4331,12 @@ void CL_Init( void ) {
 	cl_autoRecordDemo = Cvar_Get ("cl_autoRecordDemo", "0", CVAR_ARCHIVE);
 	cl_aviFrameRate = Cvar_Get ("cl_aviFrameRate", "25", CVAR_ARCHIVE);
 	cl_aviMotionJpeg = Cvar_Get ("cl_aviMotionJpeg", "1", CVAR_ARCHIVE);
+	// Added in OPM
+	//  demovideo runs FFmpeg with these options for the output
+	cl_aviFFmpeg = Cvar_Get ("cl_aviFFmpeg", "ffmpeg", CVAR_ARCHIVE | CVAR_PROTECTED);
+	cl_aviPipeFormat = Cvar_Get ("cl_aviPipeFormat",
+		"-c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart",
+		CVAR_ARCHIVE | CVAR_PROTECTED);
 	cl_forceavidemo = Cvar_Get ("cl_forceavidemo", "0", 0);
 
 	rconAddress = Cvar_Get ("rconAddress", "", 0);
@@ -4374,6 +4468,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("demoprevkill", CL_DemoPrevKill_f);
 	Cmd_AddCommand ("demonextround", CL_DemoNextRound_f);
 	Cmd_AddCommand ("demoprevround", CL_DemoPrevRound_f);
+	Cmd_AddCommand ("demovideo", CL_DemoVideo_f);
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
@@ -4486,6 +4581,7 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("demoprevkill");
 	Cmd_RemoveCommand ("demonextround");
 	Cmd_RemoveCommand ("demoprevround");
+	Cmd_RemoveCommand ("demovideo");
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");
