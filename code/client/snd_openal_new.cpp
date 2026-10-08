@@ -75,7 +75,11 @@ static unsigned int al_frequency               = 22050;
 static ALCcontext  *al_context_id              = NULL;
 static ALCdevice   *al_device                  = NULL;
 // Added in OPM
+#ifdef ALC_SOFT_loopback
 static LPALCRENDERSAMPLESSOFT al_renderSamples  = NULL; // set when the sound is rendered, not played
+#else
+static void (*al_renderSamples)(ALCdevice *, ALCvoid *, ALCsizei) = NULL;
+#endif
 static ALsizei      al_default_resampler_index = 0;
 static ALsizei      al_resampler_index         = 0;
 
@@ -353,6 +357,7 @@ static bool S_OPENAL_InitContext()
     // Added in OPM
     //  The loopback device renders the sound for video recording
     al_renderSamples = NULL;
+#ifdef ALC_SOFT_loopback
     if (s_loopback->integer) {
         LPALCLOOPBACKOPENDEVICESOFT loopbackOpenDevice;
 
@@ -372,6 +377,11 @@ static bool S_OPENAL_InitContext()
             al_renderSamples = NULL;
         }
     }
+#else
+    if (s_loopback->integer) {
+        Com_Printf("OpenAL: Built without ALC_SOFT_loopback, videos will have no sound\n");
+    }
+#endif
 
     if (!al_device) {
         Com_Printf("OpenAL: Opening device \"%s\"...\n", dev ? dev : "{default}");
@@ -459,6 +469,7 @@ static bool S_OPENAL_InitContext()
 
     // Added in OPM
     //  A loopback device renders 16-bit stereo
+#ifdef ALC_SOFT_loopback
     if (al_renderSamples) {
         attrlist[0]  = ALC_FREQUENCY;
         attrlist[1]  = al_frequency;
@@ -469,6 +480,7 @@ static bool S_OPENAL_InitContext()
         attrlist[6]  = 0;
         attrlist[7]  = 0;
     }
+#endif
 
     Com_Printf("OpenAL: Creating AL context...\n");
     al_context_id = qalcCreateContext(al_device, attrlist);
