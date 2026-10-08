@@ -48,7 +48,7 @@ demos that load a new level midway (a map change, in about a third of the
 test demos) playing through it, and `demopause [0|1]` (toggles without an
 argument): the demo and its sound stop and go on from the same time, and
 seeking keeps it paused. No more snapshots dropped when the recorder's
-connection lagged.
+connection lagged, and no "connection interrupted" icon in demos.
 
 ## Fix next, before step 2
 
@@ -60,10 +60,6 @@ Found while testing on real demos:
    Suspected: VSync on Wayland blocking while the window isn't shown. Either
    way the app (step 4) can't rely on the game answering: non-blocking pipe
    writes, SIGKILL after a timeout.
-2. **An item icon after seeking while paused** (minor). A few seconds after
-   a seek while paused, a small green-framed icon shows at the bottom middle
-   (item/weapons bar?) even with the HUD off, and stays until the demo plays
-   again. Seen after `demoseek 51:40` in `d482684ec556d1c3-obj-obj_team1.dm3`.
 
 ## Steps, in order
 

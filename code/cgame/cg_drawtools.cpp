@@ -177,6 +177,13 @@ void CG_DrawDisconnect(void)
     qhandle_t handle;
     usercmd_t cmd;
 
+    // Added in OPM
+    //  A demo has no connection to lose: the commands below are made by the
+    //  player watching it, and stop with the time when it's paused
+    if (cg.demoPlayback) {
+        return;
+    }
+
     // draw the phone jack if we are completely past our buffers
     cmdNum = cgi.GetCurrentCmdNumber() - CMD_BACKUP + 1;
     cgi.GetUserCmd(cmdNum, &cmd);
