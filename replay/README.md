@@ -25,10 +25,16 @@ there.
 
 Record… makes an MP4 of the demo playing: a stretch of time, the kills or
 the multi-kills (of the player chosen above) one after the other, or only
-while a player is watched. A second copy of the game records it in the background, without a
-window on Linux and faster than real time, while you keep watching; the
-video lands in the folder chosen, named from a pattern (`{demo}`, `{start}`,
-`{player}`, `{date}`). Size, frames per second, quality, codec (H.264,
+while a player is watched. A right-click on kills or multi-kills selected
+records those, and on demos selected, all of them or the kills or
+multi-kills of the player the filter found, each demo with its own spelling
+of the name: in one video, or one each. Videos are recorded one after the
+other by a second copy of the game, in the background, without a window on
+Linux and faster than real time, while you keep watching; FFmpeg joins the
+clips of a video without encoding them again. The Videos panel lists them
+(Cancel, Open folder, double-click to watch one), and each lands in the
+folder chosen, named from a pattern (`{demo}`, `{start}`, `{player}`,
+`{date}`). Size, frames per second, quality, codec (H.264,
 H.265 or the graphics card's H.264 encoder: VAAPI on Linux, VideoToolbox on
 macOS), sound and its bitrate are settings, and the Advanced box takes
 FFmpeg output options instead. It needs FFmpeg.

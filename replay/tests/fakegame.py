@@ -9,14 +9,16 @@ main/commands.log in its home folder, and demovideo writes
 main/videos/<name>.mp4 holding what would have been recorded, as JSON.
 
 Run as mohdemoindex (a link with that name), it is the indexing tool:
-mohdemoindex <output folder> <demo>...
+mohdemoindex <output folder> <demo>..., and as ffmpeg, it joins videos as
+"ffmpeg -f concat -i <list> ... <output>" does, into a JSON list of them.
 
 Environment, for the tests:
     FAKEGAME_SPEED          how much faster than real time demos play (1)
     FAKEGAME_FAIL_DRIVER    quit at once with an error on this SDL_VIDEODRIVER
     FAKEGAME_HANG           1: ignore quit and SIGTERM
     FAKEGAME_FFMPEG_FAIL    1: recordings fail as if FFmpeg were missing,
-                            mid: FFmpeg quits half a second into them
+                            mid: FFmpeg quits half a second into them,
+                            join: joining videos fails
 """
 
 import json
@@ -56,6 +58,20 @@ def index_tool(folder, demos):
         write_json(os.path.join(folder, name + ".json"), index)
         print(name, flush=True)
     return 1 if failed else 0
+
+
+def join_tool(args):
+    if os.environ.get("FAKEGAME_FFMPEG_FAIL") == "join":
+        print("fakegame: can't join")
+        return 1
+    with open(args[args.index("-i") + 1]) as f:
+        parts = [line.strip()[len("file '"):-1] for line in f if line.strip()]
+    joined = []
+    for part in parts:
+        with open(part) as f:
+            joined.append(json.load(f))
+    write_json(args[-1], {"joined": joined})
+    return 0
 
 
 class FakeGame:
@@ -187,7 +203,7 @@ class FakeGame:
             with open(path, "w") as f:
                 f.write("half a video")
             return
-        if os.environ.get("FAKEGAME_FFMPEG_FAIL"):
+        if os.environ.get("FAKEGAME_FFMPEG_FAIL") == "1":
             print("Couldn't run FFmpeg", flush=True)
             with open(path + ".log", "w") as f:
                 f.write("fakegame: no FFmpeg\n")
@@ -208,6 +224,8 @@ class FakeGame:
 
 
 def main():
+    if os.path.basename(sys.argv[0]).startswith("ffmpeg"):
+        return join_tool(sys.argv[1:])
     if os.path.basename(sys.argv[0]).startswith("mohdemoindex"):
         if len(sys.argv) < 3:
             print("Usage: mohdemoindex <output folder> <demo>...", file=sys.stderr)

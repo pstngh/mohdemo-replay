@@ -23,19 +23,20 @@ from time import monotonic
 
 from PySide6.QtCore import (
     QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment,
-    QSettings, QStandardPaths, Qt, QTimer,
+    QSettings, QStandardPaths, Qt, QTimer, QUrl,
 )
-from PySide6.QtGui import QPainter, QPen
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QProgressDialog, QProxyStyle, QPushButton, QRadioButton, QSlider, QSplitter, QStyle,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QDockWidget, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSlider, QSplitter, QStyle,
     QStyleOptionSlider, QTabWidget, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 
 PIPE = "replay_pipe"
 KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
+KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
 MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
 SPEEDS = ["0.25", "0.5", "1", "2", "4"]
 # keys above 127 only: the others stop a demo
@@ -571,38 +572,74 @@ class SettingsDialog(QDialog):
         super().accept()
 
 
-class RecordDialog(QDialog):
-    """What to record and how, kept in the settings."""
+def range_clip(demo, start, end):
+    """A clip of demo from start to end, in msec. {part} in the commands is
+    the name of the video the recorder writes."""
+    return {"demo": demo, "start": start, "end": end,
+            "commands": ["demoonly", f"demoseek {seconds(start)}", "demopause 0", f"demovideo {{part}} {seconds(end)}"]}
 
-    def __init__(self, settings, time, player, kills, multikills, watched, parent=None):
+
+def only_clip(demo, only="", player=""):
+    """A clip of what demoonly plays ("kills", "multikills", "watched"), or of
+    all of demo."""
+    only = f"demoonly {only}" + (" " + quoted(player) if player else "") if only else "demoonly"
+    return {"demo": demo, "start": 0, "end": None,
+            "commands": ["demoseek 0", "demopause 0", only, "demovideo {part}"]}
+
+
+def stretches(spans):
+    """(start, end) spans in msec, joined when less than a second apart, as
+    demoonly does."""
+    joined = []
+    for start, end in sorted(spans):
+        if joined and start <= joined[-1][1] + 1000:
+            joined[-1][1] = max(joined[-1][1], end)
+        else:
+            joined.append([max(0, start), end])
+    return joined
+
+
+class RecordDialog(QDialog):
+    """What to record and how, kept in the settings.
+
+    choices: [(key, label, enabled)], what can be recorded, after a stretch
+    of time from time when it isn't None. join: offer one video for all."""
+
+    def __init__(self, settings, choices, time=None, join=False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Record a video")
         self.settings = settings
-        self.player = player
         form = QFormLayout(self)
 
-        self.range = QRadioButton("From")
-        self.start = QLineEdit(clock(time))
-        self.end = QLineEdit(clock(time + 30000))
-        row = QHBoxLayout()
-        for widget in (self.range, self.start, QLabel("to"), self.end):
-            row.addWidget(widget)
-        self.kills = QRadioButton(f"The {kills} kills" + (" by " + player if player else ""))
-        self.kills.setEnabled(kills > 0)
-        self.multikills = QRadioButton(f"The {multikills} multi-kills" + (" by " + player if player else ""))
-        self.multikills.setEnabled(multikills > 0)
-        self.watched = QRadioButton("While " + player + " is watched" if player else "While a player is watched")
-        self.watched.setEnabled(bool(player) and watched)
         group = QButtonGroup(self)
-        for button in (self.range, self.kills, self.multikills, self.watched):
-            group.addButton(button)
-        self.range.setChecked(True)
         what = QVBoxLayout()
-        what.addLayout(row)
-        what.addWidget(self.kills)
-        what.addWidget(self.multikills)
-        what.addWidget(self.watched)
+        self.range = None
+        if time is not None:
+            self.range = QRadioButton("From")
+            self.start = QLineEdit(clock(time))
+            self.end = QLineEdit(clock(time + 30000))
+            row = QHBoxLayout()
+            for widget in (self.range, self.start, QLabel("to"), self.end):
+                row.addWidget(widget)
+            what.addLayout(row)
+            group.addButton(self.range)
+        self.choices = {}
+        for key, label, enabled in choices:
+            button = self.choices[key] = QRadioButton(label)
+            button.setEnabled(enabled)
+            group.addButton(button)
+            what.addWidget(button)
+        first = self.range or next((b for b in self.choices.values() if b.isEnabled()), None)
+        if first:
+            first.setChecked(True)
         form.addRow("Record", what)
+        self.join = QCheckBox("One video for all")
+        self.join.setChecked(settings.value("rec/join", "true") == "true")
+        self.offers_join = join
+        if join:
+            form.addRow("", self.join)
+        else:
+            self.join.hide()
 
         self.folder = QLineEdit(settings.value("rec/folder", os.path.expanduser("~/Videos")))
         browse = QPushButton("Browse…")
@@ -669,9 +706,22 @@ class RecordDialog(QDialog):
         if path:
             self.folder.setText(path)
 
+    def what(self):
+        """"range" or the key of the choice made."""
+        if self.range and self.range.isChecked():
+            return "range"
+        return next((key for key, button in self.choices.items() if button.isChecked()), None)
+
+    def times(self):
+        """The stretch of time chosen, in msec."""
+        return parse_clock(self.start.text()), parse_clock(self.end.text())
+
     def accept(self):
-        if self.range.isChecked():
-            start, end = parse_clock(self.start.text()), parse_clock(self.end.text())
+        if self.what() is None:
+            QMessageBox.warning(self, "Record a video", "There's nothing to record.")
+            return
+        if self.what() == "range":
+            start, end = self.times()
             if start is None or end is None or end <= start:
                 QMessageBox.warning(self, "Record a video", "The start and end times aren't right.")
                 return
@@ -687,54 +737,53 @@ class RecordDialog(QDialog):
                            ("bitrate", self.bitrate.currentText()), ("advanced", self.advanced.text().strip()),
                            ("ffmpeg", self.ffmpeg.text().strip())):
             self.settings.setValue("rec/" + key, value)
+        if self.offers_join:
+            self.settings.setValue("rec/join", "true" if self.join.isChecked() else "false")
         super().accept()
 
-    def job(self, demo):
-        """What the recorder does, from the settings."""
+    def job(self, label, clips, demo, player=""):
+        """A video of clips for the recorder, with the settings chosen; demo
+        and player name it."""
         crf = self.quality.value()
         options = self.advanced.text().strip() or " ".join([
             CODECS[self.codec.currentText()].format(crf=crf, quality=max(1, min(100, 120 - 3 * crf))),
             f"-c:a aac -b:a {self.bitrate.currentText()}" if self.sound.isChecked() else "-an",
             "-movflags +faststart"])
         width, height = (int(v) for v in self.size.currentText().lower().split("x"))
-        if self.range.isChecked():
-            start, end = parse_clock(self.start.text()), parse_clock(self.end.text())
-            commands = [f"demoseek {seconds(start)}", f"demovideo replay {seconds(end)}"]
-        else:
-            start, end = 0, None
-            only = ("kills" if self.kills.isChecked() else "multikills" if self.multikills.isChecked()
-                    else "watched") + (" " + quoted(self.player) if self.player else "")
-            commands = ["demoseek 0", "demoonly " + only, "demovideo replay"]
         try:
             name = self.pattern.text().format_map({
-                "demo": demo, "start": clock(start).replace(":", "-"), "player": self.player or "",
+                "demo": demo, "start": clock(clips[0]["start"]).replace(":", "-"), "player": player or "",
                 "date": QDateTime.currentDateTime().toString("yyyy-MM-dd hh-mm")})
         except (KeyError, ValueError, IndexError):
             name = demo
         name = "".join(c for c in name if c not in '/\\:*?"<>|').strip() or demo
-        return {"options": options, "width": width, "height": height, "fps": self.fps.currentText(),
-                "sound": self.sound.isChecked(), "ffmpeg": self.ffmpeg.text().strip() or "ffmpeg",
-                "commands": commands, "start": start, "end": end,
-                "output": os.path.join(self.folder.text(), name + ".mp4")}
+        return {"label": label, "clips": clips, "options": options, "width": width, "height": height,
+                "fps": self.fps.currentText(), "sound": self.sound.isChecked(),
+                "ffmpeg": self.ffmpeg.text().strip() or "ffmpeg",
+                "output": os.path.join(self.folder.text(), name + ".mp4"), "status": "waiting"}
 
 
-class Recording(QObject):
-    """A video recorded by a second game, offscreen, rendering the sound."""
+class Recorder(QObject):
+    """Records a job in a second game, offscreen, rendering the sound: its
+    clips one after the other, loading their demos, then FFmpeg joins them
+    when there are several. on_progress(job, text) tells how it goes, and
+    on_done(job, error, video) when it's over."""
 
-    def __init__(self, window, demo, job):
+    def __init__(self, window, job, on_progress, on_done):
         super().__init__(window)
         self.window = window
-        self.demo = demo
         self.job = job
+        self.on_progress = on_progress
+        self.on_done = on_done
         self.phase = "loading"
         self.error = ""
+        self.clip = -1
+        self.loaded = None  # the demo the recorder plays
+        self.parts = []
+        self.joiner = None
         self.game = Game(self.output, self.exited)
         self.clock = QElapsedTimer()
         self.timer = QTimer(self, interval=200, timeout=self.poll)
-        self.progress = QProgressDialog("Starting the recorder…", "Cancel", 0, 0, window)
-        self.progress.setWindowTitle("Recording")
-        self.progress.setMinimumDuration(0)
-        self.progress.canceled.connect(self.cancel)
 
     def start(self):
         settings = self.window.settings
@@ -747,13 +796,40 @@ class Recording(QObject):
         driver = "offscreen" if sys.platform.startswith("linux") else None
         self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
                         job["width"], job["height"], extra, driver)
-        self.game.send("demo " + quoted(self.demo))
-        self.clock.start()
+        self.on_progress(self.job, "Starting the recorder…")
         self.timer.start()
+        self.next_clip()
 
     def output(self, line):
         if line.startswith("ERROR:") or "Couldn't write" in line or "Couldn't run" in line:
             self.error = line.replace("^1", "")
+
+    def part(self):
+        """The name of the video of this clip."""
+        return f"part{self.clip}"
+
+    def made(self):
+        """The video the recorder writes."""
+        return os.path.join(self.game.home or "", "main", "videos", self.part() + ".mp4")
+
+    def next_clip(self):
+        self.clip += 1
+        self.clock.start()
+        if self.clip == len(self.job["clips"]):
+            self.join()
+            return
+        demo = self.job["clips"][self.clip]["demo"]
+        if demo != self.loaded:
+            self.game.send("demo " + quoted(demo))
+            self.loaded = demo
+            self.phase = "loading"
+        else:
+            self.send_clip()
+
+    def send_clip(self):
+        for command in self.job["clips"][self.clip]["commands"]:
+            self.game.send(command.replace("{part}", self.part()))
+        self.phase = "starting"
 
     def poll(self):
         # looked at first: the game says it records before FFmpeg makes the
@@ -761,71 +837,101 @@ class Recording(QObject):
         made = os.path.isfile(self.made())
         state = self.game.read_json("demostate.json") or {}
         if self.phase == "loading":
-            if state.get("demo") and state.get("time", 0) > 0 and not state.get("seeking"):
-                for command in self.job["commands"]:
-                    self.game.send(command)
-                self.phase = "starting"
+            if state.get("demo") == self.loaded and state.get("time", 0) > 0 and not state.get("seeking"):
+                self.send_clip()
             elif self.clock.elapsed() > 120000:
-                self.finish("The recorder didn't load the demo. " + self.error)
+                self.finish(f"The recorder didn't load {self.loaded}. {self.error}")
         elif self.phase == "starting":
             if state.get("recording"):
                 self.phase = "recording"
             elif made:
-                self.finish()  # over between two polls
+                self.clip_done()  # over between two polls
             elif self.clock.elapsed() > 180000 or self.error:
                 self.finish("The recording didn't start. " + self.error)
         elif self.phase == "recording":
-            start, end, time = self.job["start"], self.job["end"], state.get("time", 0)
-            if end:
-                self.progress.setMaximum(100)
-                self.progress.setValue(max(0, min(99, (time - start) * 100 // max(1, end - start))))
-            self.progress.setLabelText(f"Recording {clock(time)}…")
+            clip, time = self.job["clips"][self.clip], state.get("time", 0)
+            text = f"Recording {clock(time)}"
+            if clip["end"]:
+                text += f", {max(0, min(99, (time - clip['start']) * 100 // max(1, clip['end'] - clip['start'])))}%"
+            if len(self.job["clips"]) > 1:
+                text += f" (clip {self.clip + 1} of {len(self.job['clips'])})"
+            self.on_progress(self.job, text + "…")
             if not state.get("recording"):
-                self.finish()
+                self.clip_done()
 
-    def made(self):
-        """The video the recorder writes."""
-        return os.path.join(self.game.home or "", "main", "videos", "replay.mp4")
-
-    def finish(self, error=""):
-        self.timer.stop()
-        made = self.made()
-        log = made + ".log"
-        if not error and self.error:
+    def clip_done(self):
+        if self.error:
             # FFmpeg quit midway: what it wrote isn't the whole video
-            error = "The recording stopped. " + self.error
-        if not error and not os.path.isfile(made):
-            error = "FFmpeg didn't write the video."
+            self.finish("The recording stopped. " + self.error)
+        elif not os.path.isfile(self.made()):
+            self.finish("FFmpeg didn't write the video.")
+        else:
+            self.parts.append(self.made())
+            self.next_clip()
+
+    def join(self):
+        self.phase = "joining"
+        if len(self.parts) == 1:
+            self.finish(video=self.parts[0])
+            return
+        self.on_progress(self.job, f"Joining {len(self.parts)} clips…")
+        folder = os.path.dirname(self.parts[0])
+        with open(os.path.join(folder, "parts.txt"), "w") as f:
+            f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in self.parts)
+        self.joiner = QProcess(self)
+        self.joiner.setProcessChannelMode(QProcess.MergedChannels)
+        self.joiner.finished.connect(self.joined)
+        self.joiner.errorOccurred.connect(
+            lambda error: error == QProcess.FailedToStart and self.finish("Couldn't run FFmpeg to join the clips."))
+        self.joiner.start(self.job["ffmpeg"], ["-v", "error", "-y", "-f", "concat", "-safe", "0",
+                                               "-i", os.path.join(folder, "parts.txt"), "-c", "copy",
+                                               "-movflags", "+faststart", os.path.join(folder, "joined.mp4")])
+
+    def joined(self, code=0, status=None):
+        if self.phase != "joining":
+            return
+        video = os.path.join(os.path.dirname(self.parts[0]), "joined.mp4")
+        if code or not os.path.isfile(video):
+            text = bytes(self.joiner.readAll()).decode("utf-8", "replace")
+            self.finish("FFmpeg couldn't join the clips.\n" + text[-1500:])
+        else:
+            self.finish(video=video)
+
+    def finish(self, error="", video=None):
+        """Over: the video goes to the folder chosen, or the error is told,
+        with FFmpeg's log."""
+        self.timer.stop()
+        self.phase = "done"
+        log = self.made() + ".log"
         if error and os.path.isfile(log):
             with open(log, errors="replace") as f:
                 error += "\n" + f.read()[-1500:]
         output = self.job["output"]
-        if not error:
-            os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
-            base, number = output[:-4], 2
-            while os.path.exists(output):
-                output = f"{base} ({number}).mp4"
-                number += 1
-            shutil.move(made, output)
-        self.phase = "done"
-        self.progress.close()
+        if video:
+            try:
+                os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+                base, number = output[:-4], 2
+                while os.path.exists(output):
+                    output = f"{base} ({number}).mp4"
+                    number += 1
+                shutil.move(video, output)
+            except OSError as e:
+                error, video = f"Couldn't move the video to {output}: {e}", None
         self.game.stop()
-        if error:
-            QMessageBox.warning(self.window, "Recording", error.strip())
-        else:
-            self.window.statusBar().showMessage("Recorded " + output)
-        self.window.recording = None
+        self.on_done(self.job, error.strip(), output if video else None)
 
     def cancel(self):
         if self.phase != "done":
             self.phase = "done"
             self.timer.stop()
+            if self.joiner:
+                self.joiner.kill()
+                self.joiner.waitForFinished(1000)
             self.game.stop()
-            self.window.statusBar().showMessage("Recording canceled")
-            self.window.recording = None
+            self.on_done(self.job, "canceled", None)
 
     def exited(self):
-        if self.phase not in ("done",):
+        if self.phase != "done":
             self.finish("The recorder quit. " + self.error)
 
 
@@ -838,7 +944,8 @@ class Window(QMainWindow):
         self.index = None
         self.pending_demo = None
         self.seeking_slider = False
-        self.recording = None
+        self.recorder = None
+        self.jobs = []
         self.last_jump = (None, 0)
         self.round_marks = self.kill_marks = self.multi_marks = []
         self.library = Library(self.library_changed, self)
@@ -857,6 +964,7 @@ class Window(QMainWindow):
         self.demos.setSortingEnabled(True)
         self.demos.sortByColumn(0, Qt.DescendingOrder)
         self.demos.itemActivated.connect(lambda item: self.play_demo(item.text(4)))
+        self.add_menu(self.demos, "Record the demos selected…", self.record_demos)
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
@@ -890,6 +998,8 @@ class Window(QMainWindow):
         for tree in (self.kills, self.multikills, self.rounds):
             tree.itemClicked.connect(self.jump_to_item)
             tree.itemActivated.connect(self.jump_to_item)
+        for tree in (self.kills, self.multikills):
+            self.add_menu(tree, "Record the ones selected…", lambda _=False, t=tree: self.record_selected(t))
         self.tabs = tabs = QTabWidget()
         tabs.addTab(self.kills, "Kills")
         tabs.addTab(self.multikills, "Multi-kills")
@@ -944,10 +1054,33 @@ class Window(QMainWindow):
         box.addLayout(controls)
         self.setCentralWidget(central)
 
+        # the videos recorded and to record
+        self.queue = self.make_list(["Video", "What", "Status"])
+        self.queue.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.queue.itemActivated.connect(self.open_video)
+        buttons = QHBoxLayout()
+        for text, action in (("Cancel", self.cancel_jobs), ("Remove finished", self.remove_finished),
+                             ("Open folder", self.open_folder)):
+            button = QPushButton(text)
+            button.clicked.connect(action)
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        videos = QWidget()
+        box = QVBoxLayout(videos)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(self.queue)
+        box.addLayout(buttons)
+        self.queue_dock = QDockWidget("Videos", self)
+        self.queue_dock.setObjectName("videos")
+        self.queue_dock.setWidget(videos)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.queue_dock)
+        self.queue_dock.hide()
+
         settings_action = self.menuBar().addAction("Settings…")
         settings_action.triggered.connect(self.edit_settings)
         self.restart_action = self.menuBar().addAction("Restart game")
         self.restart_action.triggered.connect(self.start_game)
+        self.menuBar().addAction(self.queue_dock.toggleViewAction())
 
         self.indexing = QLabel()
         self.statusBar().addPermanentWidget(self.indexing)
@@ -972,6 +1105,14 @@ class Window(QMainWindow):
     def fit_columns(self, tree):
         for column in range(tree.columnCount() - 1):
             tree.resizeColumnToContents(column)
+
+    def add_menu(self, tree, text, action):
+        """Several items can be selected, and a right-click offers action."""
+        tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        tree.setContextMenuPolicy(Qt.ActionsContextMenu)
+        menu_action = QAction(text, tree)
+        menu_action.triggered.connect(action)
+        tree.addAction(menu_action)
 
     def make_button(self, icon, tip, action, text=""):
         button = QToolButton()
@@ -1187,6 +1328,7 @@ class Window(QMainWindow):
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
             item.setData(0, Qt.UserRole, kill["time"] - KILL_BEFORE)
+            item.setData(1, Qt.UserRole, (kill["time"] - KILL_BEFORE, kill["time"] + KILL_AFTER))
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
         self.multikills.clear()
@@ -1197,6 +1339,7 @@ class Window(QMainWindow):
             victims = ", ".join(kill["victimName"] or "?" for kill in chain)
             item = QTreeWidgetItem([clock(chain[0]["time"]), chain[0]["killerName"], str(len(chain)), victims])
             item.setData(0, Qt.UserRole, chain[0]["time"] - KILL_BEFORE)
+            item.setData(1, Qt.UserRole, (chain[0]["time"] - KILL_BEFORE, chain[-1]["time"] + KILL_AFTER))
             self.multikills.addTopLevelItem(item)
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
         self.tab_changed()
@@ -1248,29 +1391,190 @@ class Window(QMainWindow):
         self.game.send("demoseek " + seconds(start))
         self.game.send("demoonly watched " + quoted(player))
 
+    # recording
+
     def record(self):
+        """Record…: a stretch of the demo playing, its kills or multi-kills
+        (by the player chosen), or while a player is watched."""
         demo = self.state.get("demo")
         if not demo:
             QMessageBox.information(self, "Record a video", "Play a demo first.")
-            return
-        if self.recording:
-            QMessageBox.information(self, "Record a video", "A video is already being recorded.")
             return
         player = self.player.currentData() or ""
         index = self.index or {}
         kills = sum(1 for k in index.get("kills", []) if not player or same_player(k["killerName"], player))
         multi = sum(1 for c in multi_kills(index.get("kills", [])) if not player or same_player(c[0]["killerName"], player))
         watched = any(same_player(w["name"], player) for w in index.get("watched", [])) if player else False
-        dialog = RecordDialog(self.settings, self.state.get("time", 0), player, kills, multi, watched, self)
-        if dialog.exec():
-            self.recording = Recording(self, demo, dialog.job(demo))
-            self.recording.start()
+        by = " by " + player if player else ""
+        dialog = RecordDialog(self.settings, [
+            ("kills", f"The {kills} kills{by}", kills > 0),
+            ("multikills", f"The {multi} multi-kills{by}", multi > 0),
+            ("watched", f"While {player} is watched" if player else "While a player is watched", watched),
+        ], self.state.get("time", 0), parent=self)
+        if not dialog.exec():
+            return
+        what = dialog.what()
+        if what == "range":
+            start, end = dialog.times()
+            label = f"{demo}, {clock(start)} to {clock(end)}"
+            clip = range_clip(demo, start, end)
+        else:
+            label = demo + ", " + dialog.choices[what].text()[0].lower() + dialog.choices[what].text()[1:]
+            clip = only_clip(demo, what, player)
+        self.add_job(dialog.job(label, [clip], demo, player))
+
+    def record_selected(self, tree):
+        """The kills or multi-kills selected, in one video or one each."""
+        demo = self.state.get("demo")
+        items = tree.selectedItems()
+        if not demo or not items:
+            QMessageBox.information(self, "Record a video", "Select kills of the demo playing first.")
+            return
+        kind = "multi-kills" if tree is self.multikills else "kills"
+        spans = stretches(item.data(1, Qt.UserRole) for item in items)
+        dialog = RecordDialog(self.settings, [("selected", f"The {len(items)} {kind} selected", True)],
+                              join=len(spans) > 1, parent=self)
+        if not dialog.exec():
+            return
+        player = self.player.currentData() or ""
+        clips = [range_clip(demo, start, end) for start, end in spans]
+        if dialog.join.isChecked() or len(clips) == 1:
+            self.add_job(dialog.job(f"{demo}, {len(items)} {kind}", clips, demo, player))
+        else:
+            for clip in clips:
+                self.add_job(dialog.job(f"{demo}, {clock(clip['start'])} to {clock(clip['end'])}", [clip], demo, player))
+
+    def record_demos(self):
+        """The demos selected, all of them or the kills or multi-kills of the
+        player found by the filter, in one video or one each."""
+        names = [item.text(4) for item in self.demos.selectedItems() if not item.isHidden()]
+        if not names:
+            QMessageBox.information(self, "Record a video", "Select demos first.")
+            return
+        # the player found in each demo, the one with the most kills
+        found = {}
+        if not self.demos.isColumnHidden(2):
+            found = {name: self.demo_items[name].data(2, Qt.UserRole) for name in names}
+        player = next((p for p in found.values() if p), "")
+
+        def demos_with(column):
+            """The demos where the player found has kills (1) or multi-kills
+            (2), all players' if none."""
+            with_some = []
+            for name in names:
+                players = (self.library.demos.get(name) or {}).get("players", {})
+                if found.get(name):
+                    counts = players.get(clean_name(found[name]), [0, 0, 0])
+                    if counts[column]:
+                        with_some.append(name)
+                elif any(p[column] for p in players.values()):
+                    with_some.append(name)
+            return with_some
+        with_kills, with_multi = demos_with(1), demos_with(2)
+        whose = player + "'s" if player else "All the"
+
+        def where(count):
+            return "" if len(names) == 1 else f", in {count} of the {len(names)} demos"
+        dialog = RecordDialog(self.settings, [
+            ("kills", f"{whose} kills{where(len(with_kills))}", bool(with_kills)),
+            ("multikills", f"{whose} multi-kills{where(len(with_multi))}", bool(with_multi)),
+            ("everything", "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos", True),
+        ], join=len(names) > 1, parent=self)
+        if not dialog.exec():
+            return
+        what = dialog.what()
+        chosen = {"kills": with_kills, "multikills": with_multi, "everything": names}[what]
+        clips = [only_clip(name, "" if what == "everything" else what, found.get(name) or "") for name in chosen]
+        kind = {"kills": "kills", "multikills": "multi-kills", "everything": ""}[what]
+        if dialog.join.isChecked() or len(clips) == 1:
+            demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
+            self.add_job(dialog.job(demo + (f", {whose.lower() if not player else whose} {kind}" if kind else ""),
+                                    clips, demo, player))
+        else:
+            for name, clip in zip(chosen, clips):
+                label = name + (f", {whose.lower() if not player else whose} {kind}" if kind else "")
+                self.add_job(dialog.job(label, [clip], name, found.get(name) or player))
+
+    def add_job(self, job):
+        """Records it after the ones before it."""
+        job["item"] = item = QTreeWidgetItem([os.path.basename(job["output"]), job["label"], "Waiting"])
+        self.jobs.append(job)
+        self.queue.addTopLevelItem(item)
+        if self.queue_dock.isHidden():
+            self.queue_dock.show()
+            self.resizeDocks([self.queue_dock], [160], Qt.Vertical)
+        self.next_job()
+
+    def next_job(self):
+        if self.recorder:
+            return
+        job = next((j for j in self.jobs if j["status"] == "waiting"), None)
+        if job:
+            job["status"] = "recording"
+            self.recorder = Recorder(self, job, self.job_progress, self.job_done)
+            self.recorder.start()
+
+    def job_progress(self, job, text):
+        job["item"].setText(2, text)
+
+    def job_done(self, job, error, video):
+        self.recorder = None
+        item = job["item"]
+        if video:
+            job["status"], job["output"] = "done", video
+            item.setText(0, os.path.basename(video))
+            item.setText(2, "Done")
+            item.setToolTip(0, video)
+            self.statusBar().showMessage("Recorded " + video)
+        elif error == "canceled":
+            job["status"] = "canceled"
+            item.setText(2, "Canceled")
+        else:
+            job["status"] = "failed"
+            item.setText(2, "Failed: " + error.splitlines()[0])
+            item.setToolTip(2, error)
+            item.setForeground(2, QColor(Qt.red))
+            self.statusBar().showMessage(f"Couldn't record {item.text(0)}: {error.splitlines()[0]}")
+        self.next_job()
+
+    def cancel_jobs(self):
+        for job in [j for j in self.jobs if j["item"].isSelected()]:
+            if job["status"] == "waiting":
+                job["status"] = "canceled"
+                job["item"].setText(2, "Canceled")
+            elif job["status"] == "recording" and self.recorder:
+                self.recorder.cancel()
+
+    def remove_finished(self):
+        for job in [j for j in self.jobs if j["status"] in ("done", "failed", "canceled")]:
+            self.jobs.remove(job)
+            self.queue.takeTopLevelItem(self.queue.indexOfTopLevelItem(job["item"]))
+
+    def open_video(self, item):
+        job = next((j for j in self.jobs if j["item"] is item), None)
+        if job and job["status"] == "done":
+            QDesktopServices.openUrl(QUrl.fromLocalFile(job["output"]))
+
+    def open_folder(self):
+        job = next((j for j in self.jobs if j["item"].isSelected()), None)
+        folder = os.path.dirname(job["output"]) if job else self.settings.value("rec/folder", "")
+        if folder and os.path.isdir(folder):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def closeEvent(self, event):
+        left = sum(1 for j in self.jobs if j["status"] in ("waiting", "recording"))
+        if left and QMessageBox.question(
+                self, "Quit", f"{left} video{'s are' if left > 1 else ' is'} still to record. Quit anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            event.ignore()
+            return
         self.poller.stop()
         self.library.stop()
-        if self.recording:
-            self.recording.cancel()
+        for job in self.jobs:
+            if job["status"] == "waiting":
+                job["status"] = "canceled"
+        if self.recorder:
+            self.recorder.cancel()
         self.game.stop()
         super().closeEvent(event)
 
