@@ -42,28 +42,30 @@ As light, lean, robust, reliable and portable as possible:
 `ui_hud` off by default and hiding chat/kill messages/spectator hints,
 `cg_followplayer` (live spectating), `.dm3` demos, `loopdemos` /
 `stoploopdemos`, no team/weapon menus during demos, view bob with
-`cg_animationviewmodel`, a Linux x86_64 client-only CI build on `main`, and
-step 1: `demoseek <time>` / `demoskip <time>` (seconds or minutes:seconds).
+`cg_animationviewmodel`, a Linux x86_64 client-only CI build on `main`,
+step 1: `demoseek <time>` / `demoskip <time>` (seconds or minutes:seconds),
+and demos that load a new level midway (a map change, in about a third of
+the test demos) play through it.
 
 ## Fix next, before step 2
 
 Found while testing step 1 on real demos:
 
-1. **Demos that reload the level midway get stuck** (not caused by step 1).
-   After a second gamestate (e.g. a match restart), every snapshot is a delta
-   from a frame the client cleared, so playback stops with "Delta from
-   invalid frame (not supposed to happen!)", and seeking past it too. Example:
-   `d482684ec556d1c3-obj-obj_team1.dm3`, at about 51:20. The step 2 index has
-   to read through these as well.
-2. **No real pause.** `cl_freezeDemo 1` stops the demo, but it jumps ahead by
+1. **No real pause.** `cl_freezeDemo 1` stops the demo, but it jumps ahead by
    the paused time when resumed (`cl.serverTimeDelta` isn't moved). Add a
    pause command that keeps the time, for key binds and the app.
-3. **The game didn't exit.** Five test copies running with
+2. **The game didn't exit.** Five test copies running with
    `r_swapInterval 1` hung in a futex wait and ignored SIGTERM after new game
    windows covered them; fresh copies exit fine on `quit` and SIGTERM.
    Suspected: VSync on Wayland blocking while the window isn't shown. Either
    way the app (step 4) can't rely on the game answering: non-blocking pipe
    writes, SIGKILL after a timeout.
+3. **Snapshots dropped when the recorder lagged** (minor). When the server
+   deltas from a frame about 26 snapshots old, its entities have left the
+   client's 2048-entry `MAX_PARSE_ENTITIES` buffer, so up to 3 snapshots
+   (150 ms) are dropped with "Delta parseEntitiesNum too old" until a full
+   one comes. Seen 50 times in the first 300 test demos; a bigger buffer may
+   keep them.
 
 ## Steps, in order
 
@@ -85,6 +87,9 @@ Found while testing step 1 on real demos:
    - Who is watched: `ps.stats[STAT_INFOCLIENT]` while `PMF_CAMERA_VIEW` is
      set when spectating, otherwise the recorder.
    - The current demo time, for the app's clock.
+   - Levels loaded midway: the snapshots after the new gamestate are deltas
+     from the last frames of the previous level, so keep those frames, as
+     `CL_ClearStateKeepingFrames` does for playback.
 3. **Kill and follow queues (engine).** Next/previous kill, play only kills
    (optionally by one player), play only the stretches where a given player is
    watched, next round.

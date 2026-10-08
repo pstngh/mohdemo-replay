@@ -528,6 +528,41 @@ static void CL_ParseServerInfo(void)
 
 /*
 ==================
+CL_ClearStateKeepingFrames
+
+Added in OPM
+After a gamestate in the middle of a demo (a map change or restart), the
+snapshots can be deltas from the last frames of the previous level, so the
+frames are kept when the rest of the client state is wiped. The number of
+the last one is kept too, or the next snapshot would drop them all as lost.
+==================
+*/
+static void CL_ClearStateKeepingFrames( void ) {
+	clSnapshot_t	*snapshots;
+	entityState_t	*parseEntities;
+	int				parseEntitiesNum;
+	int				lastMessageNum;
+
+	snapshots = (clSnapshot_t *)Z_Malloc( sizeof( cl.snapshots ) );
+	parseEntities = (entityState_t *)Z_Malloc( sizeof( cl.parseEntities ) );
+	Com_Memcpy( snapshots, cl.snapshots, sizeof( cl.snapshots ) );
+	Com_Memcpy( parseEntities, cl.parseEntities, sizeof( cl.parseEntities ) );
+	parseEntitiesNum = cl.parseEntitiesNum;
+	lastMessageNum = cl.snap.messageNum;
+
+	CL_ClearState();
+
+	Com_Memcpy( cl.snapshots, snapshots, sizeof( cl.snapshots ) );
+	Com_Memcpy( cl.parseEntities, parseEntities, sizeof( cl.parseEntities ) );
+	cl.parseEntitiesNum = parseEntitiesNum;
+	cl.snap.messageNum = lastMessageNum;
+
+	Z_Free( snapshots );
+	Z_Free( parseEntities );
+}
+
+/*
+==================
 CL_ParseGamestate
 ==================
 */
@@ -547,7 +582,13 @@ void CL_ParseGamestate( msg_t *msg ) {
 	}
 
 	// wipe local client state
-	CL_ClearState();
+	// Changed in OPM
+	//  Demos keep the frames to delta from
+	if ( clc.demoplaying ) {
+		CL_ClearStateKeepingFrames();
+	} else {
+		CL_ClearState();
+	}
 
 	// a gamestate always marks a server command sequence
 	clc.serverCommandSequence = MSG_ReadLong( msg );
