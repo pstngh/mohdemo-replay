@@ -10,7 +10,8 @@ and PySide6.
 On the first run, Settings asks for the game program (found by itself when
 built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
 with `main/Pak0.pk3`) and the folder with the demos. Double-click a demo to
-play it, a kill or a round to jump to it.
+play it, click a kill or a round to jump to it. "Only these kills" plays the
+kills listed (by the player chosen), from the one selected or the first.
 
 Record… makes an MP4 of the demo playing: a stretch of time, the kills
 (of the player chosen above) one after the other, or only while a player is

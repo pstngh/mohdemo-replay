@@ -17,6 +17,7 @@ import os
 import shutil
 import sys
 import tempfile
+from time import monotonic
 
 from PySide6.QtCore import QDateTime, QElapsedTimer, QObject, QProcess, QProcessEnvironment, QSettings, Qt, QTimer
 from PySide6.QtWidgets import (
@@ -528,6 +529,7 @@ class Window(QMainWindow):
         self.pending_demo = None
         self.seeking_slider = False
         self.recording = None
+        self.last_jump = (None, 0)
 
         self.setWindowTitle("MoH Demo Replay")
         self.resize(1000, 640)
@@ -552,10 +554,10 @@ class Window(QMainWindow):
         self.player = QComboBox()
         self.player.currentIndexChanged.connect(self.fill_kills)
         only_kills = QPushButton("Only these kills")
-        only_kills.setToolTip("Play only the kills listed")
+        only_kills.setToolTip("Play only the kills listed, from the one selected or the first")
         only_kills.clicked.connect(self.only_kills)
         follow = QPushButton("Only while watched")
-        follow.setToolTip("Play only while this player is shown")
+        follow.setToolTip("Play only while this player is shown, from the first time")
         follow.clicked.connect(self.only_watched)
         everything = QPushButton("Play everything")
         everything.clicked.connect(lambda: self.game.send("demoonly"))
@@ -568,8 +570,10 @@ class Window(QMainWindow):
 
         self.kills = self.make_list(["Time", "Killer", "Victim", "How"])
         self.rounds = self.make_list(["Time", "Round", "Result"])
-        self.kills.itemActivated.connect(self.jump_to_item)
-        self.rounds.itemActivated.connect(self.jump_to_item)
+        # a click jumps, so does Enter
+        for tree in (self.kills, self.rounds):
+            tree.itemClicked.connect(self.jump_to_item)
+            tree.itemActivated.connect(self.jump_to_item)
         tabs = QTabWidget()
         tabs.addTab(self.kills, "Kills")
         tabs.addTab(self.rounds, "Rounds")
@@ -798,6 +802,10 @@ class Window(QMainWindow):
     # actions
 
     def jump_to_item(self, item):
+        # a double-click also activates the item: one jump is enough
+        if item is self.last_jump[0] and monotonic() - self.last_jump[1] < 1:
+            return
+        self.last_jump = (item, monotonic())
         self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)))
 
     def slider_released(self):
@@ -805,14 +813,27 @@ class Window(QMainWindow):
         self.game.send("demoseek " + seconds(self.slider.value()))
 
     def only_kills(self):
+        """Plays the kills listed, from the one selected or the first."""
+        item = self.kills.currentItem() or self.kills.topLevelItem(0)
+        if not item:
+            QMessageBox.information(self, "Only these kills", "There are no kills to play.")
+            return
         player = self.player.currentData() or ""
+        self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)))
         self.game.send("demoonly kills" + (" " + quoted(player) if player else ""))
 
     def only_watched(self):
+        """Plays while the player is watched, from the first time."""
         player = self.player.currentData()
         if not player:
             QMessageBox.information(self, "Only while watched", "Choose a player first.")
             return
+        watched = (self.index or {}).get("watched", [])
+        start = next((w["time"] for w in watched if same_player(w["name"], player)), None)
+        if start is None:
+            QMessageBox.information(self, "Only while watched", player + " isn't watched in this demo.")
+            return
+        self.game.send("demoseek " + seconds(start))
         self.game.send("demoonly watched " + quoted(player))
 
     def record(self):
