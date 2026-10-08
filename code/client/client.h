@@ -95,7 +95,11 @@ typedef struct {
 // the parseEntities array must be large enough to hold PACKET_BACKUP frames of
 // entities, so that when a delta compressed message arives from the server
 // it can be un-deltad from the original
-#define	MAX_PARSE_ENTITIES	2048
+// Changed in OPM
+//  From 2048, about 18 frames of a busy server (111 entities): the server
+//  deltas from frames up to 28 old when the connection lags, so snapshots
+//  were dropped, in demos recorded then too
+#define	MAX_PARSE_ENTITIES	8192
 
 extern int g_console_field_width;
 extern int g_console_charWidth;

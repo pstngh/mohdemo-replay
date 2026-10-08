@@ -47,7 +47,8 @@ step 1: `demoseek <time>` / `demoskip <time>` (seconds or minutes:seconds),
 demos that load a new level midway (a map change, in about a third of the
 test demos) playing through it, and `demopause [0|1]` (toggles without an
 argument): the demo and its sound stop and go on from the same time, and
-seeking keeps it paused.
+seeking keeps it paused. No more snapshots dropped when the recorder's
+connection lagged.
 
 ## Fix next, before step 2
 
@@ -59,13 +60,7 @@ Found while testing on real demos:
    Suspected: VSync on Wayland blocking while the window isn't shown. Either
    way the app (step 4) can't rely on the game answering: non-blocking pipe
    writes, SIGKILL after a timeout.
-2. **Snapshots dropped when the recorder lagged** (minor). When the server
-   deltas from a frame about 26 snapshots old, its entities have left the
-   client's 2048-entry `MAX_PARSE_ENTITIES` buffer, so up to 3 snapshots
-   (150 ms) are dropped with "Delta parseEntitiesNum too old" until a full
-   one comes. Seen 50 times in the first 300 test demos; a bigger buffer may
-   keep them.
-3. **An item icon after seeking while paused** (minor). A few seconds after
+2. **An item icon after seeking while paused** (minor). A few seconds after
    a seek while paused, a small green-framed icon shows at the bottom middle
    (item/weapons bar?) even with the HUD off, and stays until the demo plays
    again. Seen after `demoseek 51:40` in `d482684ec556d1c3-obj-obj_team1.dm3`.
