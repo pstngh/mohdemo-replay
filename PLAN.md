@@ -42,7 +42,28 @@ As light, lean, robust, reliable and portable as possible:
 `ui_hud` off by default and hiding chat/kill messages/spectator hints,
 `cg_followplayer` (live spectating), `.dm3` demos, `loopdemos` /
 `stoploopdemos`, no team/weapon menus during demos, view bob with
-`cg_animationviewmodel`, and a Linux x86_64 client-only CI build on `main`.
+`cg_animationviewmodel`, a Linux x86_64 client-only CI build on `main`, and
+step 1: `demoseek <time>` / `demoskip <time>` (seconds or minutes:seconds).
+
+## Fix next, before step 2
+
+Found while testing step 1 on real demos:
+
+1. **Demos that reload the level midway get stuck** (not caused by step 1).
+   After a second gamestate (e.g. a match restart), every snapshot is a delta
+   from a frame the client cleared, so playback stops with "Delta from
+   invalid frame (not supposed to happen!)", and seeking past it too. Example:
+   `d482684ec556d1c3-obj-obj_team1.dm3`, at about 51:20. The step 2 index has
+   to read through these as well.
+2. **No real pause.** `cl_freezeDemo 1` stops the demo, but it jumps ahead by
+   the paused time when resumed (`cl.serverTimeDelta` isn't moved). Add a
+   pause command that keeps the time, for key binds and the app.
+3. **The game didn't exit.** Five test copies running with
+   `r_swapInterval 1` hung in a futex wait and ignored SIGTERM after new game
+   windows covered them; fresh copies exit fine on `quit` and SIGTERM.
+   Suspected: VSync on Wayland blocking while the window isn't shown. Either
+   way the app (step 4) can't rely on the game answering: non-blocking pipe
+   writes, SIGKILL after a timeout.
 
 ## Steps, in order
 
@@ -51,7 +72,7 @@ As light, lean, robust, reliable and portable as possible:
    ahead without drawing until the exact target time. Commands to jump to a
    time and to move by +/- N seconds. Watch out for cgame's server command
    buffer: commands read while cgame isn't running are "cycled out" if too many
-   pile up, so let cgame consume them while skipping.
+   pile up, so let cgame consume them while skipping. Done.
 2. **Demo index (engine).** One pass when a demo loads, written to a file the
    app reads (the pipe only goes from the app to the game):
    - Kills: `print` server commands starting with `\x04`, like
@@ -92,3 +113,11 @@ Cloud sessions have no game files, so playback can't be tried there; it's
 tested in game. The index can be tested offline: moharena-demo has two real
 AA demos (`demos/1.dm_8`, 7 minutes, and `demos/mohdm6.dm_8`, 12 minutes, both
 Free-For-All, so no rounds).
+
+Locally, the game can be driven through `com_pipefile` and checked with
+`screenshotJPEG`, `viewpos` and `demoseek` (prints the time). During a demo,
+letter and number keys act as Escape, so test binds go on the arrows,
+Home/End and PgUp/PgDn. Demos of maps missing from the game files (custom
+maps) don't load, and `1371e2f1f50b5b41-obj-obj_team2.dm3` shows the loading
+screen throughout: its recorder never joined, so the view is outside the map
+(the same with upstream OpenMoHAA).
