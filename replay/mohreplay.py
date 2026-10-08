@@ -458,6 +458,9 @@ class Recording(QObject):
             self.error = line
 
     def poll(self):
+        # looked at first: the game says it records before FFmpeg makes the
+        # file, and that it's done once FFmpeg has quit
+        made = os.path.isfile(self.made())
         state = self.game.read_json("demostate.json") or {}
         if self.phase == "loading":
             if state.get("demo") and state.get("time", 0) > 0 and not state.get("seeking"):
@@ -469,6 +472,8 @@ class Recording(QObject):
         elif self.phase == "starting":
             if state.get("recording"):
                 self.phase = "recording"
+            elif made:
+                self.finish()  # over between two polls
             elif self.clock.elapsed() > 180000 or self.error:
                 self.finish("The recording didn't start. " + self.error)
         elif self.phase == "recording":
@@ -480,9 +485,13 @@ class Recording(QObject):
             if not state.get("recording"):
                 self.finish()
 
+    def made(self):
+        """The video the recorder writes."""
+        return os.path.join(self.game.home or "", "main", "videos", "replay.mp4")
+
     def finish(self, error=""):
         self.timer.stop()
-        made = os.path.join(self.game.home or "", "main", "videos", "replay.mp4")
+        made = self.made()
         log = made + ".log"
         if not error and not os.path.isfile(made):
             error = "FFmpeg didn't write the video."
