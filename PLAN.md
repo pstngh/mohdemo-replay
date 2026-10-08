@@ -54,6 +54,18 @@ demo index. Step 3: kill, round and player navigation. Step 4: the app,
 `replay/mohreplay.py`. Step 5: `demovideo`, MP4 with sound, and the app's
 Record… button.
 
+Since then: tests for the app against a fake game (`replay/tests`, run by
+`ctest` and CI); kills and rounds marked on the time slider, which jumps
+where it's clicked; `mohdemoindex`, which indexes every demo in the
+background so the list shows their length and levels and finds them by
+player; `demoonly multikills [player]` (`cl_demoMultiKill`, 3 s) and a
+Multi-kills tab; a queue of recordings in a Videos panel, of the kills
+selected or of several demos, clips joined by FFmpeg without encoding them
+again. Fixed on the way: recordings shorter than a poll, half videos kept
+when FFmpeg quit, the level's music gone after the first round, SIGTERM
+hanging the game when it lands in the renderer, and a macOS app bundle not
+taken for the game; CI now builds `main` for macOS too.
+
 ## Steps, in order
 
 1. **Seek and rewind (engine).** A demo only plays forward (each snapshot is a
@@ -153,7 +165,10 @@ Record… button.
 ## Testing
 
 Cloud sessions have no game files, so playback can't be tried there; it's
-tested in game. The index is tested offline, without game files:
+tested in game. The app is tested against a fake game, without game files
+or a screen: `python3 replay/tests/test_mohreplay.py`, with
+`MOHREPLAY_TEST_GAME` and `MOHREPLAY_TEST_DEMOS` set to also play and
+record a real demo. The index is tested offline, without game files:
 `DEMOINDEX_TEST_DEMOS=<folder of demos> ctest -R demoindex` (skipped without
 it), or `test_demoindex [--json] <demo or folder>`. moharena-demo has two real
 AA demos (`demos/1.dm_8`, 7 minutes, and `demos/mohdm6.dm_8`, 12 minutes, both
