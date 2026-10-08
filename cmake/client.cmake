@@ -149,3 +149,20 @@ if (MSVC)
 	target_link_options(${CLIENT_BINARY} PRIVATE "/MANIFEST:NO")
 	INSTALL(FILES $<TARGET_PDB_FILE:${CLIENT_BINARY}> DESTINATION ${INSTALL_BINDIR_FULL} OPTIONAL)
 endif()
+
+# Added in OPM
+#  mohdemoindex: indexes demos without the game, for the replay app
+add_executable(mohdemoindex
+    ${SOURCE_DIR}/client/cl_demoindex_tool.cpp
+    ${SOURCE_DIR}/client/cl_demoindex.cpp
+    ${SOURCE_DIR}/qcommon/msg.cpp
+    ${SOURCE_DIR}/qcommon/huffman.cpp
+    ${SOURCE_DIR}/qcommon/bg_compat.cpp
+    ${SOURCE_DIR}/qcommon/q_shared.c
+    ${SOURCE_DIR}/qcommon/q_math.c
+    ${SOURCE_DIR}/qcommon/common_light.c
+)
+
+set_output_dirs(mohdemoindex)
+
+INSTALL(TARGETS mohdemoindex DESTINATION ${INSTALL_BINDIR_FULL})
