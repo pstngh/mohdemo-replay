@@ -19,12 +19,16 @@ import sys
 import tempfile
 from time import monotonic
 
-from PySide6.QtCore import QDateTime, QElapsedTimer, QObject, QProcess, QProcessEnvironment, QSettings, Qt, QTimer
+from PySide6.QtCore import (
+    QDateTime, QElapsedTimer, QEvent, QObject, QProcess, QProcessEnvironment, QSettings, Qt, QTimer,
+)
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QProgressDialog, QPushButton, QRadioButton, QSlider, QSplitter, QStyle, QTabWidget,
-    QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QProgressDialog, QProxyStyle, QPushButton, QRadioButton, QSlider, QSplitter, QStyle,
+    QStyleOptionSlider, QTabWidget, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 PIPE = "replay_pipe"
@@ -234,6 +238,88 @@ class Game:
                 os.unlink(demos)
             shutil.rmtree(self.home, ignore_errors=True)
             self.home = None
+
+
+class ClickStyle(QProxyStyle):
+    """Sliders jump where they're clicked, instead of a page at a time."""
+
+    def styleHint(self, hint, option=None, widget=None, data=None):
+        if hint == QStyle.SH_Slider_AbsoluteSetButtons:
+            return Qt.LeftButton.value
+        return super().styleHint(hint, option, widget, data)
+
+
+class Timeline(QSlider):
+    """The time slider, with the kills listed marked under it and the rounds
+    above it. Hovering tells what a mark is, or the time there."""
+
+    MARK = 4  # pixels: how near a mark the mouse has to be
+
+    def __init__(self):
+        super().__init__(Qt.Horizontal)
+        self.click_style = ClickStyle()
+        self.setStyle(self.click_style)
+        self.setMinimumHeight(self.sizeHint().height() + 2 * self.MARK + 4)
+        self.kills = []  # (msec, text)
+        self.rounds = []
+
+    def set_marks(self, kills, rounds):
+        self.kills, self.rounds = kills, rounds
+        self.update()
+
+    def geometry_of_values(self):
+        """Where the minimum is and how many pixels the values span."""
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        style = self.style()
+        groove = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
+        handle = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
+        return groove.x() + handle.width() // 2, max(1, groove.width() - handle.width())
+
+    def x_of(self, msec):
+        left, span = self.geometry_of_values()
+        return left + QStyle.sliderPositionFromValue(self.minimum(), self.maximum(), msec, span)
+
+    def value_at(self, x):
+        left, span = self.geometry_of_values()
+        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), x - left, span)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.maximum() <= self.minimum():
+            return
+        painter = QPainter(self)
+        palette = self.palette()
+        height = self.height()
+        painter.setPen(QPen(palette.highlight().color(), 1))
+        for msec, _ in self.kills:
+            x = self.x_of(msec)
+            painter.drawLine(x, height - self.MARK - 1, x, height - 1)
+        painter.setPen(QPen(palette.windowText().color(), 2))
+        for msec, _ in self.rounds:
+            x = self.x_of(msec)
+            painter.drawLine(x, 0, x, self.MARK)
+
+    def mark_at(self, x, y):
+        """The text of the nearest mark on that side, None if none is near."""
+        marks = self.rounds if y < self.height() // 2 else self.kills
+        near = [(abs(self.x_of(msec) - x), msec, text) for msec, text in marks]
+        near = [mark for mark in near if mark[0] <= self.MARK]
+        if not near:
+            return None
+        # several kills close together: all of them
+        best = min(near)[0]
+        return "\n".join(f"{clock(msec)}  {text}" for distance, msec, text in sorted(near, key=lambda m: m[1])
+                         if distance <= best + 1)
+
+    def event(self, event):
+        if event.type() == QEvent.ToolTip:
+            if self.maximum() > self.minimum():
+                position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                text = self.mark_at(position.x(), position.y()) or clock(self.value_at(position.x()))
+                QToolTip.showText(event.globalPos(), text, self)
+            return True
+        return super().event(event)
 
 
 class SettingsDialog(QDialog):
@@ -545,6 +631,7 @@ class Window(QMainWindow):
         self.seeking_slider = False
         self.recording = None
         self.last_jump = (None, 0)
+        self.round_marks = []
 
         self.setWindowTitle("MoH Demo Replay")
         self.resize(1000, 640)
@@ -606,7 +693,7 @@ class Window(QMainWindow):
         splitter.setSizes([300, 700])
 
         # playback
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = Timeline()
         self.slider.sliderPressed.connect(lambda: setattr(self, "seeking_slider", True))
         self.slider.sliderReleased.connect(self.slider_released)
         self.slider.sliderMoved.connect(lambda v: self.time.setText(f"{clock(v)} / {clock(self.slider.maximum())}"))
@@ -801,11 +888,13 @@ class Window(QMainWindow):
             item = QTreeWidgetItem([clock(start), str(number), result])
             item.setData(0, Qt.UserRole, start)
             self.rounds.addTopLevelItem(item)
+        self.round_marks = [(start, f"Round {number}") for number, start in enumerate(starts, 1) if number > 1]
         self.fill_kills()
 
     def fill_kills(self):
         player = self.player.currentData() or ""
         self.kills.clear()
+        marks = []
         for kill in (self.index or {}).get("kills", []):
             if player and not same_player(player, kill["killerName"]):
                 continue
@@ -813,6 +902,8 @@ class Window(QMainWindow):
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
             item.setData(0, Qt.UserRole, kill["time"] - KILL_BEFORE)
             self.kills.addTopLevelItem(item)
+            marks.append((kill["time"], how))
+        self.slider.set_marks(marks, self.round_marks)
 
     # actions
 

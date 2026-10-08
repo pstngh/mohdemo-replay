@@ -12,6 +12,9 @@ built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
 with `main/Pak0.pk3`) and the folder with the demos. Double-click a demo to
 play it, click a kill or a round to jump to it. "Only these kills" plays the
 kills listed (by the player chosen), from the one selected or the first.
+The time slider marks the kills listed under it and the rounds above it:
+hovering one tells what it is, elsewhere the time there, and a click jumps
+there.
 
 Record… makes an MP4 of the demo playing: a stretch of time, the kills
 (of the player chosen above) one after the other, or only while a player is

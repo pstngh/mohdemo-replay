@@ -26,7 +26,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 try:
-    from PySide6.QtCore import QSettings
+    from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
+    from PySide6.QtGui import QMouseEvent
     from PySide6.QtWidgets import QApplication, QMessageBox
 except ImportError:
     if __name__ == "__main__":
@@ -175,6 +176,52 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 
 
+class TestTimeline(unittest.TestCase):
+    def setUp(self):
+        self.slider = mohreplay.Timeline()
+        self.slider.resize(600, self.slider.minimumHeight())
+        self.slider.setMaximum(600000)
+        self.slider.show()
+        app.processEvents()
+
+    def tearDown(self):
+        self.slider.close()
+
+    def test_positions(self):
+        slider = self.slider
+        self.assertLess(slider.x_of(0), slider.x_of(300000))
+        self.assertLess(slider.x_of(300000), slider.x_of(600000))
+        # one pixel is about 1 second here
+        self.assertAlmostEqual(slider.value_at(slider.x_of(300000)), 300000, delta=1100)
+
+    def test_marks(self):
+        slider = self.slider
+        slider.set_marks([(10000, "a"), (11000, "b"), (400000, "c")], [(195000, "Round 2")])
+        bottom, top = slider.height() - 2, 1
+        self.assertEqual(slider.mark_at(slider.x_of(400000), bottom), "6:40  c")
+        self.assertEqual(slider.mark_at(slider.x_of(195000), top), "3:15  Round 2")
+        self.assertIsNone(slider.mark_at(slider.x_of(195000), bottom))
+        self.assertIsNone(slider.mark_at(slider.x_of(300000), bottom))
+        # kills a second apart: both
+        self.assertEqual(slider.mark_at(slider.x_of(10500), bottom), "0:10  a\n0:11  b")
+        slider.grab()  # paints them
+
+    def click(self, x):
+        y = self.slider.height() // 2
+        for kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
+            event = QMouseEvent(kind, QPointF(x, y), self.slider.mapToGlobal(QPointF(x, y)),
+                                Qt.LeftButton, Qt.LeftButton if kind == QEvent.MouseButtonPress else Qt.NoButton,
+                                Qt.NoModifier)
+            QApplication.sendEvent(self.slider, event)
+
+    def test_click_jumps_there(self):
+        released = []
+        self.slider.sliderReleased.connect(lambda: released.append(self.slider.value()))
+        self.click(self.slider.x_of(450000))
+        self.assertEqual(len(released), 1)
+        self.assertAlmostEqual(released[0], 450000, delta=1100)
+
+
 class TestGame(FakeGameCase):
     def start(self, driver=None):
         self.output, self.exits = [], []
@@ -253,9 +300,25 @@ class TestWindow(FakeGameCase):
     def test_player_filters_kills(self):
         window = self.window()
         self.playing(window)
+        self.assertEqual(len(window.slider.kills), 6)
+        self.assertEqual(window.slider.rounds, [(195000, "Round 2"), (420000, "Round 3")])
         window.player.setCurrentIndex(window.player.findData("^1Phil"))
         self.assertEqual(window.kills.topLevelItemCount(), 1)
         self.assertEqual(window.kills.topLevelItem(0).text(2), "t-")
+        self.assertEqual(window.slider.kills, [(200000, "t- was machine-gunned by Phil")])
+
+    def test_slider_click_seeks(self):
+        window = self.window()
+        self.playing(window)
+        window.show()
+        slider = window.slider
+        y = slider.height() // 2
+        x = slider.x_of(300000)
+        for kind, buttons in ((QEvent.MouseButtonPress, Qt.LeftButton), (QEvent.MouseButtonRelease, Qt.NoButton)):
+            QApplication.sendEvent(slider, QMouseEvent(kind, QPointF(x, y), slider.mapToGlobal(QPointF(x, y)),
+                                                       Qt.LeftButton, buttons, Qt.NoModifier))
+        self.assertTrue(wait_until(lambda: any(c.startswith(("demoseek 29", "demoseek 30"))
+                                               for c in self.commands(window.game))))
 
     def test_kill_click_seeks_before_it(self):
         window = self.window()
