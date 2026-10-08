@@ -45,7 +45,7 @@ COL_DATE, COL_LENGTH, COL_RULES, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_
 # the speeds and the damage of weapons
 RULES = {"default": "Default", "realism": "Realism", "both": "Both"}
 SPEEDS = ["0.25", "0.5", "1", "2", "4"]
-# keys above 127 only: the others stop a demo
+# keys above 127 only: during a demo, the others only run +buttons
 BINDS = {
     "PAUSE": "demopause",
     "LEFTARROW": "demoskip -5",

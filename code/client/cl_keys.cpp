@@ -1153,8 +1153,20 @@ void CL_KeyEvent(int key, qboolean down, unsigned time)
     // keys can still be used for bound actions
     if (down && (key <= K_BACKSPACE || key == K_MOUSE4) && (clc.demoplaying || clc.state == CA_CINEMATIC)
         && Key_GetCatcher() == 0) {
-        Cvar_Set("nextdemo", "");
-        key = K_ESCAPE;
+        //
+        // Modified in OPM
+        //  During demos, only escape brings up the menu. The other keys do
+        //  what they're bound to only when it's a button, like +scores on tab,
+        //  so they don't open the chat or a menu either
+        //
+        if (clc.state != CA_CINEMATIC && key != K_ESCAPE) {
+            if (!keys[key].binding || keys[key].binding[0] != '+') {
+                return;
+            }
+        } else {
+            Cvar_Set("nextdemo", "");
+            key = K_ESCAPE;
+        }
     }
 
     // escape is always handled special

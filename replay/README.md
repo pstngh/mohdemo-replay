@@ -54,8 +54,8 @@ asks for Wayland first, then XWayland.
 
 ## Keys in the game window
 
-During a demo, letters, numbers, Space, Tab and Enter stop it, so the app
-binds other keys:
+During a demo, only Esc brings up the menu and Tab shows the scores; the
+other letters, numbers, Space and Enter do nothing. The app binds these keys:
 
 | Key | Does |
 | --- | --- |
