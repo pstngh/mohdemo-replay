@@ -49,7 +49,7 @@ test demos) playing through it, and `demopause [0|1]` (toggles without an
 argument): the demo and its sound stop and go on from the same time, and
 seeking keeps it paused. No more snapshots dropped when the recorder's
 connection lagged, and no "connection interrupted" icon in demos. Step 2: the
-demo index.
+demo index. Step 3: kill, round and player navigation.
 
 ## Steps, in order
 
@@ -69,11 +69,15 @@ demo index.
      `maps` (levels loaded midway too), `watched` (who is shown from when:
      the followed player while spectating, -1 in free view, else the
      recorder), `kills` (`killer`/`killerName`, `victim`/`victimName`,
-     `text`; client numbers are -1 when unknown, killer is -1 for suicides)
-     and `rounds` (`text`: "Axis win!", "Allies win!", "It's a draw!").
+     `text`; client numbers are -1 when unknown, killer is -1 for suicides),
+     `rounds` (when the level restarts: snapshots toggle
+     `SNAPFLAG_SERVERCOUNT`, about 3.3 s after a round end, also without
+     one, like at the start of a match) and `roundEnds` (`text`: "Axis
+     win!", "Allies win!", "It's a draw!").
    - `demostate.json`: `demo` (empty when none plays), `time`, `duration`,
-     `paused`, `seeking`; written when one of them changes, at most every
-     100 ms while the time goes on.
+     `paused`, `seeking`, `only` and `player` (what `demoonly` plays);
+     written when one of them changes, at most every 100 ms while the time
+     goes on.
 
    Found on the test demos: kills are `\x04` prints starting with the victim,
    in about 25 wordings; the recorder's `\x03You killed X` repeats one of
@@ -82,9 +86,23 @@ demo index.
    gamestate, so the commands in between are missing, sometimes with a
    player's name: those are learned from "X has entered the battle" and the
    like, without client numbers.
-3. **Kill and follow queues (engine).** Next/previous kill, play only kills
-   (optionally by one player), play only the stretches where a given player is
-   watched, next round.
+3. **Kill and follow queues (engine).** Done, from the index:
+   - `demonextkill [player]`, `demoprevkill [player]`: to
+     `cl_demoKillBefore` seconds (4) before the next or previous kill, by
+     that player if given; previous replays the current kill when more than
+     a second into it.
+   - `demonextround`, `demoprevround`: to the next or previous round start
+     or level load; previous restarts the current round when more than 3
+     seconds into it.
+   - `demoonly kills [player]`: only the kills, from `cl_demoKillBefore`
+     before to `cl_demoKillAfter` (2) after, joined when less than a second
+     apart. `demoonly watched <player>`: only while that player is shown.
+     `demoonly` alone: everything. It jumps over the rest, pauses after the
+     last stretch and plays everything from there; a new demo plays
+     everything.
+
+   Players are given by name, without colors or case, like the index's
+   `killerName` and `watched` names.
 4. **The app.** Starts `openmohaa` with a throwaway `fs_homepath` and
    `cl_demoFiles 1`, sends commands through `com_pipefile`, reads
    `demoindex.json` and `demostate.json`, shows a clickable list of kills and

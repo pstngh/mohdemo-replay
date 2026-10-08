@@ -64,6 +64,8 @@ cvar_t	*cl_showTimeDelta;
 cvar_t	*cl_freezeDemo;
 // Added in OPM
 cvar_t	*cl_demoFiles;
+cvar_t	*cl_demoKillBefore;
+cvar_t	*cl_demoKillAfter;
 
 cvar_t	*cl_shownet;
 cvar_t	*cl_netprofile;
@@ -706,6 +708,15 @@ static void CL_PlayDemo( const char *demoName ) {
 }
 
 // Added in OPM
+typedef enum {
+	DEMOONLY_ALL,
+	DEMOONLY_KILLS,		// the kills, by cl_demoOnlyPlayer if set
+	DEMOONLY_WATCHED	// while cl_demoOnlyPlayer is watched
+} demoOnly_t;
+
+static demoOnly_t	cl_demoOnly;
+static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
+
 static void CL_IndexDemo( void );
 
 /*
@@ -723,8 +734,9 @@ void CL_PlayDemo_f( void ) {
 	}
 
 	// Added in OPM
-	//  A new demo plays even if the last one was paused
+	//  A new demo plays even if the last one was paused, and all of it
 	Cvar_Set( "cl_freezeDemo", "0" );
+	cl_demoOnly = DEMOONLY_ALL;
 
 	CL_PlayDemo( Cmd_Argv(1) );
 
@@ -990,9 +1002,11 @@ while the time goes on
 ====================
 */
 static void CL_UpdateDemoState( void ) {
+	static const char	*only[] = { "", "kills", "watched" };
 	static char		lastDemo[MAX_QPATH];
 	static int		lastTime, lastWrite;
 	static qboolean	lastPaused, lastSeeking;
+	static int		lastOnly;
 	const char		*demo;
 	char			*json;
 	int				time;
@@ -1007,13 +1021,14 @@ static void CL_UpdateDemoState( void ) {
 	isPaused = clc.demoplaying && cl_freezeDemo->integer;
 	isSeeking = clc.demoplaying && clc.demoSeeking;
 
-	if ( !strcmp( demo, lastDemo ) && isPaused == lastPaused && isSeeking == lastSeeking && lastWrite ) {
+	if ( !strcmp( demo, lastDemo ) && isPaused == lastPaused && isSeeking == lastSeeking && cl_demoOnly == lastOnly && lastWrite ) {
 		if ( time == lastTime || cls.realtime - lastWrite < 100 ) {
 			return;
 		}
 	}
 
-	json = DemoIndex_StateJSON( demo, time, clc.demoplaying ? cl_demoIndex.duration : 0, isPaused, isSeeking );
+	json = DemoIndex_StateJSON( demo, time, clc.demoplaying ? cl_demoIndex.duration : 0, isPaused, isSeeking,
+		only[clc.demoplaying ? cl_demoOnly : DEMOONLY_ALL], cl_demoOnlyPlayer );
 	CL_WriteDemoFile( "demostate.json", json );
 	free( json );
 
@@ -1021,7 +1036,286 @@ static void CL_UpdateDemoState( void ) {
 	lastTime = time;
 	lastPaused = isPaused;
 	lastSeeking = isSeeking;
+	lastOnly = cl_demoOnly;
 	lastWrite = cls.realtime;
+}
+
+/*
+====================
+CL_DemoPlayerIs
+
+The same name, without colors and case
+====================
+*/
+static qboolean CL_DemoPlayerIs( const char *playerName, const char *player ) {
+	char	a[MAX_NAME_LENGTH];
+	char	b[MAX_NAME_LENGTH];
+
+	Q_strncpyz( a, playerName, sizeof( a ) );
+	Q_strncpyz( b, player, sizeof( b ) );
+	return !Q_stricmp( Q_CleanStr( a ), Q_CleanStr( b ) );
+}
+
+/*
+====================
+CL_DemoKillBefore
+====================
+*/
+static int CL_DemoKillBefore( void ) {
+	return Q_max( 0, (int)( cl_demoKillBefore->value * 1000 ) );
+}
+
+/*
+====================
+CL_DemoStretch
+
+The stretch around index event i that demoonly plays, if any
+====================
+*/
+static qboolean CL_DemoStretch( int i, int *start, int *end ) {
+	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	int					j;
+
+	switch ( cl_demoOnly ) {
+	case DEMOONLY_KILLS:
+		if ( ev->type != DEMOEVENT_KILL || ( cl_demoOnlyPlayer[0] && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) ) ) {
+			return qfalse;
+		}
+		*start = ev->time - CL_DemoKillBefore();
+		*end = ev->time + Q_max( 0, (int)( cl_demoKillAfter->value * 1000 ) );
+		return qtrue;
+
+	case DEMOONLY_WATCHED:
+		if ( ev->type != DEMOEVENT_WATCH || !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) ) {
+			return qfalse;
+		}
+		*start = ev->time;
+		*end = cl_demoIndex.duration;
+		for ( j = i + 1; j < cl_demoIndex.numEvents; j++ ) {
+			if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH ) {
+				*end = cl_demoIndex.events[j].time;
+				break;
+			}
+		}
+		return *end > *start;
+
+	default:
+		return qfalse;
+	}
+}
+
+/*
+====================
+CL_DemoNextStretch
+
+The first stretch demoonly plays that ends after time, with the ones that
+follow within a second
+====================
+*/
+static qboolean CL_DemoNextStretch( int time, int *start, int *end ) {
+	qboolean	found = qfalse;
+	int			s, e;
+	int			i;
+
+	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+		if ( !CL_DemoStretch( i, &s, &e ) || e <= time ) {
+			continue;
+		}
+
+		if ( !found ) {
+			*start = Q_max( 0, s );
+			*end = e;
+			found = qtrue;
+		} else if ( s > *end + 1000 ) {
+			break;
+		} else {
+			*end = Q_max( *end, e );
+		}
+	}
+
+	return found;
+}
+
+/*
+====================
+CL_RunDemoOnly
+
+Jumps over what demoonly doesn't play, and pauses after the last of it
+====================
+*/
+static void CL_RunDemoOnly( void ) {
+	int		time, start, end;
+
+	if ( cl_demoOnly == DEMOONLY_ALL || !clc.demoplaying || clc.state != CA_ACTIVE
+		|| clc.demoSeeking || cl_freezeDemo->integer ) {
+		return;
+	}
+
+	time = CL_DemoTime();
+	if ( !CL_DemoNextStretch( time, &start, &end ) ) {
+		Com_Printf( "Nothing more to play, paused\n" );
+		cl_demoOnly = DEMOONLY_ALL;
+		Cvar_Set( "cl_freezeDemo", "1" );
+		return;
+	}
+
+	if ( time < start ) {
+		CL_SeekDemoTo( start );
+	}
+}
+
+/*
+====================
+CL_DemoOnly_f
+
+demoonly [kills [player] | watched <player>]
+====================
+*/
+static void CL_DemoOnly_f( void ) {
+	demoOnly_t	only;
+	const char	*player;
+	int			start, end;
+
+	if ( !clc.demoplaying ) {
+		Com_Printf( "Not playing a demo.\n" );
+		return;
+	}
+
+	player = Cmd_Argc() > 2 ? Cmd_ArgsFrom( 2 ) : "";
+	if ( Cmd_Argc() == 1 ) {
+		cl_demoOnly = DEMOONLY_ALL;
+		Com_Printf( "Playing all of the demo\n" );
+		return;
+	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "kills" ) ) {
+		only = DEMOONLY_KILLS;
+	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "watched" ) && player[0] ) {
+		only = DEMOONLY_WATCHED;
+	} else {
+		Com_Printf( "demoonly [kills [player] | watched <player>]: play only the kills, or while a player is watched, all without arguments\n" );
+		return;
+	}
+
+	cl_demoOnly = only;
+	Q_strncpyz( cl_demoOnlyPlayer, player, sizeof( cl_demoOnlyPlayer ) );
+
+	if ( !CL_DemoNextStretch( CL_DemoTime(), &start, &end ) ) {
+		Com_Printf( "Nothing more to play\n" );
+		cl_demoOnly = DEMOONLY_ALL;
+		return;
+	}
+
+	if ( only == DEMOONLY_KILLS ) {
+		Com_Printf( "Playing only the kills%s%s\n", player[0] ? " by " : "", player );
+	} else {
+		Com_Printf( "Playing only while %s is watched\n", player );
+	}
+}
+
+/*
+====================
+CL_DemoJumpToKill
+
+To the start of the next kill, or of the previous one, or of this one if
+more than a second in, by the player given as argument if any
+====================
+*/
+static void CL_DemoJumpToKill( qboolean next ) {
+	const demoEvent_t	*ev;
+	const char			*player;
+	int					time, target, best;
+	int					i;
+
+	if ( !clc.demoplaying ) {
+		Com_Printf( "Not playing a demo.\n" );
+		return;
+	}
+
+	player = Cmd_Args();
+	time = CL_DemoTime();
+	best = -1;
+
+	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+		ev = &cl_demoIndex.events[i];
+		if ( ev->type != DEMOEVENT_KILL || ( player[0] && !CL_DemoPlayerIs( ev->name, player ) ) ) {
+			continue;
+		}
+
+		target = Q_max( 0, ev->time - CL_DemoKillBefore() );
+		if ( next && target > time + 100 ) {
+			best = target;
+			break;
+		}
+		if ( !next && target < time - 1000 ) {
+			best = target;
+		}
+	}
+
+	if ( best < 0 ) {
+		Com_Printf( "No %s kill%s%s\n", next ? "next" : "previous", player[0] ? " by " : "", player );
+		return;
+	}
+
+	CL_SeekDemoTo( best );
+}
+
+static void CL_DemoNextKill_f( void ) {
+	CL_DemoJumpToKill( qtrue );
+}
+
+static void CL_DemoPrevKill_f( void ) {
+	CL_DemoJumpToKill( qfalse );
+}
+
+/*
+====================
+CL_DemoJumpToRound
+
+To the start of the next round or level, or of the previous one, or of
+this one if more than 3 seconds in
+====================
+*/
+static void CL_DemoJumpToRound( qboolean next ) {
+	const demoEvent_t	*ev;
+	int					time, best;
+	int					i;
+
+	if ( !clc.demoplaying ) {
+		Com_Printf( "Not playing a demo.\n" );
+		return;
+	}
+
+	time = CL_DemoTime();
+	best = next ? -1 : 0;
+
+	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+		ev = &cl_demoIndex.events[i];
+		if ( ev->type != DEMOEVENT_ROUNDSTART && ev->type != DEMOEVENT_MAP ) {
+			continue;
+		}
+
+		if ( next && ev->time > time + 500 ) {
+			best = ev->time;
+			break;
+		}
+		if ( !next && ev->time < time - 3000 ) {
+			best = ev->time;
+		}
+	}
+
+	if ( best < 0 ) {
+		Com_Printf( "No next round\n" );
+		return;
+	}
+
+	CL_SeekDemoTo( best );
+}
+
+static void CL_DemoNextRound_f( void ) {
+	CL_DemoJumpToRound( qtrue );
+}
+
+static void CL_DemoPrevRound_f( void ) {
+	CL_DemoJumpToRound( qfalse );
 }
 //====
 
@@ -3189,6 +3483,7 @@ void CL_Frame ( int msec ) {
 	SCR_RunCinematic();
 
 	// Added in OPM
+	CL_RunDemoOnly();
 	CL_UpdateDemoState();
 
 	cls.framecount++;
@@ -3937,6 +4232,9 @@ void CL_Init( void ) {
 	// Added in OPM
 	//  Write demoindex.json and demostate.json for the replay app
 	cl_demoFiles = Cvar_Get ("cl_demoFiles", "0", CVAR_TEMP );
+	//  Seconds of each kill shown by demonextkill and demoonly kills
+	cl_demoKillBefore = Cvar_Get ("cl_demoKillBefore", "4", CVAR_ARCHIVE );
+	cl_demoKillAfter = Cvar_Get ("cl_demoKillAfter", "2", CVAR_ARCHIVE );
 	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP );
 	cl_activeAction = Cvar_Get( "activeAction", "", CVAR_TEMP );
 
@@ -4071,6 +4369,11 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("demoseek", CL_DemoSeek_f);
 	Cmd_AddCommand ("demoskip", CL_DemoSkip_f);
 	Cmd_AddCommand ("demopause", CL_DemoPause_f);
+	Cmd_AddCommand ("demoonly", CL_DemoOnly_f);
+	Cmd_AddCommand ("demonextkill", CL_DemoNextKill_f);
+	Cmd_AddCommand ("demoprevkill", CL_DemoPrevKill_f);
+	Cmd_AddCommand ("demonextround", CL_DemoNextRound_f);
+	Cmd_AddCommand ("demoprevround", CL_DemoPrevRound_f);
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
@@ -4178,6 +4481,11 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("demoseek");
 	Cmd_RemoveCommand ("demoskip");
 	Cmd_RemoveCommand ("demopause");
+	Cmd_RemoveCommand ("demoonly");
+	Cmd_RemoveCommand ("demonextkill");
+	Cmd_RemoveCommand ("demoprevkill");
+	Cmd_RemoveCommand ("demonextround");
+	Cmd_RemoveCommand ("demoprevround");
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");

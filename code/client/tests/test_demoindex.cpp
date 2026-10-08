@@ -87,7 +87,7 @@ static bool TestDemo(const char *demo, bool json)
     FILE       *f;
     char       *text;
     bool        ok = true;
-    int         kills = 0, rounds = 0, watched = 0, maps = 0;
+    int         kills = 0, rounds = 0, roundEnds = 0, watched = 0, maps = 0;
     int         lastTime = 0;
     int         i;
 
@@ -123,8 +123,11 @@ static bool TestDemo(const char *demo, bool json)
                         "a kill message doesn't have the killer");
             kills++;
             break;
-        case DEMOEVENT_ROUNDEND:
+        case DEMOEVENT_ROUNDSTART:
             rounds++;
+            break;
+        case DEMOEVENT_ROUNDEND:
+            roundEnds++;
             break;
         }
     }
@@ -138,14 +141,15 @@ static bool TestDemo(const char *demo, bool json)
         fputs(text, stdout);
     } else {
         printf(
-            "%s %s: %d:%02d, %d levels, %d kills, %d round ends, %d watched%s\n",
+            "%s %s: %d:%02d, %d levels, %d rounds, %d round ends, %d kills, %d watched%s\n",
             ok ? "ok" : "FAILED",
             demo,
             index.duration / 60000,
             index.duration / 1000 % 60,
             maps,
-            kills,
             rounds,
+            roundEnds,
+            kills,
             watched,
             index.truncated ? ", truncated" : ""
         );

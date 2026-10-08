@@ -809,6 +809,11 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
         p->snapshots[i & PACKET_MASK].valid = qfalse;
     }
 
+    if (p->snap.valid && ((newSnap.snapFlags ^ p->snap.snapFlags) & SNAPFLAG_SERVERCOUNT)) {
+        // the level restarted, a new round in round-based modes
+        DI_AddEvent(p, DEMOEVENT_ROUNDSTART);
+    }
+
     p->snap                                       = newSnap;
     p->snapshots[newSnap.messageNum & PACKET_MASK] = newSnap;
 
@@ -1062,6 +1067,8 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             DI_Append(b, ", \"text\": ", 10);
             DI_String(b, ev->text);
             break;
+        case DEMOEVENT_ROUNDSTART:
+            break;
         case DEMOEVENT_ROUNDEND:
             DI_Append(b, ", \"text\": ", 10);
             DI_String(b, ev->text);
@@ -1097,7 +1104,8 @@ char *DemoIndex_ToJSON(const demoIndex_t *index, const char *demoName)
     DI_EventsToJSON(&b, index, DEMOEVENT_MAP, "maps");
     DI_EventsToJSON(&b, index, DEMOEVENT_WATCH, "watched");
     DI_EventsToJSON(&b, index, DEMOEVENT_KILL, "kills");
-    DI_EventsToJSON(&b, index, DEMOEVENT_ROUNDEND, "rounds");
+    DI_EventsToJSON(&b, index, DEMOEVENT_ROUNDSTART, "rounds");
+    DI_EventsToJSON(&b, index, DEMOEVENT_ROUNDEND, "roundEnds");
 
     DI_Append(&b, "\n}\n", 3);
     return b.data;
@@ -1110,7 +1118,9 @@ DemoIndex_StateJSON
 What is playing, for the app's clock
 ===============
 */
-char *DemoIndex_StateJSON(const char *demoName, int time, int duration, qboolean isPaused, qboolean isSeeking)
+char *DemoIndex_StateJSON(
+    const char *demoName, int time, int duration, qboolean isPaused, qboolean isSeeking, const char *only, const char *player
+)
 {
     diBuffer_t b;
 
@@ -1120,11 +1130,15 @@ char *DemoIndex_StateJSON(const char *demoName, int time, int duration, qboolean
     DI_String(&b, demoName);
     DI_Printf(
         &b,
-        ", \"time\": %d, \"duration\": %d, \"paused\": %s, \"seeking\": %s}\n",
+        ", \"time\": %d, \"duration\": %d, \"paused\": %s, \"seeking\": %s, \"only\": ",
         time,
         duration,
         isPaused ? "true" : "false",
         isSeeking ? "true" : "false"
     );
+    DI_String(&b, only);
+    DI_Append(&b, ", \"player\": ", 12);
+    DI_String(&b, only[0] ? player : "");
+    DI_Append(&b, "}\n", 2);
     return b.data;
 }

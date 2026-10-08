@@ -31,10 +31,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qcommon.h"
 
 typedef enum {
-    DEMOEVENT_MAP,      // a level was loaded: text is the map name
-    DEMOEVENT_WATCH,    // the player shown from now on: client
-    DEMOEVENT_KILL,     // client killed other, client is -1 for no killer
-    DEMOEVENT_ROUNDEND  // text is the message, like "Axis win!"
+    DEMOEVENT_MAP,        // a level was loaded: text is the map name
+    DEMOEVENT_WATCH,      // the player shown from now on: client
+    DEMOEVENT_KILL,       // client killed other, client is -1 for no killer
+    DEMOEVENT_ROUNDSTART, // the level restarted, as at the start of a round
+    DEMOEVENT_ROUNDEND    // text is the message, like "Axis win!"
 } demoEventType_t;
 
 typedef struct {
@@ -65,5 +66,7 @@ void DemoIndex_Free(demoIndex_t *index);
 // returns the index as JSON, to free with free()
 char *DemoIndex_ToJSON(const demoIndex_t *index, const char *demoName);
 // returns what is playing as JSON, to free with free(), demoName is empty
-// when no demo plays
-char *DemoIndex_StateJSON(const char *demoName, int time, int duration, qboolean isPaused, qboolean isSeeking);
+// when no demo plays, only is what demoonly plays ("", "kills", "watched")
+char *DemoIndex_StateJSON(
+    const char *demoName, int time, int duration, qboolean isPaused, qboolean isSeeking, const char *only, const char *player
+);
