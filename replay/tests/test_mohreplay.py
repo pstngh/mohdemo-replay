@@ -123,9 +123,10 @@ class FakeGameCase(unittest.TestCase):
     def tearDown(self):
         for window in self.windows:
             window.close()
+        # what's left to do still runs in the test's folders and settings
+        app.processEvents()
         for patch in reversed(self.patches):
             patch.stop()
-        app.processEvents()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def add_demo(self, name, index):
@@ -452,6 +453,13 @@ class TestLibrary(FakeGameCase):
 
     def shown(self, window):
         return TestWindow.shown(self, window)
+
+    def test_closed_before_opening(self):
+        window = self.window()
+        window.close()
+        app.processEvents()
+        self.assertIsNone(window.library.folder)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "cache")))
 
     def test_index_and_cache(self):
         window = self.window()

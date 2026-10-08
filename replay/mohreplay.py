@@ -1107,7 +1107,9 @@ class Window(QMainWindow):
         self.poller.start()
         self.fill_demos()
         # once the window is up: the indexes kept take a moment to load
-        QTimer.singleShot(0, lambda: self.library.open(settings.value("demos", ""), settings.value("exe", "")))
+        self.library_opener = QTimer(self, singleShot=True, interval=0, timeout=lambda: self.library.open(
+            settings.value("demos", ""), settings.value("exe", "")))
+        self.library_opener.start()
 
     def make_list(self, columns, fit=True):
         """fit: columns fit their contents, which costs a look at every row
@@ -1587,6 +1589,7 @@ class Window(QMainWindow):
             event.ignore()
             return
         self.poller.stop()
+        self.library_opener.stop()
         self.library.stop()
         for job in self.jobs:
             if job["status"] == "waiting":
