@@ -772,8 +772,8 @@ void CG_Init(clientGameImport_t *imported, int serverMessageNum, int serverComma
 
     // HUD setup
     CG_RefreshHudDrawElements();
-    // Changed in OPM: don't force "ui_hud 1", so the HUD stays off by default
-    // and keeps whatever state it was set to across map and demo loads
+    // Changed in OPM: don't force "ui_hud 1", so the HUD keeps whatever state
+    // it was set to across map and demo loads (on by default)
 }
 
 /*

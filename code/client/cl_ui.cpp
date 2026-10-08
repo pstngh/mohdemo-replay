@@ -42,7 +42,9 @@ typedef struct {
     UIReggedMaterial *material;
 } intro_stage_t;
 
-static qboolean             ui_hud;
+// Changed in OPM
+//  On by default, and kept across map and demo loads
+static qboolean             ui_hud = qtrue;
 static class UIFont        *globalFont;
 static UIFloatingConsole   *fakk_console;
 static UIFloatingDMConsole *dm_console;

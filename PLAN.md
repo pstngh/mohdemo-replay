@@ -39,7 +39,8 @@ As light, lean, robust, reliable and portable as possible:
 
 ## Already on main
 
-`ui_hud` off by default and hiding chat/kill messages/spectator hints,
+`ui_hud` (on by default, kept across map and demo loads) also hiding
+chat/kill messages/spectator hints,
 `cg_followplayer` (live spectating), `.dm3` demos, `loopdemos` /
 `stoploopdemos`, no team/weapon menus during demos, view bob with
 `cg_animationviewmodel`, a Linux x86_64 client-only CI build on `main`,
