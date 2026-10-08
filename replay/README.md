@@ -87,6 +87,11 @@ binds, without the app:
 are shown (4 and 2). A multi-kill is two kills or more by a player, each at
 most `cl_demoMultiKill` seconds (3) after the one before.
 
+While the recorder follows a player, most servers with the 1.12 Reborn patch
+put the camera in that player's head, where their own arms and gun are in
+the way. `cg_followcamera 1` (the default) puts it behind them, where stock
+servers do; `cg_followcamera 0` shows it as recorded.
+
 ## Recording
 
 `demovideo <name> [end time]` records the demo from now on into

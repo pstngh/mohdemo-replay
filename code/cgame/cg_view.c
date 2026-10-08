@@ -594,6 +594,138 @@ void CG_SetupPortalSky() {
 
 /*
 ===============
+CG_CameraInHead
+
+Added in OPM
+  Whether ps follows a player with the camera at their eyes, as most servers
+  with the 1.12 Reborn patch do, instead of behind them like stock servers
+===============
+*/
+static qboolean CG_CameraInHead(const playerState_t *ps)
+{
+    vec3_t eye;
+
+    if ((ps->pm_flags & (PMF_SPECTATING | PMF_CAMERA_VIEW)) != (PMF_SPECTATING | PMF_CAMERA_VIEW)) {
+        return qfalse;
+    }
+
+    if (ps->stats[STAT_INFOCLIENT] < 0 || ps->stats[STAT_INFOCLIENT] >= MAX_CLIENTS) {
+        return qfalse;
+    }
+
+    VectorCopy(ps->origin, eye);
+    eye[2] += ps->viewheight;
+
+    return DistanceSquared(eye, ps->camera_origin) < 1;
+}
+
+/*
+===============
+CG_StockFollowCameraAt
+
+Added in OPM
+  Where a stock server puts the camera that follows a player, from the
+  playerstate (the followed player's origin, view angles and height) and
+  their entity (their lean): 56 units behind their eyes and 24 above, moved
+  aside when they lean, pulled in by walls and looking 2 degrees lower, as
+  Player::GetSpectateFollowOrientation does with the default
+  g_spectatefollow_ values
+===============
+*/
+static void CG_StockFollowCameraAt(const playerState_t *ps, const entityState_t *es, vec3_t origin, vec3_t angles)
+{
+    static const vec3_t mins = {-2, -2, 2};
+    static const vec3_t maxs = {2, 2, 2};
+    vec3_t              forward, right, up, start, end;
+    float               lean, top;
+    trace_t             trace;
+
+    lean = 0;
+    if (es) {
+        // the pelvis (bone controller 3) rolls by 0.8 times the lean
+        lean = AngleNormalize180(es->bone_angles[3][2]) / 0.8f;
+    }
+
+    // the top of their box, which goes with their view height on the server
+    // when their entity's box lags behind
+    if (ps->viewheight > CROUCH_VIEWHEIGHT) {
+        top = MAXS_Z;
+    } else if (es && (es->eFlags & EF_DEAD)) {
+        top = DEAD_MINS_Z;
+    } else {
+        top = CROUCH_MAXS_Z;
+    }
+
+    VectorCopy(ps->viewangles, angles);
+    AngleVectors(angles, forward, right, up);
+
+    VectorCopy(ps->origin, end);
+    end[2] += ps->viewheight;
+    VectorMA(end, -56, forward, end);
+    VectorMA(end, 24, up, end);
+    VectorMA(end, lean * 0.65f, right, end);
+
+    VectorCopy(ps->origin, start);
+    start[2] += top - 2;
+
+    CG_Trace(&trace, start, mins, maxs, end, ps->stats[STAT_INFOCLIENT], MASK_SHOT, qfalse, qtrue, "CG_StockFollowCameraAt");
+
+    angles[PITCH] += 2 * trace.fraction;
+    VectorCopy(trace.endpos, origin);
+}
+
+/*
+===============
+CG_StockFollowCamera
+
+Added in OPM
+  With cg_followcamera, puts the camera that follows a player where stock
+  servers put it, behind them, when the server puts it in their head
+===============
+*/
+static void CG_StockFollowCamera(void)
+{
+    const playerState_t *next;
+    centity_t           *cent;
+    vec3_t               origin, angles;
+    float                f;
+    int                  client;
+    int                  i;
+
+    if (!cg_followcamera->integer || !CG_CameraInHead(&cg.snap->ps)) {
+        return;
+    }
+
+    client = cg.snap->ps.stats[STAT_INFOCLIENT];
+    cent   = &cg_entities[client];
+
+    CG_StockFollowCameraAt(
+        &cg.snap->ps, cent->currentValid ? &cent->currentState : NULL, cg.camera_origin, cg.camera_angles
+    );
+
+    // interpolate it like a camera from the server
+    if (!cg.nextSnap || cg.nextSnap->serverTime <= cg.snap->serverTime || cg.nextFrameCameraCut) {
+        return;
+    }
+
+    next = &cg.nextSnap->ps;
+    if (!CG_CameraInHead(next) || next->stats[STAT_INFOCLIENT] != client) {
+        return;
+    }
+
+    CG_StockFollowCameraAt(
+        next, cent->interpolate ? &cent->nextState : (cent->currentValid ? &cent->currentState : NULL), origin, angles
+    );
+
+    f = (float)(cg.time - cg.snap->serverTime) / (cg.nextSnap->serverTime - cg.snap->serverTime);
+    for (i = 0; i < 3; i++) {
+        cg.camera_origin[i] += f * (origin[i] - cg.camera_origin[i]);
+        cg.camera_angles[i] = LerpAngle(cg.camera_angles[i], angles[i], f);
+    }
+}
+
+/*
+===============
 CG_CalcViewValues
 
 Sets cg.refdef view values
@@ -699,6 +831,9 @@ static int CG_CalcViewValues(void)
 
     // if we are in a camera view, we take our audio cues directly from the camera
     if (ps->pm_flags & PMF_CAMERA_VIEW) {
+        // Added in OPM
+        CG_StockFollowCamera();
+
         // Set the aural position to that of the camera
         VectorCopy(cg.camera_origin, cg.refdef.vieworg);
 

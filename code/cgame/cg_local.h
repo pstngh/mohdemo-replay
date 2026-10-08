@@ -514,6 +514,7 @@ extern "C" {
     extern cvar_t *cg_fov;
     extern cvar_t *cg_cheats;
     extern cvar_t *cg_followplayer;
+    extern cvar_t *cg_followcamera;
 
     //
     // cg_main.c
