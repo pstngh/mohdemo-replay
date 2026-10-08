@@ -11,11 +11,31 @@ window with buttons, and record clips. Not for cheat review.
 - Demos were recorded both while spectating and while playing; handle both.
 - The game keeps working on its own: every new feature is a console command
   first, the app only sends those commands.
-- The app is written from scratch, in this repo (Python + PySide6).
+- The app is written from scratch, in this repo (Python + PySide6, Qt 6),
+  Wayland native. The game is launched with `SDL_VIDEODRIVER=wayland`, falling
+  back to XWayland if that fails.
   [fecmtc/moharena-demo](https://github.com/fecmtc/moharena-demo) is a
   reference for ideas only: it has no licence, so none of its code is copied.
 - Recording: the game pipes its own frames into FFmpeg, which writes an MP4
   (see step 5). Screen capture doesn't work with FFmpeg on Wayland.
+- Playback with VSync on at 60 fps: launch with `r_swapInterval 1` and
+  `com_maxfps 60` (the engine defaults are 0 and 85).
+
+## Principles
+
+As light, lean, robust, reliable and portable as possible:
+
+- Thin app, smart engine: exact seeking, the index and recording are engine
+  console commands, usable with key binds without the app. The app is buttons
+  and a list, a few hundred lines.
+- No extras: no x-ray, no overlay HUD, no window-moving tricks (Wayland
+  forbids them), no AppleScript. Dependencies: Python, PySide6, FFmpeg.
+- The game reports its state (time, index) in a file the app reads; the app
+  never guesses. It copes with the game crashing or quitting, broken demos and
+  missing maps, and never blocks on the pipe.
+- Same code on Linux (Wayland) and macOS, no build step for the app.
+- Engine changes stay small and marked, one commit per step, each built
+  before it's pushed. The index has tests that run on real demos offline.
 
 ## Already on main
 
@@ -55,7 +75,16 @@ window with buttons, and record clips. Not for cheat review.
    `cl_main.cpp`: the AVI stream goes into `ffmpeg -i pipe:0` and comes out as
    an H.264 MP4. Check that sound is recorded: the AVI writer gets its audio
    from the software mixer (`snd_mix.c`), so OpenAL sound may need turning off
-   while recording.
+   while recording. Settings in the app:
+   - resolution: the game's window size (`r_mode -1`, `r_customwidth`,
+     `r_customheight`), optionally drawn larger and scaled down;
+   - frame rate: 60 (`cl_aviFrameRate 60`); the recorder steps the game 1/60 s
+     per frame, so videos are smooth whatever the screen does;
+   - quality: one slider (CRF);
+   - codec: H.264 (default), H.265, or the hardware encoder (VideoToolbox on
+     macOS, VAAPI on Linux);
+   - sound on/off and bitrate, output folder and file name pattern;
+   - an advanced box for raw FFmpeg options.
 
 ## Testing
 
