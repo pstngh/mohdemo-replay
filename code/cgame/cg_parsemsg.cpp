@@ -796,13 +796,16 @@ static void CG_MakeBulletTracer(
     bullet_tracer_t *bullet_tracer;
     int              i;
 
+    // Changed in OPM
+    //  Developer messages, as demos fill them when many snapshots are read
+    //  in one frame (seeking, high timescale)
     if (bullet_tracer_bullets_count >= MAX_BULLET_TRACERS) {
-        Com_Printf("CG_MakeBulletTracer: MAX_BULLET_TRACERS exceeded\n");
+        cgi.DPrintf("CG_MakeBulletTracer: MAX_BULLET_TRACERS exceeded\n");
         return;
     }
 
     if (i_iNumBullets + bullet_tracers_count >= MAX_BULLET_TRACE_BULLETS) {
-        Com_Printf("CG_MakeBulletTracerInternal: MAX_BULLET_TRACE_BULLETS exceeded\n");
+        cgi.DPrintf("CG_MakeBulletTracerInternal: MAX_BULLET_TRACE_BULLETS exceeded\n");
         return;
     }
 
@@ -822,6 +825,22 @@ static void CG_MakeBulletTracer(
     bullet_tracer->alpha           = alpha;
     bullet_tracer->iTracerVisible  = iTracerVisible;
     bullet_tracer->bIgnoreEntities = bIgnoreEntities;
+}
+
+/*
+===============
+CG_ClearBulletEffects
+
+Added in OPM
+Drops the tracers and impacts waiting for the next frame
+===============
+*/
+void CG_ClearBulletEffects()
+{
+    bullet_tracer_bullets_count = 0;
+    bullet_tracers_count        = 0;
+    wall_impact_count           = 0;
+    flesh_impact_count          = 0;
 }
 
 void CG_AddBulletTracers()

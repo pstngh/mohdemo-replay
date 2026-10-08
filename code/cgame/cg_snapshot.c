@@ -350,7 +350,9 @@ static snapshot_t *CG_ReadNextSnapshot(void)
     qboolean    r;
     snapshot_t *dest;
 
-    if (cg.latestSnapshotNum > cgs.processedSnapshotNum + 1000) {
+    // Changed in OPM
+    //  Demo seeks skip snapshots on purpose
+    if (!cg.demoPlayback && cg.latestSnapshotNum > cgs.processedSnapshotNum + 1000) {
         cgi.Printf(
             "WARNING: CG_ReadNextSnapshot: way out of range, %i > %i\n",
             cg.latestSnapshotNum,

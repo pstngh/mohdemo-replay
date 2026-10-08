@@ -117,6 +117,9 @@ typedef struct {
 									// cleared when CL_AdjustTimeDelta looks at it
 	qboolean	newSnapshots;		// set on parse of any valid packet
 
+	// Added in OPM
+	int			demoSeekMessageNum;	// snapshots before this one were skipped by a demo seek
+
 	gameState_t	gameState;			// configstrings
 	char		mapname[MAX_QPATH];	// extracted from CS_SERVERINFO
 
@@ -235,6 +238,11 @@ typedef struct {
 	qboolean	demowaiting;	// don't record until a non-delta message is received
 	qboolean	firstDemoFrameSkipped;
 	fileHandle_t	demofile;
+
+	// Added in OPM
+	int			demoStartTime;	// server time of the demo's first snapshot
+	qboolean	demoSeeking;	// reading ahead to demoSeekTime without drawing
+	int			demoSeekTime;	// demo time to seek to, in msec
 
 	int			timeDemoFrames;		// counter of rendered frames
 	int			timeDemoStart;		// cls.realtime before first frame

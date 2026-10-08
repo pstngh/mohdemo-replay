@@ -646,20 +646,15 @@ void CL_ReadDemoMessage( void ) {
 
 /*
 ====================
-CL_PlayDemo_f
-
-demo <demoname>
-
+CL_PlayDemo
 ====================
 */
-void CL_PlayDemo_f( void ) {
+static void CL_PlayDemo( const char *demoName ) {
 	char		name[MAX_OSPATH];
-	char		*arg;
+	char		arg[MAX_QPATH];
 
-	if (Cmd_Argc() != 2) {
-		Com_Printf ("playdemo <demoname>\n");
-		return;
-	}
+	// copied as disconnecting may overwrite it
+	Q_strncpyz( arg, demoName, sizeof( arg ) );
 
 	// make sure a local server is killed
 	// 2 means don't force disconnect of local client
@@ -668,7 +663,6 @@ void CL_PlayDemo_f( void ) {
 	CL_Disconnect();
 
 	// open the demo file
-	arg = Cmd_Argv(1);
 
 	// Changed in OPM
 	//  Demos use the original .dm3 extension, which can be left out
@@ -682,13 +676,13 @@ void CL_PlayDemo_f( void ) {
 		Com_Error( ERR_DROP, "couldn't open %s", name);
 		return;
 	}
-	Q_strncpyz( clc.demoName, Cmd_Argv(1), sizeof( clc.demoName ) );
+	Q_strncpyz( clc.demoName, arg, sizeof( clc.demoName ) );
 
     UI_CloseConsole();
 
 	clc.state = CA_CONNECTED;
 	clc.demoplaying = qtrue;
-	Q_strncpyz( clc.servername, Cmd_Argv(1), sizeof( clc.servername ) );
+	Q_strncpyz( clc.servername, arg, sizeof( clc.servername ) );
 
 	// read demo messages until connected
 	while ( clc.state >= CA_CONNECTED && clc.state < CA_PRIMED ) {
@@ -698,6 +692,166 @@ void CL_PlayDemo_f( void ) {
 	// time from the gamestate load from messing causing a time skip
 	clc.firstDemoFrameSkipped = qfalse;
 }
+
+/*
+====================
+CL_PlayDemo_f
+
+demo <demoname>
+
+====================
+*/
+void CL_PlayDemo_f( void ) {
+	if (Cmd_Argc() != 2) {
+		Com_Printf ("playdemo <demoname>\n");
+		return;
+	}
+
+	CL_PlayDemo( Cmd_Argv(1) );
+}
+
+// Added in OPM
+//====
+/*
+====================
+CL_ParseDemoTime
+
+Reads a time in seconds ("90", "-2.5") or minutes and seconds ("1:30",
+"1:02:03.250") into msec
+====================
+*/
+static qboolean CL_ParseDemoTime( const char *s, int *msec ) {
+	double	seconds = 0;
+	double	part;
+	int		sign = 1;
+	char	*end;
+
+	if ( *s == '-' || *s == '+' ) {
+		sign = *s == '-' ? -1 : 1;
+		s++;
+	}
+
+	if ( !*s || strspn( s, "0123456789.:" ) != strlen( s ) ) {
+		return qfalse;
+	}
+
+	for ( ;; ) {
+		part = strtod( s, &end );
+		if ( end == s ) {
+			return qfalse;
+		}
+		seconds = seconds * 60 + part;
+		if ( *end != ':' ) {
+			break;
+		}
+		s = end + 1;
+	}
+
+	// 24 hours at most
+	if ( *end || seconds > 86400 ) {
+		return qfalse;
+	}
+
+	*msec = sign * (int)( seconds * 1000 + 0.5 );
+	return qtrue;
+}
+
+/*
+====================
+CL_DemoTimeString
+====================
+*/
+static const char *CL_DemoTimeString( int msec ) {
+	return va( "%d:%02d.%03d", msec / 60000, msec / 1000 % 60, msec % 1000 );
+}
+
+/*
+====================
+CL_DemoTime
+
+The demo time being shown, or the one being sought, in msec
+====================
+*/
+static int CL_DemoTime( void ) {
+	if ( clc.demoSeeking ) {
+		return clc.demoSeekTime;
+	}
+	if ( clc.state != CA_ACTIVE ) {
+		return 0;
+	}
+	return cl.serverTime - clc.demoStartTime;
+}
+
+/*
+====================
+CL_SeekDemoTo
+
+A demo only plays forward, so going back restarts it, then it's read
+ahead to the time without drawing
+====================
+*/
+static void CL_SeekDemoTo( int msec ) {
+	if ( msec < 0 ) {
+		msec = 0;
+	}
+
+	Com_Printf( "Seeking to %s\n", CL_DemoTimeString( msec ) );
+
+	if ( clc.state == CA_ACTIVE && clc.demoStartTime + msec < cl.serverTime ) {
+		CL_PlayDemo( clc.demoName );
+	}
+
+	clc.demoSeeking = qtrue;
+	clc.demoSeekTime = msec;
+}
+
+/*
+====================
+CL_DemoSeek_f
+
+demoseek <time>
+====================
+*/
+static void CL_DemoSeek_f( void ) {
+	int msec;
+
+	if ( !clc.demoplaying ) {
+		Com_Printf( "Not playing a demo.\n" );
+		return;
+	}
+
+	if ( Cmd_Argc() != 2 || !CL_ParseDemoTime( Cmd_Argv( 1 ), &msec ) ) {
+		Com_Printf( "demoseek <time>: jump to a time, in seconds or minutes:seconds\n" );
+		Com_Printf( "Demo time: %s\n", CL_DemoTimeString( CL_DemoTime() ) );
+		return;
+	}
+
+	CL_SeekDemoTo( msec );
+}
+
+/*
+====================
+CL_DemoSkip_f
+
+demoskip <seconds>
+====================
+*/
+static void CL_DemoSkip_f( void ) {
+	int msec;
+
+	if ( !clc.demoplaying ) {
+		Com_Printf( "Not playing a demo.\n" );
+		return;
+	}
+
+	if ( Cmd_Argc() != 2 || !CL_ParseDemoTime( Cmd_Argv( 1 ), &msec ) ) {
+		Com_Printf( "demoskip <time>: move forward, or back with a negative time\n" );
+		return;
+	}
+
+	CL_SeekDemoTo( CL_DemoTime() + msec );
+}
+//====
 
 
 /*
@@ -3736,6 +3890,8 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("demo", CL_PlayDemo_f);
 	Cmd_AddCommand ("loopdemos", CL_LoopDemos_f);
 	Cmd_AddCommand ("stoploopdemos", CL_StopLoopDemos_f);
+	Cmd_AddCommand ("demoseek", CL_DemoSeek_f);
+	Cmd_AddCommand ("demoskip", CL_DemoSkip_f);
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
@@ -3840,6 +3996,8 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("demo");
 	Cmd_RemoveCommand ("loopdemos");
 	Cmd_RemoveCommand ("stoploopdemos");
+	Cmd_RemoveCommand ("demoseek");
+	Cmd_RemoveCommand ("demoskip");
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");

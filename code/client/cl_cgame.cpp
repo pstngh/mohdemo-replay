@@ -180,6 +180,13 @@ qboolean	CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
 		return qfalse;
 	}
 
+	// Added in OPM
+	//  Snapshots skipped by a demo seek are treated as lost,
+	//  so their events and sounds don't all play at once
+	if ( snapshotNumber < cl.demoSeekMessageNum ) {
+		return qfalse;
+	}
+
 	// if the entities in the frame have fallen out of their
 	// circular buffer, we can't return it
 	if ( cl.parseEntitiesNum - clSnap->parseEntitiesNum >= MAX_PARSE_ENTITIES ) {
@@ -574,7 +581,29 @@ CL_StartLocalSound
 ====================
 */
 void CL_StartLocalSound(const char* soundName, qboolean forceLoad) {
+	// Added in OPM
+	//  Sounds of what a demo seek skips aren't played
+	if (clc.demoSeeking) {
+		return;
+	}
+
 	S_StartLocalSound(soundName, qfalse );
+}
+
+/*
+====================
+CL_StartSound
+
+Added in OPM
+Sounds of what a demo seek skips aren't played
+====================
+*/
+static void CL_StartSound(const vec3_t origin, int entnum, int entchannel, sfxHandle_t sfxHandle, float volume, float min_dist, float pitch, float maxDist, int streamed) {
+	if (clc.demoSeeking) {
+		return;
+	}
+
+	S_StartSound(origin, entnum, entchannel, sfxHandle, volume, min_dist, pitch, maxDist, streamed);
 }
 
 /*
@@ -688,7 +717,7 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->R_GetLightingForSmoke			= re.GetLightingForSmoke;
 	cgi->R_GatherLightSources			= re.R_GatherLightSources;
 
-	cgi->S_StartSound					= S_StartSound;
+	cgi->S_StartSound					= CL_StartSound;
 	cgi->S_StartLocalSound				= CL_StartLocalSound;
 	cgi->S_StopSound					= S_StopSound;
 	cgi->S_AddLoopingSound				= S_AddLoopingSound;
@@ -1125,6 +1154,12 @@ void CL_FirstSnapshot( void ) {
 
 	clc.timeDemoBaseTime = cl.snap.serverTime;
 
+	// Added in OPM
+	//  Demo times count from the first snapshot of the demo
+	if ( clc.demoplaying && !clc.demoStartTime ) {
+		clc.demoStartTime = cl.snap.serverTime;
+	}
+
 	// if this is the first frame of active play,
 	// execute the contents of activeAction now
 	// this is to allow scripting a timedemo to start right
@@ -1169,6 +1204,64 @@ void CL_FirstSnapshot( void ) {
 		Com_Memset(clc.voipTargets, ~0, sizeof(clc.voipTargets));
 	}
 #endif
+}
+
+/*
+==================
+CL_SeekDemo
+
+Added in OPM
+Reads the demo ahead to clc.demoSeekTime without drawing the frames in
+between. Server commands are only kept until MAX_RELIABLE_COMMANDS newer
+ones arrive, so if too many pile up, cgame executes them in this frame and
+the seek goes on in the next one.
+==================
+*/
+static void CL_SeekDemo( void ) {
+	int seekServerTime;
+	int firstCommand;
+	int prevMessageNum;
+	int keptMessageNum;
+
+	seekServerTime = clc.demoStartTime + clc.demoSeekTime;
+	firstCommand = clc.serverCommandSequence;
+	keptMessageNum = cl.snap.messageNum;
+
+	while ( cl.snap.serverTime <= seekServerTime ) {
+		if ( clc.serverCommandSequence - firstCommand >= MAX_RELIABLE_COMMANDS / 2 ) {
+			break;
+		}
+
+		prevMessageNum = cl.snap.messageNum;
+		CL_ReadDemoMessage();
+		if ( clc.state != CA_ACTIVE ) {
+			return;		// end of demo
+		}
+
+		if ( cl.snap.messageNum != prevMessageNum ) {
+			// the last snapshot before the target, to interpolate from
+			keptMessageNum = prevMessageNum;
+		}
+	}
+
+	if ( cl.snap.serverTime > seekServerTime ) {
+		cl.serverTime = seekServerTime;
+		clc.demoSeeking = qfalse;
+	} else {
+		cl.serverTime = cl.snap.serverTime;
+		keptMessageNum = cl.snap.messageNum;
+	}
+
+	// cgame sees the jump as lost snapshots and a server restart, which
+	// clears the effects and marks of the old time, then gets a frame long
+	// enough for what it smooths over time (view height, kick...) to settle
+	cl.demoSeekMessageNum = keptMessageNum;
+	cl.serverStartTime = Q_min( cl.serverTime - 1000, cl.snapshots[keptMessageNum & PACKET_MASK].serverTime - 1 );
+	cl.oldServerTime = cl.serverStartTime;
+	cl.serverTimeDelta = cl.serverTime - cls.realtime;
+
+	S_StopAllSounds( qfalse );
+	UI_ClearCenterPrint();
 }
 
 static int lastSnapFlags;
@@ -1324,6 +1417,12 @@ void CL_SetCGameTime( void ) {
 
 		clc.timeDemoFrames++;
 		cl.serverTime = clc.timeDemoBaseTime + clc.timeDemoFrames * 50;
+	}
+
+	// Added in OPM
+	if ( clc.demoSeeking ) {
+		CL_SeekDemo();
+		return;
 	}
 
 	while ( cl.serverTime >= cl.snap.serverTime ) {

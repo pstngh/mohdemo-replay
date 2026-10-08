@@ -698,6 +698,9 @@ void CG_ServerRestarted(void)
     CG_ResetTempModels();
     // Reset resources
     CG_ResetVSSSources();
+    // Added in OPM
+    //  Drop the tracers and impacts of the last game
+    CG_ClearBulletEffects();
     // Reset objectives
     CG_InitializeObjectives();
 }
