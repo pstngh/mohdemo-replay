@@ -48,18 +48,8 @@ demos that load a new level midway (a map change, in about a third of the
 test demos) playing through it, and `demopause [0|1]` (toggles without an
 argument): the demo and its sound stop and go on from the same time, and
 seeking keeps it paused. No more snapshots dropped when the recorder's
-connection lagged, and no "connection interrupted" icon in demos.
-
-## Fix next, before step 2
-
-Found while testing on real demos:
-
-1. **The game didn't exit.** Five test copies running with
-   `r_swapInterval 1` hung in a futex wait and ignored SIGTERM after new game
-   windows covered them; fresh copies exit fine on `quit` and SIGTERM.
-   Suspected: VSync on Wayland blocking while the window isn't shown. Either
-   way the app (step 4) can't rely on the game answering: non-blocking pipe
-   writes, SIGKILL after a timeout.
+connection lagged, and no "connection interrupted" icon in demos. Step 2: the
+demo index.
 
 ## Steps, in order
 
@@ -69,27 +59,41 @@ Found while testing on real demos:
    time and to move by +/- N seconds. Watch out for cgame's server command
    buffer: commands read while cgame isn't running are "cycled out" if too many
    pile up, so let cgame consume them while skipping. Done.
-2. **Demo index (engine).** One pass when a demo loads, written to a file the
-   app reads (the pipe only goes from the app to the game):
-   - Kills: `print` server commands starting with `\x04`, like
-     `Victim was perforated by Killer's' SMG in the head`. Match names against
-     the player configstrings rather than parsing the wording. Unacknowledged
-     commands are repeated in later messages, so dedupe by command sequence.
-     The recorder's own kills also come as `\x03You killed X`.
-   - Round ends: `print` of "Axis win!", "Allies win!" or "It's a draw!"; the
-     next round starts about 3 seconds later. Only in round-based modes.
-   - Who is watched: `ps.stats[STAT_INFOCLIENT]` while `PMF_CAMERA_VIEW` is
-     set when spectating, otherwise the recorder.
-   - The current demo time, for the app's clock.
-   - Levels loaded midway: the snapshots after the new gamestate are deltas
-     from the last frames of the previous level, so keep those frames, as
-     `CL_ClearStateKeepingFrames` does for playback.
+2. **Demo index (engine).** Done. When a demo loads (`demo`, `loopdemos`, not
+   a seek), `code/client/cl_demoindex.cpp` reads it once with its own copy of
+   the client's parsing (about 1 s for 50 minutes) and keeps the index for
+   step 3. With `cl_demoFiles 1`, the game writes two files in
+   `<fs_homepath>/main/`, replaced atomically, times in msec from the demo's
+   first snapshot, the same as `demoseek`:
+   - `demoindex.json`, once per demo: `duration`, `truncated`, `recorder`,
+     `maps` (levels loaded midway too), `watched` (who is shown from when:
+     the followed player while spectating, -1 in free view, else the
+     recorder), `kills` (`killer`/`killerName`, `victim`/`victimName`,
+     `text`; client numbers are -1 when unknown, killer is -1 for suicides)
+     and `rounds` (`text`: "Axis win!", "Allies win!", "It's a draw!").
+   - `demostate.json`: `demo` (empty when none plays), `time`, `duration`,
+     `paused`, `seeking`; written when one of them changes, at most every
+     100 ms while the time goes on.
+
+   Found on the test demos: kills are `\x04` prints starting with the victim,
+   in about 25 wordings; the recorder's `\x03You killed X` repeats one of
+   them. Names are matched as whole words against the players, then the
+   players who left. A recording starts at the first full snapshot after the
+   gamestate, so the commands in between are missing, sometimes with a
+   player's name: those are learned from "X has entered the battle" and the
+   like, without client numbers.
 3. **Kill and follow queues (engine).** Next/previous kill, play only kills
    (optionally by one player), play only the stretches where a given player is
    watched, next round.
-4. **The app.** Starts `openmohaa` with a throwaway `fs_homepath`, sends
-   commands through `com_pipefile`, shows a clickable list of kills and
-   rounds, play/pause/speed/seek buttons, record button.
+4. **The app.** Starts `openmohaa` with a throwaway `fs_homepath` and
+   `cl_demoFiles 1`, sends commands through `com_pipefile`, reads
+   `demoindex.json` and `demostate.json`, shows a clickable list of kills and
+   rounds, play/pause/speed/seek buttons, record button. It can't rely on the
+   game answering: five test copies running with `r_swapInterval 1` once hung
+   in a futex wait and ignored SIGTERM after new game windows covered them
+   (fresh copies exit fine on `quit` and SIGTERM; suspected: VSync on Wayland
+   blocking while the window isn't shown). So: non-blocking pipe writes,
+   SIGKILL after a timeout.
 5. **Recording (engine).** Port ioquake3's `video-pipe` command
    (`cl_aviPipeFormat`, `FS_PipeOpenWrite`) into `code/client/cl_avi.cpp` and
    `cl_main.cpp`: the AVI stream goes into `ffmpeg -i pipe:0` and comes out as
@@ -109,12 +113,15 @@ Found while testing on real demos:
 ## Testing
 
 Cloud sessions have no game files, so playback can't be tried there; it's
-tested in game. The index can be tested offline: moharena-demo has two real
+tested in game. The index is tested offline, without game files:
+`DEMOINDEX_TEST_DEMOS=<folder of demos> ctest -R demoindex` (skipped without
+it), or `test_demoindex [--json] <demo or folder>`. moharena-demo has two real
 AA demos (`demos/1.dm_8`, 7 minutes, and `demos/mohdm6.dm_8`, 12 minutes, both
-Free-For-All, so no rounds).
+Free-For-All, so no rounds); the 696 test demos all pass.
 
 Locally, the game can be driven through `com_pipefile` and checked with
-`screenshotJPEG`, `viewpos` and `demoseek` (prints the time). During a demo,
+`screenshotJPEG` and `demoseek` (prints the time). `SDL_VIDEODRIVER=offscreen`
+runs it without a window, with the GPU. During a demo,
 letter and number keys act as Escape, so test binds go on the arrows,
 Home/End and PgUp/PgDn. Demos of maps missing from the game files (custom
 maps) don't load, and `1371e2f1f50b5b41-obj-obj_team2.dm3` shows the loading

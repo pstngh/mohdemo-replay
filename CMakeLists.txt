@@ -85,3 +85,9 @@ include(launcher)
 
 include(post_configure)
 #include(installer)
+
+# Added in OPM
+#  Lost when the CMake files were brought in line with ioq3
+if(BUILD_TESTING)
+    include(tests/all)
+endif()

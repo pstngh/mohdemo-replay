@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "client.h"
 #include "../server/server.h"
 #include "cl_ui.h"
+#include "cl_demoindex.h"
 #include "../corepp/tiki.h"
 #include "../qcommon/cm_terrain.h"
 #include "../qcommon/localization.h"
@@ -61,6 +62,8 @@ cvar_t	*cl_master;
 cvar_t	*cl_timeNudge;
 cvar_t	*cl_showTimeDelta;
 cvar_t	*cl_freezeDemo;
+// Added in OPM
+cvar_t	*cl_demoFiles;
 
 cvar_t	*cl_shownet;
 cvar_t	*cl_netprofile;
@@ -646,6 +649,21 @@ void CL_ReadDemoMessage( void ) {
 
 /*
 ====================
+CL_DemoFileName
+
+Added in OPM
+Demos use the original .dm3 extension, which can be left out
+====================
+*/
+static void CL_DemoFileName( const char *demo, char *path, int size ) {
+	Com_sprintf( path, size, "demos/%s", demo );
+	if ( !COM_CompareExtension( path, "." DEMOEXT ) ) {
+		Q_strcat( path, size, "." DEMOEXT );
+	}
+}
+
+/*
+====================
 CL_PlayDemo
 ====================
 */
@@ -663,13 +681,7 @@ static void CL_PlayDemo( const char *demoName ) {
 	CL_Disconnect();
 
 	// open the demo file
-
-	// Changed in OPM
-	//  Demos use the original .dm3 extension, which can be left out
-	Com_sprintf (name, sizeof(name), "demos/%s", arg);
-	if (!COM_CompareExtension(name, "." DEMOEXT)) {
-		Q_strcat(name, sizeof(name), "." DEMOEXT);
-	}
+	CL_DemoFileName( arg, name, sizeof( name ) );
 	FS_FOpenFileRead( name, &clc.demofile, qtrue, qtrue );
 
 	if (!clc.demofile) {
@@ -693,6 +705,9 @@ static void CL_PlayDemo( const char *demoName ) {
 	clc.firstDemoFrameSkipped = qfalse;
 }
 
+// Added in OPM
+static void CL_IndexDemo( void );
+
 /*
 ====================
 CL_PlayDemo_f
@@ -712,6 +727,9 @@ void CL_PlayDemo_f( void ) {
 	Cvar_Set( "cl_freezeDemo", "0" );
 
 	CL_PlayDemo( Cmd_Argv(1) );
+
+	// Added in OPM
+	CL_IndexDemo();
 }
 
 // Added in OPM
@@ -882,6 +900,128 @@ static void CL_DemoPause_f( void ) {
 
 	Cvar_Set( "cl_freezeDemo", pause ? "1" : "0" );
 	Com_Printf( "%s at %s\n", pause ? "Paused" : "Playing", CL_DemoTimeString( CL_DemoTime() ) );
+}
+
+static demoIndex_t	cl_demoIndex;
+
+/*
+====================
+CL_WriteDemoFile
+
+Writes a file for the app, never seen half written
+====================
+*/
+static void CL_WriteDemoFile( const char *fileName, const char *text ) {
+	char			tmpName[MAX_QPATH];
+	fileHandle_t	f;
+
+	Com_sprintf( tmpName, sizeof( tmpName ), "%s.tmp", fileName );
+	f = FS_FOpenFileWrite_HomeData( tmpName );
+	if ( !f ) {
+		return;
+	}
+
+	FS_Write( text, strlen( text ), f );
+	FS_FCloseFile( f );
+	FS_Rename_HomeData( tmpName, fileName );
+}
+
+/*
+====================
+CL_ReadDemoIndexFile
+====================
+*/
+static int CL_ReadDemoIndexFile( void *ctx, void *buffer, int len ) {
+	return FS_Read( buffer, len, *(fileHandle_t *)ctx );
+}
+
+/*
+====================
+CL_IndexDemo
+
+Reads the whole demo once to list its kills, round ends, levels and who is
+watched, for the commands that go through them and the app
+====================
+*/
+static void CL_IndexDemo( void ) {
+	char			path[MAX_OSPATH];
+	char			*json;
+	fileHandle_t	f;
+	int				i, kills, rounds;
+	int				start;
+
+	DemoIndex_Free( &cl_demoIndex );
+	if ( !clc.demoplaying ) {
+		return;
+	}
+
+	CL_DemoFileName( clc.demoName, path, sizeof( path ) );
+	FS_FOpenFileRead( path, &f, qtrue, qtrue );
+	if ( !f ) {
+		return;
+	}
+
+	start = Sys_Milliseconds();
+	DemoIndex_Build( &cl_demoIndex, CL_ReadDemoIndexFile, &f );
+	FS_FCloseFile( f );
+
+	kills = rounds = 0;
+	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+		kills += cl_demoIndex.events[i].type == DEMOEVENT_KILL;
+		rounds += cl_demoIndex.events[i].type == DEMOEVENT_ROUNDEND;
+	}
+	Com_Printf( "Demo index: %d kills, %d round ends in %s, read in %d ms%s\n", kills, rounds,
+		CL_DemoTimeString( cl_demoIndex.duration ), Sys_Milliseconds() - start,
+		cl_demoIndex.truncated ? ", the demo is truncated" : "" );
+
+	if ( cl_demoFiles->integer ) {
+		json = DemoIndex_ToJSON( &cl_demoIndex, clc.demoName );
+		CL_WriteDemoFile( "demoindex.json", json );
+		free( json );
+	}
+}
+
+/*
+====================
+CL_UpdateDemoState
+
+Writes demostate.json when what plays changes, and at most every 100 msec
+while the time goes on
+====================
+*/
+static void CL_UpdateDemoState( void ) {
+	static char		lastDemo[MAX_QPATH];
+	static int		lastTime, lastWrite;
+	static qboolean	lastPaused, lastSeeking;
+	const char		*demo;
+	char			*json;
+	int				time;
+	qboolean		isPaused, isSeeking;
+
+	if ( !cl_demoFiles->integer ) {
+		return;
+	}
+
+	demo = clc.demoplaying ? clc.demoName : "";
+	time = clc.demoplaying ? CL_DemoTime() : 0;
+	isPaused = clc.demoplaying && cl_freezeDemo->integer;
+	isSeeking = clc.demoplaying && clc.demoSeeking;
+
+	if ( !strcmp( demo, lastDemo ) && isPaused == lastPaused && isSeeking == lastSeeking && lastWrite ) {
+		if ( time == lastTime || cls.realtime - lastWrite < 100 ) {
+			return;
+		}
+	}
+
+	json = DemoIndex_StateJSON( demo, time, clc.demoplaying ? cl_demoIndex.duration : 0, isPaused, isSeeking );
+	CL_WriteDemoFile( "demostate.json", json );
+	free( json );
+
+	Q_strncpyz( lastDemo, demo, sizeof( lastDemo ) );
+	lastTime = time;
+	lastPaused = isPaused;
+	lastSeeking = isSeeking;
+	lastWrite = cls.realtime;
 }
 //====
 
@@ -3048,6 +3188,9 @@ void CL_Frame ( int msec ) {
 	// advance local effects for next frame
 	SCR_RunCinematic();
 
+	// Added in OPM
+	CL_UpdateDemoState();
+
 	cls.framecount++;
 }
 
@@ -3791,6 +3934,9 @@ void CL_Init( void ) {
 	cl_showSend = Cvar_Get ("cl_showSend", "0", CVAR_TEMP );
 	cl_showTimeDelta = Cvar_Get ("cl_showTimeDelta", "0", CVAR_TEMP );
 	cl_freezeDemo = Cvar_Get ("cl_freezeDemo", "0", CVAR_TEMP );
+	// Added in OPM
+	//  Write demoindex.json and demostate.json for the replay app
+	cl_demoFiles = Cvar_Get ("cl_demoFiles", "0", CVAR_TEMP );
 	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP );
 	cl_activeAction = Cvar_Get( "activeAction", "", CVAR_TEMP );
 

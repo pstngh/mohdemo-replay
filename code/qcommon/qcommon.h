@@ -885,6 +885,8 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring );
 
 void FS_Remove( const char *osPath );
 void FS_Remove_HomeData( const char *homePath );
+// Added in OPM
+void FS_Rename_HomeData( const char *from, const char *to );
 
 void	FS_FilenameCompletion( const char *dir, const char *ext,
 		qboolean stripExt, void(*callback)(const char *s), qboolean allowNonPureFilesOnDisk );

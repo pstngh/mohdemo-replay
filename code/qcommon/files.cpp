@@ -757,6 +757,31 @@ void FS_Remove_HomeData( const char *homePath ) {
 }
 
 /*
+===========
+FS_Rename_HomeData
+
+Added in OPM
+Renames a file of the current gamedir, replacing the destination, so it's
+never seen half written
+===========
+*/
+void FS_Rename_HomeData( const char *from, const char *to ) {
+	char	from_ospath[MAX_OSPATH];
+	char	*to_ospath;
+
+	FS_CheckFilenameIsMutable( to, __func__ );
+
+	Q_strncpyz( from_ospath, FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, from ), sizeof( from_ospath ) );
+	to_ospath = FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, to );
+
+	if ( rename( from_ospath, to_ospath ) ) {
+		// Windows doesn't replace an existing file
+		remove( to_ospath );
+		rename( from_ospath, to_ospath );
+	}
+}
+
+/*
 ================
 FS_FileInPathExists
 
