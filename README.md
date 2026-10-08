@@ -1,109 +1,146 @@
-# OpenMoHAA
+# MoH Demo Replay
 
-[![Build](https://github.com/openmoh/openmohaa/actions/workflows/branches-build.yml/badge.svg?branch=main)](https://github.com/openmoh/openmohaa/actions/workflows/branches-build.yml) [![Release](https://img.shields.io/github/v/release/openmoh/openmohaa)](https://github.com/openmoh/openmohaa/releases) [![Downloads](https://img.shields.io/github/downloads/openmoh/openmohaa/total)](https://github.com/openmoh/openmohaa/releases)
+Rewatch and record **Medal of Honor: Allied Assault** multiplayer demos. A
+small desktop app lists your demos and what happens in them (kills,
+multi-kills, rounds), jumps straight to any moment, and records MP4 videos
+with sound. It runs on a modified [OpenMoHAA](https://github.com/openmoh/openmohaa),
+the open-source engine for the game, which does the work through new console
+commands.
 
-![License](https://img.shields.io/github/license/openmoh/openmohaa) ![Commits](https://img.shields.io/github/commit-activity/t/openmoh/openmohaa)
+![The app with a 52-minute demo of The Hunt: the demos where Mako plays, and the multi-kills of this one](replay/screenshot.png)
 
-![Discord](https://img.shields.io/discord/596049712579215361?logo=discord&logoColor=white&color=5865F2)
+*The demos where Mako plays, and the multi-kills of the one playing. The
+player names are made up.*
 
-![logo](misc/openmohaa-text-sm.png)
+## What it does
 
-## What is OpenMoHAA?
+- **Find demos.** The list shows each demo's date, length and levels. The
+  filter matches demo names, levels and players: type a name to see every
+  demo that player is in, with their kills and multi-kills.
+- **Move around a demo.** Its kills, multi-kills and rounds are listed and
+  marked on the time slider. A click jumps there, 4 seconds before a kill.
+  Pause, skip 10 seconds, go to the next or previous kill or round, play
+  from 0.25× to 4×.
+- **Watch only what matters.** Play only the kills or multi-kills, of
+  everyone or of one player, or only while a player is watched. The rest is
+  skipped.
+- **Record videos.** MP4 with sound, at the size and frame rate you choose,
+  recorded in the background faster than real time while you keep watching.
+  Record a stretch of time, the kills or multi-kills, the kills you select,
+  or a player's kills across many demos, in one video or one each. Videos
+  wait in a queue.
+- **No app needed.** Everything is a game console command (`demoseek`,
+  `demonextkill`, `demoonly`, `demovideo`…), so it all works with key binds
+  too.
 
-OpenMoHAA is an open-source project aimed at preserving and enhancing **Medal of Honor: Allied Assault** (including Spearhead and Breakthrough expansions) by providing more features and bugfixes, across modern platforms and architectures.
+A multi-kill is two kills or more by one player, each at most 3 seconds
+after the one before.
 
-Powered by [ioquake3](https://github.com/ioquake/ioq3) and the [F.A.K.K SDK](https://code.idtech.space/ritual/fakk2-sdk), OpenMoHAA provides:
-- Full compatibility with the original game: assets, scripts and multiplayer
-- Better support for modern systems
-- Cross-platform support (Linux, Windows, macOS)
-- Support for both single-player and multiplayer modes
-- Includes all fixes from Spearhead 2.15 and Breakthrough 2.40b
-- More fixes and features, such as bots and a ban system
+## Requirements
 
-*OpenMoHAA is an independent project and is not affiliated with or endorsed by Electronic Arts.*
+- Linux (Wayland or X11) or macOS. Not Windows: the app talks to the game
+  through a named pipe, which the game only has on Unix-like systems.
+- The game files of Medal of Honor: Allied Assault (the folder with
+  `main/Pak0.pk3`), and the files of any custom map the demos use.
+- Allied Assault demos (`.dm3`), recorded while playing or spectating.
+  Spearhead and Breakthrough demos aren't supported.
+- Python 3 and PySide6 for the app, FFmpeg to record.
+- To build the game: CMake 3.25 or later, Ninja, a C++ compiler, Flex,
+  Bison, SDL2 and OpenAL Soft.
 
-## Getting started
+On Ubuntu or Debian:
 
-- 📦 [Installing OpenMoHAA](docs/markdown/01-intro/01-installation.md)
-- ▶️ [How to play: Launching the game, expansions & file locations](docs/markdown/02-running/01-running.md)
-- ❓ [FAQ & Troubleshooting](docs/markdown/02-running/03-faq.md)
-- 🌐 [Setting up a game server](docs/markdown/02-running/02-running-server.md)
+```bash
+sudo apt install cmake ninja-build g++ flex bison libsdl2-dev libopenal-dev python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets ffmpeg
+```
 
-## Reporting Issues
+## Build
 
-> [!NOTE]
-> OpenMoHAA hasn't hit version 1.0.0 yet. Think of it like a beta build from the golden age of LAN parties. Features are being added, bugs are getting squashed, and more things are being tweaked. Things might change, break, or get even better over time.
-> 
-> If that sounds like your kind of mission, gear up, frag some bots, and help level up OpenMoHAA!
+```bash
+git clone https://github.com/pstngh/mohdemo-replay
+cd mohdemo-replay
+cmake -B .cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SERVER=OFF
+cmake --build .cmake
+```
 
-If you encounter a bug or a problem, you can do one of the following:
-- Submit an [issue](https://github.com/openmoh/openmohaa/issues) on GitHub (use the template).
-- Join the [OpenMoHAA Discord](https://discord.gg/NYtH58R) for a quick help.
+This makes the game (`openmohaa`) and the demo indexer (`mohdemoindex`) in
+`.cmake/RelWithDebInfo`, where the app looks for them. The sound of videos
+needs OpenAL Soft, the OpenAL of Linux distributions.
 
-## Additional documentation
+macOS builds in CI but hasn't been tried on a Mac yet:
+[shared-build-macos.yml](.github/workflows/shared-build-macos.yml) shows
+how it builds there, with OpenAL Soft.
 
-- 📖 [Documentation](https://openmoh.github.io/openmohaa)
-- ⚙️ [Game settings & configuration](docs/markdown/03-configuration/01-configuration.md)
-- 📝 [Code & Scripting reference](docs/markdown/04-coding/02-coding.md)
-- 📜 [Contributing guidelines](CONTRIBUTING.md)
+## Run
 
-## Current state
+```bash
+python3 replay/mohreplay.py
+```
 
-- 🧰 [List of differences](docs/markdown/01-intro/04-differences.md)
+The first time, Settings asks for the game program (found by itself in
+`.cmake/RelWithDebInfo`), the game files folder and the demos folder. The
+demos are then indexed in the background, once: about two minutes for 700.
+Double-click a demo to play it. The game plays it in its own window next to
+the app; Wayland doesn't let one program show another's window inside its
+own.
 
-### Single-player
+The folders can also be given on the command line, with a demo to play:
 
-The entire single-player campaign should work (Allied Assault, Spearhead and Breakthrough). If you encounter any bug, please create a new [GitHub issue](https://github.com/openmoh/openmohaa/issues) describing them.
+```bash
+python3 replay/mohreplay.py --exe PATH --game FOLDER --demos FOLDER DEMO
+```
 
-### Multiplayer
+In the game window, letters and numbers stop a demo, so the app binds other
+keys:
 
-- Almost fully stable
-- All official game modes are supported, including those from Spearhead and Breakthrough:
-  - Free-For-All
-  - Team-Deathmatch
-  - Round-based match
-  - Objective match
-  - Tug-of-War (Spearhead)
-  - Liberation (Breakthrough)
-- Popular mods like **Freeze-Tag** are supported
-- Built-in bots for offline practice and for testing
-  - 🔧 [Setting up bots](docs/markdown/02-running/01-running.md#Playing-with-bots)
+| Key | Does |
+| --- | --- |
+| Pause | pause or play |
+| Left / Right | back or forward 5 seconds |
+| Down / Up | previous or next kill |
+| PgDn / PgUp | previous or next round |
 
-You can host your own [OpenMoHAA server](docs/markdown/02-running/02-running-server.md#) or join others using OpenMoHAA.
+[replay/README.md](replay/README.md) has the details of the app, the console
+commands and their settings, and recording.
 
-## Screenshots
+## How it works
 
-|                                                                                   |                                                                            |
-|-----------------------------------------------------------------------------------|----------------------------------------------------------------------------|
-| ![](docs/assets/images/v0.60.0-x86_64/mohdm1_1.png)                                      | ![](docs/assets/images/v0.60.0-x86_64/training_1.png)                               |
-| ![](docs/assets/images/v0.60.0-x86_64/flughafen_1.png)                                   | ![](docs/assets/images/v0.60.0-x86_64/flughafen_2.png)                            |
-| ![](docs/assets/images/v0.60.0-x86_64/mohdm2_1.png "Playing Freeze-Tag mode with bots")  | ![](docs/assets/images/v0.60.0-x86_64/training_3.png "Single-Player training")    |
+- The app starts the game with a throwaway home folder, sends it console
+  commands through a pipe (`com_pipefile`) and shows what the game reports
+  in two files, `demostate.json` and `demoindex.json`. It never waits on the
+  game, and copes with it quitting or crashing.
+- A demo only plays forward, so going back replays it from the start
+  without drawing, up to the exact time asked.
+- `mohdemoindex` reads a demo the way the game does and lists its kills,
+  rounds, levels and who is watched when, without game files. The app keeps
+  the indexes in `~/.cache/mohdemo-replay` until the demo or `mohdemoindex`
+  changes.
+- A second copy of the game records, without a window on Linux. It steps
+  exactly one frame time per frame and pipes the frames to FFmpeg, and
+  OpenAL Soft renders the sound for each frame, so the video stays smooth
+  and in sync however fast it's made.
 
-*More screenshots [here](docs/assets/images)*
+[PLAN.md](PLAN.md) has the decisions behind it and how it was built.
 
-## Development & Compiling
+## Tests
 
-- 💻 [Building from source](docs/markdown/04-coding/01-compiling.md)
+```bash
+python3 replay/tests/test_mohreplay.py
+```
 
-## Third party librairies
+The app's tests run against a fake game, so they need neither game files
+nor a screen. With `MOHREPLAY_TEST_GAME` (the game files folder) and
+`MOHREPLAY_TEST_DEMOS` (a folder of demos) set, they also play and record a
+real demo with the game built in `.cmake`. `ctest` in `.cmake` runs them
+with the engine's tests; the demo index is checked on real demos with
+`DEMOINDEX_TEST_DEMOS` set to a folder of them.
 
-The following third party tools and libraries are used by the project
+## Credits and license
 
-- [Flex](https://github.com/westes/flex)
-- [Bison](https://savannah.gnu.org/projects/bison/)
-- [SDL](http://www.libsdl.org/)
-- [OpenAL](https://www.openal.org/)
-- [LibMAD](http://www.underbit.com/products/mad/)
-- [cURL](https://curl.se/)
-- [Libogg](https://github.com/gcp/libogg)
-- [Libvorbis](https://xiph.org/vorbis/)
-- [Libopus](https://opus-codec.org/)
+Built on [OpenMoHAA](https://github.com/openmoh/openmohaa), itself built on
+[ioquake3](https://github.com/ioquake/ioq3) and the F.A.K.K SDK. For the
+game itself (installing it, playing online, running a server), see
+OpenMoHAA and the [documentation](docs/markdown) kept from it.
 
-## Resources
-
-- 🔗 [GitHub Repository](https://github.com/openmoh/openmohaa/)
-- 🌐 [MOH-DB](https://www.moh-db.com/)
-- 🕹️ [333networks](https://333networks.com/)
-- 📂 [ModDB](https://www.moddb.com/games/medal-of-honor-allied-assault)
-- 📂 [GameBanana](https://gamebanana.com/games/720)
-- 💬 [Join us on Discord](https://discord.gg/NYtH58R)
+GPL-2.0, see [COPYING.txt](COPYING.txt). Not affiliated with or endorsed by
+Electronic Arts.
