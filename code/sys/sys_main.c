@@ -35,6 +35,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <emscripten/emscripten.h>
 #endif
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 #ifndef DEDICATED
 #ifdef USE_INTERNAL_SDL_HEADERS
 #	include "SDL.h"
@@ -738,6 +742,16 @@ Sys_SigHandler
 void Sys_SigHandler( int signum )
 {
 	static qboolean signalcaught = qfalse;
+
+#ifndef _WIN32
+	// Added in OPM
+	//  Shutting down from here can wait forever for a lock the interrupted
+	//  code holds, and the same signal can't come in again meanwhile: the
+	//  default action of SIGALRM ends the process if it takes too long
+	if( signum == SIGTERM || signum == SIGINT ) {
+		alarm( 3 );
+	}
+#endif
 
 	if( signalcaught )
 	{
