@@ -5500,8 +5500,10 @@ CL_ServerRestarted
 void CL_ServerRestarted( void ) {
 	//S_StopAllSounds2( qfalse );
 	// Fixed in OPM
-	//  Also stop the music
-	S_StopAllSounds2( qtrue );
+	//  Also stop the triggered music, but not the level's soundtrack: the
+	//  same soundtrack isn't set again, so it was gone after the first round
+	S_StopAllSounds2( qfalse );
+	S_TriggeredMusic_Stop();
 
 	UI_ServerLoaded();
 	UI_ClearState();
