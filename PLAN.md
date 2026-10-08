@@ -81,7 +81,8 @@ taken for the game; CI now builds `main` for macOS too.
    `<fs_homepath>/main/`, replaced atomically, times in msec from the demo's
    first snapshot, the same as `demoseek`:
    - `demoindex.json`, once per demo: `duration`, `truncated`, `recorder`,
-     `maps` (levels loaded midway too), `watched` (who is shown from when:
+     `maps` (levels loaded midway too, each with the `rules` it was played
+     under: `realism`, `default`, `mixed` or empty), `watched` (who is shown from when:
      the followed player while spectating, -1 in free view, else the
      recorder), `kills` (`killer`/`killerName`, `victim`/`victimName`,
      `text`; client numbers are -1 when unknown, killer is -1 for suicides),

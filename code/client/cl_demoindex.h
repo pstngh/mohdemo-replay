@@ -46,6 +46,10 @@ typedef struct {
     char            name[MAX_NAME_LENGTH];
     char            otherName[MAX_NAME_LENGTH];
     char            text[MAX_STRING_CHARS];
+    // for a level: the recorder's snapshots at a top speed only realism
+    // servers give, and at one only default servers give
+    int realismTicks;
+    int defaultTicks;
 } demoEvent_t;
 
 typedef struct {
@@ -63,6 +67,9 @@ typedef int (*demoIndexRead_t)(void *ctx, void *buffer, int len);
 
 void DemoIndex_Build(demoIndex_t *index, demoIndexRead_t read, void *ctx);
 void DemoIndex_Free(demoIndex_t *index);
+// the rules a level was played under, from its realism and default ticks:
+// "realism", "default", "mixed" or "" when there's too little to tell
+const char *DemoIndex_LevelRules(const demoEvent_t *level);
 // returns the index as JSON, to free with free()
 char *DemoIndex_ToJSON(const demoIndex_t *index, const char *demoName);
 typedef struct {

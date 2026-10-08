@@ -88,6 +88,8 @@ static bool TestDemo(const char *demo, bool json)
     char       *text;
     bool        ok = true;
     int         kills = 0, rounds = 0, roundEnds = 0, watched = 0, maps = 0;
+    int         realism = 0, defaults = 0;
+    const char *rules;
     int         lastTime = 0;
     int         i;
 
@@ -109,6 +111,11 @@ static bool TestDemo(const char *demo, bool json)
         switch (ev->type) {
         case DEMOEVENT_MAP:
             ok &= Check(demo, ev->text[0] != 0, "a level has no map name");
+            rules = DemoIndex_LevelRules(ev);
+            ok &= Check(demo, !strcmp(rules, "realism") || !strcmp(rules, "default") || !strcmp(rules, "mixed") || !rules[0],
+                        "a level's rules aren't known");
+            realism += !strcmp(rules, "realism");
+            defaults += !strcmp(rules, "default");
             maps++;
             break;
         case DEMOEVENT_WATCH:
@@ -141,12 +148,14 @@ static bool TestDemo(const char *demo, bool json)
         fputs(text, stdout);
     } else {
         printf(
-            "%s %s: %d:%02d, %d levels, %d rounds, %d round ends, %d kills, %d watched%s\n",
+            "%s %s: %d:%02d, %d levels (%d realism, %d default), %d rounds, %d round ends, %d kills, %d watched%s\n",
             ok ? "ok" : "FAILED",
             demo,
             index.duration / 60000,
             index.duration / 1000 % 60,
             maps,
+            realism,
+            defaults,
             rounds,
             roundEnds,
             kills,

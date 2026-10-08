@@ -72,6 +72,7 @@ typedef struct {
     int      lastTime;
     int      firstUntimed; // events waiting for the time of the next snapshot
     int      watched;
+    int      level; // the map event of the level playing, -1 before the first
 
     diName_t knownNames[DI_KNOWN_NAMES];
     int      numKnownNames;
@@ -581,6 +582,7 @@ static qboolean DI_ParseGamestate(diParser_t *p, msg_t *msg)
 
     ev = DI_AddEvent(p, DEMOEVENT_MAP);
     Q_strncpyz(ev->text, Info_ValueForKey(DI_ConfigString(p, CS_SERVERINFO), "mapname"), sizeof(ev->text));
+    p->level = p->index->numEvents - 1;
 
     if (!p->index->recorderName[0]) {
         p->index->recorder = p->clientNum;
@@ -733,6 +735,82 @@ static void DI_UpdateWatched(diParser_t *p)
 
 /*
 ===============
+DI_CountRulesSpeed
+
+Realism servers change the top speeds: the StG 44 and BAR run at 233 and
+every other weapon at 275, against 244 to 271 on default servers (at the
+1.1 speed multiplier of the servers seen). Counted while the recorder plays,
+on the ground, as the top speed reads 220 in the air. The speeds that tell
+(at 0.6 when walking or crouched, and crouched with the StG 44 or BAR on
+realism) come from 4,453 levels of demos labelled by their speeds and the
+damage of hits: none is ever given by the other kind of server, while 275,
+165 and 99 (unarmed, pistols and grenades) are given by both.
+===============
+*/
+static void DI_CountRulesSpeed(diParser_t *p, const playerState_t *ps)
+{
+    demoEvent_t *level;
+
+    if (p->level < 0 || ps->pm_type != PM_NORMAL || (ps->pm_flags & PMF_SPECTATING)
+        || ps->groundEntityNum == ENTITYNUM_NONE) {
+        return;
+    }
+
+    level = &p->index->events[p->level];
+    switch (ps->speed) {
+    case 233:
+    case 139:
+    case 83:
+        level->realismTicks++;
+        break;
+    case 271:
+    case 262:
+    case 257:
+    case 244:
+    case 240:
+    case 162:
+    case 157:
+    case 154:
+    case 146:
+    case 144:
+    case 132:
+    case 97:
+    case 94:
+    case 88:
+    case 86:
+    case 79:
+        level->defaultTicks++;
+        break;
+    }
+}
+
+/*
+===============
+DemoIndex_LevelRules
+
+At least 200 snapshots (10 s at 20 a second) that tell, 80% of them one
+kind. On the same 4,453 levels, no level labelled default came out realism
+and none labelled realism came out default.
+===============
+*/
+const char *DemoIndex_LevelRules(const demoEvent_t *level)
+{
+    int total = level->realismTicks + level->defaultTicks;
+
+    if (total < 200) {
+        return "";
+    }
+    if (level->realismTicks * 5 >= total * 4) {
+        return "realism";
+    }
+    if (level->defaultTicks * 5 >= total * 4) {
+        return "default";
+    }
+    return "mixed";
+}
+
+/*
+===============
 DI_ParseSnapshot
 
 Like CL_ParseSnapshot
@@ -816,6 +894,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
 
     p->snap                                       = newSnap;
     p->snapshots[newSnap.messageNum & PACKET_MASK] = newSnap;
+    DI_CountRulesSpeed(p, &newSnap.ps);
 
     if (p->started) {
         DI_UpdateWatched(p);
@@ -904,6 +983,7 @@ void DemoIndex_Build(demoIndex_t *index, demoIndexRead_t read, void *ctx)
     p = (diParser_t *)calloc(1, sizeof(diParser_t));
     p->index   = index;
     p->watched = -2;
+    p->level   = -1;
 
     while (1) {
         // the same framing as CL_ReadDemoMessage
@@ -1054,6 +1134,8 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
         case DEMOEVENT_MAP:
             DI_Append(b, ", \"map\": ", 9);
             DI_String(b, ev->text);
+            DI_Printf(b, ", \"rules\": \"%s\", \"realismTicks\": %d, \"defaultTicks\": %d",
+                DemoIndex_LevelRules(ev), ev->realismTicks, ev->defaultTicks);
             break;
         case DEMOEVENT_WATCH:
             DI_Printf(b, ", \"client\": %d, \"name\": ", ev->client);
