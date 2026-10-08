@@ -707,6 +707,10 @@ void CL_PlayDemo_f( void ) {
 		return;
 	}
 
+	// Added in OPM
+	//  A new demo plays even if the last one was paused
+	Cvar_Set( "cl_freezeDemo", "0" );
+
 	CL_PlayDemo( Cmd_Argv(1) );
 }
 
@@ -850,6 +854,34 @@ static void CL_DemoSkip_f( void ) {
 	}
 
 	CL_SeekDemoTo( CL_DemoTime() + msec );
+}
+
+/*
+====================
+CL_DemoPause_f
+
+demopause [0|1]
+====================
+*/
+static void CL_DemoPause_f( void ) {
+	qboolean pause;
+
+	if ( !clc.demoplaying ) {
+		Com_Printf( "Not playing a demo.\n" );
+		return;
+	}
+
+	if ( Cmd_Argc() == 1 ) {
+		pause = !cl_freezeDemo->integer;
+	} else if ( Cmd_Argc() == 2 && ( !strcmp( Cmd_Argv( 1 ), "0" ) || !strcmp( Cmd_Argv( 1 ), "1" ) ) ) {
+		pause = atoi( Cmd_Argv( 1 ) );
+	} else {
+		Com_Printf( "demopause [0|1]: pause or play the demo, toggles without an argument\n" );
+		return;
+	}
+
+	Cvar_Set( "cl_freezeDemo", pause ? "1" : "0" );
+	Com_Printf( "%s at %s\n", pause ? "Paused" : "Playing", CL_DemoTimeString( CL_DemoTime() ) );
 }
 //====
 
@@ -3892,6 +3924,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("stoploopdemos", CL_StopLoopDemos_f);
 	Cmd_AddCommand ("demoseek", CL_DemoSeek_f);
 	Cmd_AddCommand ("demoskip", CL_DemoSkip_f);
+	Cmd_AddCommand ("demopause", CL_DemoPause_f);
 	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
@@ -3998,6 +4031,7 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("stoploopdemos");
 	Cmd_RemoveCommand ("demoseek");
 	Cmd_RemoveCommand ("demoskip");
+	Cmd_RemoveCommand ("demopause");
 	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");

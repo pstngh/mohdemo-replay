@@ -2499,6 +2499,7 @@ void S_OPENAL_Update()
 {
     int             i;
     openal_channel *pChannel;
+    bool            bPaused;
 
     if (cl.snap.ps.stats[STAT_CINEMATIC]) {
         S_SetGlobalAmbientVolumeLevel(0.5f);
@@ -2506,9 +2507,13 @@ void S_OPENAL_Update()
         S_SetGlobalAmbientVolumeLevel(1.f);
     }
 
-    if (paused->integer && !s_bSoundPaused) {
+    // Changed in OPM
+    //  Also pause with a paused demo
+    bPaused = paused->integer || (clc.demoplaying && cl_freezeDemo->integer);
+
+    if (bPaused && !s_bSoundPaused) {
         S_PauseSound();
-    } else if (!paused->integer && s_bSoundPaused) {
+    } else if (!bPaused && s_bSoundPaused) {
         S_UnpauseSound();
     }
 

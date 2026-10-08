@@ -44,28 +44,31 @@ As light, lean, robust, reliable and portable as possible:
 `stoploopdemos`, no team/weapon menus during demos, view bob with
 `cg_animationviewmodel`, a Linux x86_64 client-only CI build on `main`,
 step 1: `demoseek <time>` / `demoskip <time>` (seconds or minutes:seconds),
-and demos that load a new level midway (a map change, in about a third of
-the test demos) play through it.
+demos that load a new level midway (a map change, in about a third of the
+test demos) playing through it, and `demopause [0|1]` (toggles without an
+argument): the demo and its sound stop and go on from the same time, and
+seeking keeps it paused.
 
 ## Fix next, before step 2
 
-Found while testing step 1 on real demos:
+Found while testing on real demos:
 
-1. **No real pause.** `cl_freezeDemo 1` stops the demo, but it jumps ahead by
-   the paused time when resumed (`cl.serverTimeDelta` isn't moved). Add a
-   pause command that keeps the time, for key binds and the app.
-2. **The game didn't exit.** Five test copies running with
+1. **The game didn't exit.** Five test copies running with
    `r_swapInterval 1` hung in a futex wait and ignored SIGTERM after new game
    windows covered them; fresh copies exit fine on `quit` and SIGTERM.
    Suspected: VSync on Wayland blocking while the window isn't shown. Either
    way the app (step 4) can't rely on the game answering: non-blocking pipe
    writes, SIGKILL after a timeout.
-3. **Snapshots dropped when the recorder lagged** (minor). When the server
+2. **Snapshots dropped when the recorder lagged** (minor). When the server
    deltas from a frame about 26 snapshots old, its entities have left the
    client's 2048-entry `MAX_PARSE_ENTITIES` buffer, so up to 3 snapshots
    (150 ms) are dropped with "Delta parseEntitiesNum too old" until a full
    one comes. Seen 50 times in the first 300 test demos; a bigger buffer may
    keep them.
+3. **An item icon after seeking while paused** (minor). A few seconds after
+   a seek while paused, a small green-framed icon shows at the bottom middle
+   (item/weapons bar?) even with the HUD off, and stays until the demo plays
+   again. Seen after `demoseek 51:40` in `d482684ec556d1c3-obj-obj_team1.dm3`.
 
 ## Steps, in order
 

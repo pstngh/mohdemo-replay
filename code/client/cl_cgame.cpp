@@ -1335,22 +1335,28 @@ void CL_SetCGameTime( void ) {
 
 	// get our current view of time
 
+	// cl_timeNudge is a user adjustable cvar that allows more
+	// or less latency to be added in the interest of better
+	// smoothness or better responsiveness.
+	int tn;
+
+	tn = cl_timeNudge->integer;
+	if (tn<-30) {
+		tn = -30;
+	} else if (tn>30) {
+		tn = 30;
+	}
+
 	if ( clc.demoplaying && cl_freezeDemo->integer ) {
 		// cl_freezeDemo is used to lock a demo in place for single frame advances
 
+		// Changed in OPM
+		//  Keep the time, so the demo goes on from there and doesn't jump
+		//  ahead by the paused time. No messages are read meanwhile, so
+		//  don't let it time out either.
+		cl.serverTimeDelta = cl.serverTime - cls.realtime + tn;
+		clc.lastPacketTime = cls.realtime;
 	} else {
-		// cl_timeNudge is a user adjustable cvar that allows more
-		// or less latency to be added in the interest of better
-		// smoothness or better responsiveness.
-		int tn;
-
-		tn = cl_timeNudge->integer;
-		if (tn<-30) {
-			tn = -30;
-		} else if (tn>30) {
-			tn = 30;
-		}
-
 		cl.serverTime = cls.realtime + cl.serverTimeDelta - tn;
 
 		// guarantee that time will never flow backwards, even if
