@@ -77,3 +77,14 @@ it can. The sound is recorded when the game is started with
 `cl_aviPipeFormat` holds FFmpeg's output options (H.264, CRF 20, AAC 192k by
 default) and `cl_aviFFmpeg` the FFmpeg program; FFmpeg's errors go to
 `<name>.mp4.log`.
+
+## Tests
+
+    python3 replay/tests/test_mohreplay.py [-v]
+
+They run the app without a window against a fake game
+(`replay/tests/fakegame.py`), so they need neither game files nor a screen,
+and run with the engine's tests (`ctest`). With `MOHREPLAY_TEST_GAME` (the
+game files folder) and `MOHREPLAY_TEST_DEMOS` (a folder of real demos) set,
+they also play and record a real demo with the game built in
+`.cmake/RelWithDebInfo`, without a window.

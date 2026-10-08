@@ -104,6 +104,9 @@ def same_player(a, b):
 class Game:
     """The game process, its throwaway home folder and its command pipe."""
 
+    QUIT_WAIT = 3000  # msec given to quit, then to SIGTERM
+    TERM_WAIT = 2000
+
     def __init__(self, on_output, on_exit):
         self.on_output = on_output
         self.on_exit = on_exit
@@ -217,9 +220,9 @@ class Game:
             # quitting now, no retry and no message
             self.process.finished.disconnect(self.finished)
             self.send("quit")
-            if not self.process.waitForFinished(3000):
+            if not self.process.waitForFinished(self.QUIT_WAIT):
                 self.process.terminate()
-                if not self.process.waitForFinished(2000):
+                if not self.process.waitForFinished(self.TERM_WAIT):
                     self.process.kill()
                     self.process.waitForFinished(2000)
         self.cleanup()

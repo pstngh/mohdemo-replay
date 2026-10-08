@@ -27,6 +27,15 @@ jobs:
       with:
         path: 'source'
 
+    # for the replay app's tests
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install PySide6
+      run: |
+        pip install PySide6-Essentials
+
     - name: Settings
       working-directory: ${{github.workspace}}
       run: |
