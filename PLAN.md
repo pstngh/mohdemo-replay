@@ -49,7 +49,8 @@ test demos) playing through it, and `demopause [0|1]` (toggles without an
 argument): the demo and its sound stop and go on from the same time, and
 seeking keeps it paused. No more snapshots dropped when the recorder's
 connection lagged, and no "connection interrupted" icon in demos. Step 2: the
-demo index. Step 3: kill, round and player navigation.
+demo index. Step 3: kill, round and player navigation. Step 4: the app,
+`replay/mohreplay.py`.
 
 ## Steps, in order
 
@@ -103,15 +104,22 @@ demo index. Step 3: kill, round and player navigation.
 
    Players are given by name, without colors or case, like the index's
    `killerName` and `watched` names.
-4. **The app.** Starts `openmohaa` with a throwaway `fs_homepath` and
-   `cl_demoFiles 1`, sends commands through `com_pipefile`, reads
-   `demoindex.json` and `demostate.json`, shows a clickable list of kills and
-   rounds, play/pause/speed/seek buttons, record button. It can't rely on the
-   game answering: five test copies running with `r_swapInterval 1` once hung
-   in a futex wait and ignored SIGTERM after new game windows covered them
-   (fresh copies exit fine on `quit` and SIGTERM; suspected: VSync on Wayland
-   blocking while the window isn't shown). So: non-blocking pipe writes,
-   SIGKILL after a timeout.
+4. **The app.** Done: `replay/mohreplay.py` (see `replay/README.md`). It
+   starts `openmohaa` with a throwaway `fs_homepath` holding a link to the
+   demos folder, `cl_demoFiles 1` and key binds (Pause, arrows, PgUp/PgDn),
+   asking for Wayland first, then XWayland if the game quits within 5 s. It
+   sends commands through `com_pipefile` without ever blocking (commands
+   wait in a queue until the game reads the pipe), reads `demoindex.json`
+   and `demostate.json` every 100 ms, and shows the demos (by date), the
+   kills (by player) and rounds to jump to, play/pause/kill/round/skip
+   buttons, a time slider and the speed (`timescale`). When the game quits
+   or crashes, it says so, and a double-click starts it again; missing maps
+   show in the status bar. On closing it sends `quit`, then SIGTERM after
+   3 s and SIGKILL after 2 more: five test copies running with
+   `r_swapInterval 1` once hung in a futex wait and ignored SIGTERM after new
+   game windows covered them (fresh copies exit fine; suspected: VSync on
+   Wayland blocking while the window isn't shown). The record button comes
+   with step 5.
 5. **Recording (engine).** Port ioquake3's `video-pipe` command
    (`cl_aviPipeFormat`, `FS_PipeOpenWrite`) into `code/client/cl_avi.cpp` and
    `cl_main.cpp`: the AVI stream goes into `ffmpeg -i pipe:0` and comes out as
@@ -139,7 +147,9 @@ Free-For-All, so no rounds); the 696 test demos all pass.
 
 Locally, the game can be driven through `com_pipefile` and checked with
 `screenshotJPEG` and `demoseek` (prints the time). `SDL_VIDEODRIVER=offscreen`
-runs it without a window, with the GPU. During a demo,
+runs it without a window, with the GPU, and `QT_QPA_PLATFORM=offscreen` does
+the same for the app, which can then be driven from a script that imports it
+(`QSettings` keeps the paths; `Window.grab()` takes screenshots). During a demo,
 letter and number keys act as Escape, so test binds go on the arrows,
 Home/End and PgUp/PgDn. Demos of maps missing from the game files (custom
 maps) don't load, and `1371e2f1f50b5b41-obj-obj_team2.dm3` shows the loading
