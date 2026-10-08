@@ -66,6 +66,7 @@ cvar_t	*cl_freezeDemo;
 cvar_t	*cl_demoFiles;
 cvar_t	*cl_demoKillBefore;
 cvar_t	*cl_demoKillAfter;
+cvar_t	*cl_demoMultiKill;
 
 cvar_t	*cl_shownet;
 cvar_t	*cl_netprofile;
@@ -714,7 +715,8 @@ static void CL_PlayDemo( const char *demoName ) {
 typedef enum {
 	DEMOONLY_ALL,
 	DEMOONLY_KILLS,		// the kills, by cl_demoOnlyPlayer if set
-	DEMOONLY_WATCHED	// while cl_demoOnlyPlayer is watched
+	DEMOONLY_WATCHED,	// while cl_demoOnlyPlayer is watched
+	DEMOONLY_MULTIKILLS	// the kills of multi-kills, by cl_demoOnlyPlayer if set
 } demoOnly_t;
 
 static demoOnly_t	cl_demoOnly;
@@ -1025,7 +1027,7 @@ while the time goes on
 ====================
 */
 static void CL_UpdateDemoState( void ) {
-	static const char	*only[] = { "", "kills", "watched" };
+	static const char	*only[] = { "", "kills", "watched", "multikills" };
 	static char		last[MAX_STRING_CHARS];
 	static int		lastWrite;
 	demoState_t		state;
@@ -1085,6 +1087,40 @@ static int CL_DemoKillBefore( void ) {
 
 /*
 ====================
+CL_DemoInMultiKill
+
+Whether kill event i is part of a multi-kill: its killer killed someone
+else at most cl_demoMultiKill seconds before or after it
+====================
+*/
+static qboolean CL_DemoInMultiKill( int i ) {
+	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	const demoEvent_t	*other;
+	int					gap = Q_max( 0, (int)( cl_demoMultiKill->value * 1000 ) );
+	int					j;
+
+	if ( !ev->name[0] ) {
+		return qfalse;
+	}
+
+	// the events go forward in time
+	for ( j = i - 1; j >= 0 && ev->time - cl_demoIndex.events[j].time <= gap; j-- ) {
+		other = &cl_demoIndex.events[j];
+		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name ) ) {
+			return qtrue;
+		}
+	}
+	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time - ev->time <= gap; j++ ) {
+		other = &cl_demoIndex.events[j];
+		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+====================
 CL_DemoStretch
 
 The stretch around index event i that demoonly plays, if any
@@ -1096,7 +1132,9 @@ static qboolean CL_DemoStretch( int i, int *start, int *end ) {
 
 	switch ( cl_demoOnly ) {
 	case DEMOONLY_KILLS:
-		if ( ev->type != DEMOEVENT_KILL || ( cl_demoOnlyPlayer[0] && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) ) ) {
+	case DEMOONLY_MULTIKILLS:
+		if ( ev->type != DEMOEVENT_KILL || ( cl_demoOnlyPlayer[0] && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) )
+			|| ( cl_demoOnly == DEMOONLY_MULTIKILLS && !CL_DemoInMultiKill( i ) ) ) {
 			return qfalse;
 		}
 		*start = ev->time - CL_DemoKillBefore();
@@ -1187,7 +1225,7 @@ static void CL_RunDemoOnly( void ) {
 ====================
 CL_DemoOnly_f
 
-demoonly [kills [player] | watched <player>]
+demoonly [kills [player] | multikills [player] | watched <player>]
 ====================
 */
 static void CL_DemoOnly_f( void ) {
@@ -1207,10 +1245,12 @@ static void CL_DemoOnly_f( void ) {
 		return;
 	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "kills" ) ) {
 		only = DEMOONLY_KILLS;
+	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "multikills" ) ) {
+		only = DEMOONLY_MULTIKILLS;
 	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "watched" ) && player[0] ) {
 		only = DEMOONLY_WATCHED;
 	} else {
-		Com_Printf( "demoonly [kills [player] | watched <player>]: play only the kills, or while a player is watched, all without arguments\n" );
+		Com_Printf( "demoonly [kills [player] | multikills [player] | watched <player>]: play only the kills, the multi-kills, or while a player is watched, all without arguments\n" );
 		return;
 	}
 
@@ -1223,8 +1263,8 @@ static void CL_DemoOnly_f( void ) {
 		return;
 	}
 
-	if ( only == DEMOONLY_KILLS ) {
-		Com_Printf( "Playing only the kills%s%s\n", player[0] ? " by " : "", player );
+	if ( only == DEMOONLY_KILLS || only == DEMOONLY_MULTIKILLS ) {
+		Com_Printf( "Playing only the %s%s%s\n", only == DEMOONLY_KILLS ? "kills" : "multi-kills", player[0] ? " by " : "", player );
 	} else {
 		Com_Printf( "Playing only while %s is watched\n", player );
 	}
@@ -4323,6 +4363,8 @@ void CL_Init( void ) {
 	//  Seconds of each kill shown by demonextkill and demoonly kills
 	cl_demoKillBefore = Cvar_Get ("cl_demoKillBefore", "4", CVAR_ARCHIVE );
 	cl_demoKillAfter = Cvar_Get ("cl_demoKillAfter", "2", CVAR_ARCHIVE );
+	//  Seconds at most between a player's kills in a multi-kill
+	cl_demoMultiKill = Cvar_Get ("cl_demoMultiKill", "3", CVAR_ARCHIVE );
 	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP );
 	cl_activeAction = Cvar_Get( "activeAction", "", CVAR_TEMP );
 

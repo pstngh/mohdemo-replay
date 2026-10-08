@@ -61,13 +61,15 @@ binds, without the app:
 | `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill, by that player if given |
 | `demonextround`, `demoprevround` | jump to the next or previous round |
 | `demoonly kills [player]` | play only the kills, by that player if given |
+| `demoonly multikills [player]` | play only the multi-kills, by that player if given |
 | `demoonly watched <player>` | play only while that player is shown |
 | `demoonly` | play everything again |
 | `timescale <speed>` | playback speed, 1 is normal |
 | `demovideo <name> [end time]` | record into an MP4, see below |
 
 `cl_demoKillBefore` and `cl_demoKillAfter` set how many seconds of each kill
-are shown (4 and 2).
+are shown (4 and 2). A multi-kill is two kills or more by a player, each at
+most `cl_demoMultiKill` seconds (3) after the one before.
 
 ## Recording
 
