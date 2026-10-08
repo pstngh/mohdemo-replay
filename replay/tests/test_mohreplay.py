@@ -355,12 +355,16 @@ class TestWindow(FakeGameCase):
         window.speed.setCurrentText("2×")
         self.assertTrue(wait_until(lambda: "timescale 2" in self.commands(window.game)))
 
+    def shown(self, window):
+        return sorted(window.demos.topLevelItem(i).text(4) for i in range(window.demos.topLevelItemCount())
+                      if not window.demos.topLevelItem(i).isHidden())
+
     def test_filter_demos(self):
         self.add_demo("second-obj_team2", DEMO)
         window = self.window()
-        self.assertEqual(window.demos.topLevelItemCount(), 2)
+        self.assertEqual(self.shown(window), ["first", "second-obj_team2"])
         window.filter.setText("TEAM2")
-        self.assertEqual(window.demos.topLevelItemCount(), 1)
+        self.assertEqual(self.shown(window), ["second-obj_team2"])
 
     def test_missing_demo(self):
         window = self.window()
@@ -376,6 +380,116 @@ class TestWindow(FakeGameCase):
         self.assertEqual(window.time.text(), "0:00 / 0:00")
         # and it starts again with a demo
         self.playing(window)
+
+
+class TestLibrary(FakeGameCase):
+    def setUp(self):
+        super().setUp()
+        other = json.loads(json.dumps(DEMO))
+        other["maps"] = [{"time": 0, "map": "dm/mohdm6"}]
+        other["duration"] = 61000
+        for kill in other["kills"]:
+            kill["killerName"] = kill["killerName"].replace("t-", "<KoS>Bob")
+        self.add_demo("other", other)
+        with open(os.path.join(self.demos, "broken.dm3"), "w") as f:
+            f.write("not a demo")
+
+    def indexed(self, window, names=("first", "other")):
+        self.assertTrue(wait_until(lambda: set(names) <= set(window.library.demos)
+                                   and not window.library.progress(), 20), "not indexed")
+        wait_until(lambda: False, 0.4)  # the list is updated after them
+
+    def shown(self, window):
+        return TestWindow.shown(self, window)
+
+    def test_index_and_cache(self):
+        window = self.window()
+        self.indexed(window)
+        self.assertEqual(window.demo_items["first"].text(1), "10:00")
+        self.assertEqual(window.demo_items["other"].text(1), "1:01")
+        self.assertEqual(window.demo_items["broken"].text(1), "")
+        self.assertIn("broken", window.library.failed)
+        summary = window.library.demos["first"]
+        self.assertEqual(summary["maps"], ["obj/obj_team1"])
+        self.assertEqual(summary["players"]["t-"], ["t-", 4])
+        self.assertEqual(summary["players"]["phil"], ["^1Phil", 1])
+        self.assertIn("&lt;KoS&gt;Bob (4)", window.demo_items["other"].toolTip(4))
+        self.assertEqual(window.demo_items["first"].text(3), "obj_team1")
+        self.assertEqual(window.indexing.text(), "")
+        cache = window.library.cache
+        self.assertTrue(cache.startswith(os.path.join(self.tmp, "cache")))
+        self.assertTrue(os.path.isfile(os.path.join(cache, "first.json")))
+
+        # kept: nothing is indexed again
+        again = self.window()
+        self.assertTrue(wait_until(lambda: again.library.demos))
+        self.assertEqual(set(again.library.demos), {"first", "other"})
+        self.assertEqual(again.library.waiting, [])
+        self.assertEqual(again.library.busy, {"broken"})  # it's tried once more
+
+    def test_redone_when_the_demo_changes(self):
+        window = self.window()
+        self.indexed(window)
+        changed = dict(DEMO, duration=125000)
+        self.add_demo("first", changed)
+        future = time.time() + 5
+        os.utime(os.path.join(self.demos, "first.dm3"), (future, future))
+        window.library.rescan()
+        self.assertTrue(wait_until(lambda: window.library.demos["first"]["duration"] == 125000, 20))
+        self.assertTrue(wait_until(lambda: window.demo_items["first"].text(1) == "2:05"))
+
+    def test_new_and_removed_demos(self):
+        window = self.window()
+        self.indexed(window)
+        self.add_demo("new", DEMO)
+        os.remove(os.path.join(self.demos, "other.dm3"))
+        # the folder is watched
+        self.assertTrue(wait_until(lambda: "new" in window.demo_items and window.demo_items["new"].text(1), 20))
+        self.assertNotIn("other", window.demo_items)
+        self.assertNotIn("other", window.library.demos)
+        self.assertFalse(os.path.exists(os.path.join(window.library.cache, "other.json")))
+
+    def test_without_mohdemoindex(self):
+        os.remove(os.path.join(self.bin, "mohdemoindex"))
+        window = self.window()
+        wait_until(lambda: False, 0.5)
+        self.assertEqual(window.library.demos, {})
+        self.assertIsNone(window.library.progress())
+        self.assertEqual(self.shown(window), ["broken", "first", "other"])
+
+    def test_filter_by_player(self):
+        window = self.window()
+        self.indexed(window)
+        self.assertTrue(window.demos.isColumnHidden(2))
+        window.filter.setText("PHIL")
+        self.assertEqual(self.shown(window), ["first", "other"])
+        self.assertFalse(window.demos.isColumnHidden(2))
+        self.assertEqual(window.demo_items["first"].text(2), "^1Phil (1)")
+        window.filter.setText("kos")
+        self.assertEqual(self.shown(window), ["other"])
+        self.assertEqual(window.demo_items["other"].text(2), "<KoS>Bob (4)")
+        window.filter.setText("mohdm6 bob")
+        self.assertEqual(self.shown(window), ["other"])
+        window.filter.setText("obj_team1")
+        self.assertEqual(self.shown(window), ["first"])
+        self.assertTrue(window.demos.isColumnHidden(2))
+        window.filter.setText("nobody")
+        self.assertEqual(self.shown(window), [])
+
+    def test_play_from_a_player_search(self):
+        window = self.window()
+        self.indexed(window)
+        window.filter.setText("phil")
+        self.playing(window)
+        self.assertEqual(window.player.currentData(), "^1Phil")
+        self.assertEqual(window.kills.topLevelItemCount(), 1)
+
+    def test_sort_by_length(self):
+        window = self.window()
+        self.indexed(window)
+        window.demos.sortByColumn(1, Qt.AscendingOrder)
+        order = [window.demos.topLevelItem(i).text(4) for i in range(3)]
+        self.assertEqual(order, ["broken", "other", "first"])
 
 
 class TestRecording(FakeGameCase):

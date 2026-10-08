@@ -9,7 +9,12 @@ and PySide6.
 
 On the first run, Settings asks for the game program (found by itself when
 built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
-with `main/Pak0.pk3`) and the folder with the demos. Double-click a demo to
+with `main/Pak0.pk3`) and the folder with the demos. The list shows each
+demo's length and levels, and the filter finds demos by name, level or
+player: for a player, it shows their kills in each demo, and playing one
+chooses them. For that, `mohdemoindex`, built next to the game, indexes the
+demos in the background the first time (about two minutes for 700), and the
+indexes are kept in `~/.cache/mohdemo-replay`. Double-click a demo to
 play it, click a kill or a round to jump to it. "Only these kills" plays the
 kills listed (by the player chosen), from the one selected or the first.
 The time slider marks the kills listed under it and the rounds above it:

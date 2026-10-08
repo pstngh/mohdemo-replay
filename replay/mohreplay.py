@@ -11,6 +11,8 @@ do is a console command, so it all works with key binds too.
 
 import argparse
 import errno
+import functools
+import hashlib
 import html
 import json
 import os
@@ -20,7 +22,8 @@ import tempfile
 from time import monotonic
 
 from PySide6.QtCore import (
-    QDateTime, QElapsedTimer, QEvent, QObject, QProcess, QProcessEnvironment, QSettings, Qt, QTimer,
+    QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment,
+    QSettings, QStandardPaths, Qt, QTimer,
 )
 from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
@@ -89,20 +92,195 @@ def find_ffmpeg():
     return "ffmpeg"
 
 
-def same_player(a, b):
+@functools.lru_cache(maxsize=4096)
+def clean_name(name):
     """The engine's rule for names: without ^ and a letter or digit, only
     printable ASCII, any case (Q_CleanStr)."""
-    def clean(name):
-        out, i = [], 0
-        while i < len(name):
-            if name[i] == "^" and i + 1 < len(name) and name[i + 1].isascii() and name[i + 1].isalnum():
-                i += 2
-                continue
-            if " " <= name[i] <= "~":
-                out.append(name[i])
-            i += 1
-        return "".join(out).lower()
-    return clean(a) == clean(b)
+    out, i = [], 0
+    while i < len(name):
+        if name[i] == "^" and i + 1 < len(name) and name[i + 1].isascii() and name[i + 1].isalnum():
+            i += 2
+            continue
+        if " " <= name[i] <= "~":
+            out.append(name[i])
+        i += 1
+    return "".join(out).lower()
+
+
+def same_player(a, b):
+    return clean_name(a) == clean_name(b)
+
+
+def list_demos(folder):
+    """{name without .dm3: path} of the demos in folder."""
+    try:
+        return {n[:-4]: os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".dm3")}
+    except OSError:
+        return {}
+
+
+def summarize(index):
+    """What the demo list shows of an index: its maps, length and players,
+    {clean name: [name, kills]}."""
+    players = {}
+
+    def add(name, kills=0):
+        if name:
+            players.setdefault(clean_name(name), [name, 0])[1] += kills
+    add(index.get("recorder", {}).get("name", ""))
+    for watched in index.get("watched", []):
+        add(watched["name"])
+    for kill in index.get("kills", []):
+        add(kill["killerName"], 1)
+        add(kill["victimName"])
+    return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
+            "players": players}
+
+
+class Library(QObject):
+    """What's in every demo of the folder, without playing them: mohdemoindex
+    (built next to the game) indexes them in the background, and the indexes
+    are kept in the cache folder until the demo or mohdemoindex changes."""
+
+    BATCH = 20  # demos per mohdemoindex run
+    WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
+
+    def __init__(self, on_change, parent=None):
+        super().__init__(parent)
+        self.on_change = on_change
+        self.demos = {}  # name: summarize()
+        self.folder = self.cache = self.tool = None
+        self.waiting = []
+        self.busy = set()
+        self.failed = set()
+        self.workers = []
+        self.total = 0
+        self.watcher = QFileSystemWatcher(self)
+        self.rescan_timer = QTimer(self, singleShot=True, interval=1000, timeout=self.rescan)
+        self.watcher.directoryChanged.connect(lambda _: self.rescan_timer.start())
+        self.changed_timer = QTimer(self, singleShot=True, interval=300, timeout=lambda: self.on_change())
+
+    def open(self, folder, exe):
+        """The demos of folder, indexed with the mohdemoindex next to exe."""
+        self.stop()
+        self.demos, self.failed = {}, set()
+        if self.watcher.directories():
+            self.watcher.removePaths(self.watcher.directories())
+        self.folder = os.path.abspath(folder) if folder else None
+        self.tool = os.path.join(os.path.dirname(exe), "mohdemoindex") if exe else None
+        if not self.folder or not os.path.isdir(self.folder):
+            self.on_change()
+            return
+        # a folder of indexes for each folder of demos
+        key = hashlib.sha1(self.folder.encode()).hexdigest()[:12]
+        base = QStandardPaths.writableLocation(QStandardPaths.GenericCacheLocation)
+        self.cache = os.path.join(base, "mohdemo-replay", "index", key)
+        self.watcher.addPath(self.folder)
+        self.rescan()
+
+    def rescan(self):
+        """Loads the indexes kept, and indexes the demos without one."""
+        if not self.folder or not os.path.isdir(self.folder):
+            return
+        demos = list_demos(self.folder)
+        try:
+            made = os.path.getmtime(self.tool) if self.tool and os.path.isfile(self.tool) else None
+        except OSError:
+            made = None
+        stale = []
+        for name, path in demos.items():
+            try:
+                mtime = os.path.getmtime(path)
+                kept = os.path.getmtime(os.path.join(self.cache, name + ".json"))
+            except OSError:
+                mtime, kept = 0, None
+            if kept is not None and kept >= mtime and (made is None or kept >= made):
+                if name not in self.demos:
+                    self.load(name)
+            elif made is not None and name not in self.busy and name not in self.failed:
+                stale.append((mtime, name))
+            elif kept is not None and name not in self.demos:
+                self.load(name)  # out of date, but better than nothing
+        for name in list(self.demos):
+            if name not in demos:
+                del self.demos[name]
+                try:
+                    os.remove(os.path.join(self.cache, name + ".json"))
+                except OSError:
+                    pass
+        # newest first
+        self.waiting = [demos[name] for _, name in sorted(stale, reverse=True)]
+        self.total = len(self.waiting) + len(self.busy)
+        self.start_workers()
+        self.on_change()
+
+    def load(self, name):
+        try:
+            with open(os.path.join(self.cache, name + ".json"), encoding="utf-8") as f:
+                self.demos[name] = summarize(json.load(f))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self.demos.pop(name, None)
+
+    def start_workers(self):
+        if self.waiting:
+            os.makedirs(self.cache, exist_ok=True)
+        while self.waiting and len(self.workers) < self.WORKERS:
+            batch, self.waiting = self.waiting[:self.BATCH], self.waiting[self.BATCH:]
+            names = {os.path.basename(path)[:-4] for path in batch}
+            self.busy |= names
+            worker = QProcess(self)
+            worker.readyReadStandardOutput.connect(lambda w=worker: self.indexed(w))
+            worker.finished.connect(lambda *_, w=worker, n=names: self.worker_done(w, n))
+            worker.errorOccurred.connect(lambda error, w=worker, n=names:
+                                         error == QProcess.FailedToStart and self.worker_done(w, n))
+            self.workers.append(worker)
+            worker.start(self.tool, [self.cache, *batch])
+            try:
+                # behind the game
+                os.setpriority(os.PRIO_PROCESS, worker.processId(), 10)
+            except (OSError, AttributeError):
+                pass
+
+    def indexed(self, worker):
+        for line in bytes(worker.readAllStandardOutput()).decode("utf-8", "replace").splitlines():
+            if line:
+                self.load(line)
+        self.changed_timer.start()
+
+    def worker_done(self, worker, names):
+        if worker not in self.workers:
+            return
+        self.indexed(worker)
+        self.workers.remove(worker)
+        self.busy -= names
+        # not indexed: not tried again until the folder is opened again
+        self.failed |= {name for name in names if name not in self.demos}
+        worker.deleteLater()
+        self.start_workers()
+        self.changed_timer.start()
+
+    def progress(self):
+        """(indexed, to index) while indexing, None when done."""
+        left = len(self.waiting) + len(self.busy)
+        return (self.total - left, self.total) if left else None
+
+    def stop(self):
+        workers, self.workers = self.workers, []
+        self.waiting, self.busy = [], set()
+        for worker in workers:
+            worker.kill()
+            worker.waitForFinished(1000)
+
+
+class SortItem(QTreeWidgetItem):
+    """Sorts by the number kept in a column's UserRole, if any."""
+
+    def __lt__(self, other):
+        column = self.treeWidget().sortColumn() if self.treeWidget() else 0
+        mine, theirs = self.data(column, Qt.UserRole), other.data(column, Qt.UserRole)
+        if isinstance(mine, (int, float)) and isinstance(theirs, (int, float)):
+            return mine < theirs
+        return self.text(column).lower() < other.text(column).lower()
 
 
 class Game:
@@ -317,7 +495,8 @@ class Timeline(QSlider):
             if self.maximum() > self.minimum():
                 position = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 text = self.mark_at(position.x(), position.y()) or clock(self.value_at(position.x()))
-                QToolTip.showText(event.globalPos(), text, self)
+                # names like <KoS>Bob aren't HTML
+                QToolTip.showText(event.globalPos(), "<p style='white-space:pre'>" + html.escape(text) + "</p>", self)
             return True
         return super().event(event)
 
@@ -632,18 +811,22 @@ class Window(QMainWindow):
         self.recording = None
         self.last_jump = (None, 0)
         self.round_marks = []
+        self.library = Library(self.library_changed, self)
+        self.demo_items = {}  # name: item
+        self.wanted_player = None  # to choose once the demo plays
 
         self.setWindowTitle("MoH Demo Replay")
         self.resize(1000, 640)
         style = self.style()
 
         # demos
-        self.filter = QLineEdit(placeholderText="Filter demos")
-        self.filter.textChanged.connect(self.fill_demos)
-        self.demos = self.make_list(["Date", "Demo"])
+        self.filter = QLineEdit(placeholderText="Filter demos by name, map or player")
+        self.filter.setClearButtonEnabled(True)
+        self.filter.textChanged.connect(self.filter_demos)
+        self.demos = self.make_list(["Date", "Length", "Player", "Map", "Demo"], fit=False)
         self.demos.setSortingEnabled(True)
         self.demos.sortByColumn(0, Qt.DescendingOrder)
-        self.demos.itemActivated.connect(lambda item: self.play_demo(item.text(1)))
+        self.demos.itemActivated.connect(lambda item: self.play_demo(item.text(4)))
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
@@ -690,7 +873,7 @@ class Window(QMainWindow):
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([300, 700])
+        splitter.setSizes([400, 700])
 
         # playback
         self.slider = Timeline()
@@ -733,18 +916,29 @@ class Window(QMainWindow):
         self.restart_action = self.menuBar().addAction("Restart game")
         self.restart_action.triggered.connect(self.start_game)
 
+        self.indexing = QLabel()
+        self.statusBar().addPermanentWidget(self.indexing)
+
         self.poller = QTimer(interval=100, timeout=self.poll)
         self.poller.start()
         self.fill_demos()
+        # once the window is up: the indexes kept take a moment to load
+        QTimer.singleShot(0, lambda: self.library.open(settings.value("demos", ""), settings.value("exe", "")))
 
-    def make_list(self, columns):
+    def make_list(self, columns, fit=True):
+        """fit: columns fit their contents, which costs a look at every row
+        each time one changes; else fit_columns() does it."""
         tree = QTreeWidget()
         tree.setHeaderLabels(columns)
         tree.setRootIsDecorated(False)
         tree.setAlternatingRowColors(True)
-        tree.header().setSectionResizeMode(QHeaderView.ResizeToContents)
+        tree.header().setSectionResizeMode(QHeaderView.ResizeToContents if fit else QHeaderView.Interactive)
         tree.header().setStretchLastSection(True)
         return tree
+
+    def fit_columns(self, tree):
+        for column in range(tree.columnCount() - 1):
+            tree.resizeColumnToContents(column)
 
     def make_button(self, icon, tip, action, text=""):
         button = QToolButton()
@@ -765,6 +959,7 @@ class Window(QMainWindow):
     def edit_settings(self):
         if SettingsDialog(self.settings, self).exec():
             self.fill_demos()
+            self.library.open(self.settings.value("demos", ""), self.settings.value("exe", ""))
             if self.ready():
                 self.start_game()
 
@@ -794,20 +989,72 @@ class Window(QMainWindow):
     # demos
 
     def fill_demos(self):
-        folder = self.settings.value("demos", "")
-        try:
-            names = [n for n in os.listdir(folder) if n.lower().endswith(".dm3")]
-        except OSError:
-            names = []
-        words = self.filter.text().lower().split()
-        self.demos.clear()
-        for name in names:
-            if all(w in name.lower() for w in words):
-                date = QDateTime.fromSecsSinceEpoch(int(os.path.getmtime(os.path.join(folder, name))))
-                self.demos.addTopLevelItem(QTreeWidgetItem([date.toString("yyyy-MM-dd hh:mm"), name[:-4]]))
+        """Lists the demos of the folder, with what the library knows of
+        them, keeping the items there."""
+        demos = list_demos(self.settings.value("demos", ""))
+        for name in [n for n in self.demo_items if n not in demos]:
+            item = self.demo_items.pop(name)
+            self.demos.takeTopLevelItem(self.demos.indexOfTopLevelItem(item))
+        self.demos.setSortingEnabled(False)
+        for name, path in demos.items():
+            item = self.demo_items.get(name)
+            if item is None:
+                try:
+                    mtime = int(os.path.getmtime(path))
+                except OSError:
+                    mtime = 0
+                date = QDateTime.fromSecsSinceEpoch(mtime).toString("yyyy-MM-dd hh:mm")
+                item = self.demo_items[name] = SortItem([date, "", "", "", name])
+                self.demos.addTopLevelItem(item)
+            summary = self.library.demos.get(name)
+            if summary and item.data(1, Qt.UserRole) != summary["duration"]:
+                item.setText(1, clock(summary["duration"]))
+                item.setData(1, Qt.UserRole, summary["duration"])
+                item.setText(3, ", ".join(m.rsplit("/", 1)[-1] for m in summary["maps"]))
+                players = sorted(summary["players"].values(), key=lambda p: (-p[1], p[0].lower()))
+                tip = (f"<b>{html.escape(', '.join(summary['maps']))}</b> — {clock(summary['duration'])}<br>"
+                       + html.escape(", ".join(f"{n} ({k})" for n, k in players)))
+                for column in range(5):
+                    item.setToolTip(column, tip)
+        self.demos.setSortingEnabled(True)
+        self.filter_demos()
+
+    def filter_demos(self):
+        """Shows the demos where each word is in the name, a map or a
+        player's name, and the players found."""
+        words = [w for w in (clean_name(w) for w in self.filter.text().split()) if w]
+        found_any = False
+        for name, item in self.demo_items.items():
+            summary = self.library.demos.get(name) or {}
+            players = summary.get("players", {})
+            maps = " ".join(summary.get("maps", [])).lower()
+            found, shown = {}, True
+            for word in words:
+                if word in name.lower() or word in maps:
+                    continue
+                hits = [key for key in players if word in key]
+                if not hits:
+                    shown = False
+                    break
+                found.update((key, players[key]) for key in hits)
+            item.setHidden(not shown)
+            best = sorted(found.values(), key=lambda p: (-p[1], p[0].lower()))
+            item.setText(2, ", ".join(f"{n} ({k})" for n, k in best))
+            item.setData(2, Qt.UserRole, best[0][0] if best else None)
+            found_any |= shown and bool(best)
+        self.demos.setColumnHidden(2, not found_any)
+        self.fit_columns(self.demos)
+
+    def library_changed(self):
+        self.fill_demos()
+        progress = self.library.progress()
+        self.indexing.setText(f"Indexing demos: {progress[0]} of {progress[1]}" if progress else "")
 
     def play_demo(self, name):
         self.pending_demo = name
+        # found by a player's name: that player's kills
+        item = self.demo_items.get(name)
+        self.wanted_player = item.data(2, Qt.UserRole) if item and not self.demos.isColumnHidden(2) else None
         if self.game.running():
             self.game.send("demo " + quoted(name))
         else:
@@ -876,6 +1123,10 @@ class Window(QMainWindow):
         for name in sorted(names, key=str.lower):
             self.player.addItem(name, name)
         found = self.player.findData(current)
+        if self.wanted_player:
+            found = next((i for i in range(1, self.player.count())
+                          if same_player(self.player.itemData(i), self.wanted_player)), found)
+            self.wanted_player = None
         self.player.setCurrentIndex(max(0, found))
         self.player.blockSignals(False)
 
@@ -961,6 +1212,7 @@ class Window(QMainWindow):
 
     def closeEvent(self, event):
         self.poller.stop()
+        self.library.stop()
         if self.recording:
             self.recording.cancel()
         self.game.stop()
