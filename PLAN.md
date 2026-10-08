@@ -50,7 +50,8 @@ argument): the demo and its sound stop and go on from the same time, and
 seeking keeps it paused. No more snapshots dropped when the recorder's
 connection lagged, and no "connection interrupted" icon in demos. Step 2: the
 demo index. Step 3: kill, round and player navigation. Step 4: the app,
-`replay/mohreplay.py`. Step 5, engine: `demovideo`, MP4 with sound.
+`replay/mohreplay.py`. Step 5: `demovideo`, MP4 with sound, and the app's
+Record… button.
 
 ## Steps, in order
 
@@ -133,7 +134,11 @@ demo index. Step 3: kill, round and player navigation. Step 4: the app,
    1/`cl_aviFrameRate` s (they were rounded up, 2% fast at 60), seeks and
    pauses aren't recorded, and a write error (FFmpeg missing or quitting)
    stops the recording instead of the demo. 30 s at 960x540 and 60 fps take
-   about 10 s to record. Settings in the app:
+   about 10 s to record. App done too: Record… starts a second game
+   (offscreen on Linux, `s_loopback 1`, no frame cap, no VSync), sends it
+   `demoseek` + `demovideo` (or `demoonly` first), follows `recording` in
+   its `demostate.json` and moves the video to the chosen folder; 10 s at
+   1280x720 take about 17 s from the click. Its settings:
    - resolution: the game's window size (`r_mode -1`, `r_customwidth`,
      `r_customheight`), optionally drawn larger and scaled down;
    - frame rate: 60 (`cl_aviFrameRate 60`); the recorder steps the game 1/60 s

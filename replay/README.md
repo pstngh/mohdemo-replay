@@ -12,6 +12,16 @@ built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
 with `main/Pak0.pk3`) and the folder with the demos. Double-click a demo to
 play it, a kill or a round to jump to it.
 
+Record… makes an MP4 of the demo playing: a stretch of time, the kills
+(of the player chosen above) one after the other, or only while a player is
+watched. A second copy of the game records it in the background, without a
+window on Linux and faster than real time, while you keep watching; the
+video lands in the folder chosen, named from a pattern (`{demo}`, `{start}`,
+`{player}`, `{date}`). Size, frames per second, quality, codec (H.264,
+H.265 or the graphics card's H.264 encoder: VAAPI on Linux, VideoToolbox on
+macOS), sound and its bitrate are settings, and the Advanced box takes
+FFmpeg output options instead. It needs FFmpeg.
+
 The app starts the game with a throwaway home folder, sends it console
 commands through its pipe (`com_pipefile`) and shows what the game reports
 in `demoindex.json` and `demostate.json` (`cl_demoFiles 1`). On Linux it

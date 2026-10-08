@@ -18,12 +18,12 @@ import shutil
 import sys
 import tempfile
 
-from PySide6.QtCore import QDateTime, QElapsedTimer, QProcess, QProcessEnvironment, QSettings, Qt, QTimer
+from PySide6.QtCore import QDateTime, QElapsedTimer, QObject, QProcess, QProcessEnvironment, QSettings, Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QSlider, QSplitter, QStyle, QTabWidget, QToolButton, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QProgressDialog, QPushButton, QRadioButton, QSlider, QSplitter, QStyle, QTabWidget,
+    QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 PIPE = "replay_pipe"
@@ -40,6 +40,14 @@ BINDS = {
     "PGDN": "demoprevround",
 }
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MACOS = sys.platform == "darwin"
+# FFmpeg's video options, {crf} from the quality slider
+CODECS = {
+    "H.264": "-c:v libx264 -preset medium -crf {crf} -pix_fmt yuv420p",
+    "H.265": "-c:v libx265 -preset medium -crf {crf} -pix_fmt yuv420p -tag:v hvc1",
+    "Hardware H.264": ("-c:v h264_videotoolbox -q:v {quality}" if MACOS else
+                       "-vaapi_device /dev/dri/renderD128 -vf format=nv12,hwupload -c:v h264_vaapi -qp {crf}"),
+}
 
 
 def clock(msec):
@@ -55,16 +63,41 @@ def quoted(name):
     return '"' + name.replace('"', "'") + '"'
 
 
-def plain(name):
-    """A name without its ^ color codes, as the game shows it."""
-    out, i = [], 0
-    while i < len(name):
-        if name[i] == "^" and i + 1 < len(name) and name[i + 1] != "^":
-            i += 2
-            continue
-        out.append(name[i])
-        i += 1
-    return "".join(out)
+def parse_clock(text):
+    """msec from "90", "1:30" or "1:30.5", None if it isn't a time."""
+    try:
+        parts = [float(p) for p in text.strip().split(":")]
+    except ValueError:
+        return None
+    if not 1 <= len(parts) <= 3 or any(p < 0 for p in parts):
+        return None
+    total = 0
+    for part in parts:
+        total = total * 60 + part
+    return int(total * 1000)
+
+
+def find_ffmpeg():
+    for path in (shutil.which("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if path and os.path.isfile(path):
+            return path
+    return "ffmpeg"
+
+
+def same_player(a, b):
+    """The engine's rule for names: without ^ and a letter or digit, only
+    printable ASCII, any case (Q_CleanStr)."""
+    def clean(name):
+        out, i = [], 0
+        while i < len(name):
+            if name[i] == "^" and i + 1 < len(name) and name[i + 1].isascii() and name[i + 1].isalnum():
+                i += 2
+                continue
+            if " " <= name[i] <= "~":
+                out.append(name[i])
+            i += 1
+        return "".join(out).lower()
+    return clean(a) == clean(b)
 
 
 class Game:
@@ -84,7 +117,7 @@ class Game:
     def running(self):
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
-    def start(self, exe, game, demos, width, height):
+    def start(self, exe, game, demos, width, height, extra=(), driver=None):
         self.cleanup()
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
         main = os.path.join(self.home, "main")
@@ -98,9 +131,9 @@ class Game:
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "60",
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
-                     "+set", "cl_skipintro", "1", "+exec", "replay.cfg"]
+                     "+set", "cl_skipintro", "1", "+exec", "replay.cfg", *extra]
         # Wayland first, then XWayland if it doesn't start
-        self.driver = os.environ.get("SDL_VIDEODRIVER") or ("wayland" if sys.platform.startswith("linux") else "")
+        self.driver = driver or os.environ.get("SDL_VIDEODRIVER") or ("wayland" if sys.platform.startswith("linux") else "")
         self.launch()
 
     def launch(self):
@@ -131,7 +164,7 @@ class Game:
 
     def finished(self):
         quick = self.started.elapsed() < 5000
-        if quick and self.driver == "wayland" and not os.environ.get("SDL_VIDEODRIVER"):
+        if quick and self.driver == "wayland" and not os.environ.get("SDL_VIDEODRIVER") and self.process.exitCode():
             self.on_output("The game didn't start on Wayland, trying XWayland")
             self.driver = "x11"
             self.launch()
@@ -242,6 +275,249 @@ class SettingsDialog(QDialog):
         super().accept()
 
 
+class RecordDialog(QDialog):
+    """What to record and how, kept in the settings."""
+
+    def __init__(self, settings, time, player, kills, watched, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Record a video")
+        self.settings = settings
+        self.player = player
+        form = QFormLayout(self)
+
+        self.range = QRadioButton("From")
+        self.start = QLineEdit(clock(time))
+        self.end = QLineEdit(clock(time + 30000))
+        row = QHBoxLayout()
+        for widget in (self.range, self.start, QLabel("to"), self.end):
+            row.addWidget(widget)
+        self.kills = QRadioButton(f"The {kills} kills" + (" by " + player if player else ""))
+        self.kills.setEnabled(kills > 0)
+        self.watched = QRadioButton("While " + player + " is watched" if player else "While a player is watched")
+        self.watched.setEnabled(bool(player) and watched)
+        group = QButtonGroup(self)
+        for button in (self.range, self.kills, self.watched):
+            group.addButton(button)
+        self.range.setChecked(True)
+        what = QVBoxLayout()
+        what.addLayout(row)
+        what.addWidget(self.kills)
+        what.addWidget(self.watched)
+        form.addRow("Record", what)
+
+        self.folder = QLineEdit(settings.value("rec/folder", os.path.expanduser("~/Videos")))
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self.browse)
+        row = QHBoxLayout()
+        row.addWidget(self.folder)
+        row.addWidget(browse)
+        form.addRow("Folder", row)
+        self.pattern = QLineEdit(settings.value("rec/pattern", "{demo} {start}"))
+        self.pattern.setToolTip("{demo}, {start}, {player} and {date} are replaced")
+        form.addRow("File name", self.pattern)
+
+        self.size = QComboBox()
+        self.size.addItems(["1280x720", "1920x1080", "2560x1440", "3840x2160"])
+        self.size.setEditable(True)
+        self.size.setCurrentText(settings.value("rec/size", "1920x1080"))
+        form.addRow("Size", self.size)
+        self.fps = QComboBox()
+        self.fps.addItems(["30", "60", "120"])
+        self.fps.setCurrentText(settings.value("rec/fps", "60"))
+        form.addRow("Frames per second", self.fps)
+        self.quality = QSlider(Qt.Horizontal)
+        self.quality.setRange(14, 32)
+        self.quality.setInvertedAppearance(True)
+        self.quality.setValue(int(settings.value("rec/crf", 20)))
+        quality_label = QLabel()
+        self.quality.valueChanged.connect(lambda v: quality_label.setText(f"CRF {v}"))
+        self.quality.valueChanged.emit(self.quality.value())
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Smaller"))
+        row.addWidget(self.quality, 1)
+        row.addWidget(QLabel("Better"))
+        row.addWidget(quality_label)
+        form.addRow("Quality", row)
+        self.codec = QComboBox()
+        self.codec.addItems(list(CODECS))
+        self.codec.setCurrentText(settings.value("rec/codec", "H.264"))
+        form.addRow("Codec", self.codec)
+        self.sound = QCheckBox("Sound")
+        self.sound.setChecked(settings.value("rec/sound", "true") == "true")
+        self.bitrate = QComboBox()
+        self.bitrate.addItems(["128k", "192k", "256k", "320k"])
+        self.bitrate.setCurrentText(settings.value("rec/bitrate", "192k"))
+        self.sound.toggled.connect(self.bitrate.setEnabled)
+        self.bitrate.setEnabled(self.sound.isChecked())
+        row = QHBoxLayout()
+        row.addWidget(self.sound)
+        row.addWidget(self.bitrate, 1)
+        form.addRow("Audio", row)
+        self.advanced = QLineEdit(settings.value("rec/advanced", ""))
+        self.advanced.setPlaceholderText("FFmpeg output options, instead of the ones above")
+        form.addRow("Advanced", self.advanced)
+        self.ffmpeg = QLineEdit(settings.value("rec/ffmpeg", "") or find_ffmpeg())
+        form.addRow("FFmpeg", self.ffmpeg)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.addButton("Record", QDialogButtonBox.AcceptRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def browse(self):
+        path = QFileDialog.getExistingDirectory(self, "Choose a folder", self.folder.text())
+        if path:
+            self.folder.setText(path)
+
+    def accept(self):
+        if self.range.isChecked():
+            start, end = parse_clock(self.start.text()), parse_clock(self.end.text())
+            if start is None or end is None or end <= start:
+                QMessageBox.warning(self, "Record a video", "The start and end times aren't right.")
+                return
+        try:
+            width, height = (int(v) for v in self.size.currentText().lower().split("x"))
+        except ValueError:
+            QMessageBox.warning(self, "Record a video", "The size should be like 1920x1080.")
+            return
+        for key, value in (("folder", self.folder.text()), ("pattern", self.pattern.text()),
+                           ("size", f"{width}x{height}"), ("fps", self.fps.currentText()),
+                           ("crf", self.quality.value()), ("codec", self.codec.currentText()),
+                           ("sound", "true" if self.sound.isChecked() else "false"),
+                           ("bitrate", self.bitrate.currentText()), ("advanced", self.advanced.text().strip()),
+                           ("ffmpeg", self.ffmpeg.text().strip())):
+            self.settings.setValue("rec/" + key, value)
+        super().accept()
+
+    def job(self, demo):
+        """What the recorder does, from the settings."""
+        crf = self.quality.value()
+        options = self.advanced.text().strip() or " ".join([
+            CODECS[self.codec.currentText()].format(crf=crf, quality=max(1, min(100, 120 - 3 * crf))),
+            f"-c:a aac -b:a {self.bitrate.currentText()}" if self.sound.isChecked() else "-an",
+            "-movflags +faststart"])
+        width, height = (int(v) for v in self.size.currentText().lower().split("x"))
+        if self.range.isChecked():
+            start, end = parse_clock(self.start.text()), parse_clock(self.end.text())
+            commands = [f"demoseek {seconds(start)}", f"demovideo replay {seconds(end)}"]
+        else:
+            start, end = 0, None
+            only = f"kills {quoted(self.player)}" if self.kills.isChecked() and self.player else (
+                "kills" if self.kills.isChecked() else f"watched {quoted(self.player)}")
+            commands = ["demoseek 0", "demoonly " + only, "demovideo replay"]
+        try:
+            name = self.pattern.text().format_map({
+                "demo": demo, "start": clock(start).replace(":", "-"), "player": self.player or "",
+                "date": QDateTime.currentDateTime().toString("yyyy-MM-dd hh-mm")})
+        except (KeyError, ValueError, IndexError):
+            name = demo
+        name = "".join(c for c in name if c not in '/\\:*?"<>|').strip() or demo
+        return {"options": options, "width": width, "height": height, "fps": self.fps.currentText(),
+                "sound": self.sound.isChecked(), "ffmpeg": self.ffmpeg.text().strip() or "ffmpeg",
+                "commands": commands, "start": start, "end": end,
+                "output": os.path.join(self.folder.text(), name + ".mp4")}
+
+
+class Recording(QObject):
+    """A video recorded by a second game, offscreen, rendering the sound."""
+
+    def __init__(self, window, demo, job):
+        super().__init__(window)
+        self.window = window
+        self.demo = demo
+        self.job = job
+        self.phase = "loading"
+        self.error = ""
+        self.game = Game(self.output, self.exited)
+        self.clock = QElapsedTimer()
+        self.timer = QTimer(self, interval=200, timeout=self.poll)
+        self.progress = QProgressDialog("Starting the recorder…", "Cancel", 0, 0, window)
+        self.progress.setWindowTitle("Recording")
+        self.progress.setMinimumDuration(0)
+        self.progress.canceled.connect(self.cancel)
+
+    def start(self):
+        settings = self.window.settings
+        job = self.job
+        extra = ["+set", "s_loopback", "1" if job["sound"] else "0", "+set", "s_khz", "44",
+                 "+set", "s_volume", "1", "+set", "cl_aviFrameRate", job["fps"],
+                 "+set", "cl_aviFFmpeg", job["ffmpeg"], "+set", "cl_aviPipeFormat", job["options"],
+                 "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0"]
+        # offscreen where SDL can, the recorder doesn't need a window
+        driver = "offscreen" if sys.platform.startswith("linux") else None
+        self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
+                        job["width"], job["height"], extra, driver)
+        self.game.send("demo " + quoted(self.demo))
+        self.clock.start()
+        self.timer.start()
+
+    def output(self, line):
+        if line.startswith("ERROR:") or "Couldn't write" in line or "Couldn't run" in line:
+            self.error = line
+
+    def poll(self):
+        state = self.game.read_json("demostate.json") or {}
+        if self.phase == "loading":
+            if state.get("demo") and state.get("time", 0) > 0 and not state.get("seeking"):
+                for command in self.job["commands"]:
+                    self.game.send(command)
+                self.phase = "starting"
+            elif self.clock.elapsed() > 120000:
+                self.finish("The recorder didn't load the demo. " + self.error)
+        elif self.phase == "starting":
+            if state.get("recording"):
+                self.phase = "recording"
+            elif self.clock.elapsed() > 180000 or self.error:
+                self.finish("The recording didn't start. " + self.error)
+        elif self.phase == "recording":
+            start, end, time = self.job["start"], self.job["end"], state.get("time", 0)
+            if end:
+                self.progress.setMaximum(100)
+                self.progress.setValue(max(0, min(99, (time - start) * 100 // max(1, end - start))))
+            self.progress.setLabelText(f"Recording {clock(time)}…")
+            if not state.get("recording"):
+                self.finish()
+
+    def finish(self, error=""):
+        self.timer.stop()
+        made = os.path.join(self.game.home or "", "main", "videos", "replay.mp4")
+        log = made + ".log"
+        if not error and not os.path.isfile(made):
+            error = "FFmpeg didn't write the video."
+        if error and os.path.isfile(log):
+            with open(log, errors="replace") as f:
+                error += "\n" + f.read()[-1500:]
+        output = self.job["output"]
+        if not error:
+            os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+            base, number = output[:-4], 2
+            while os.path.exists(output):
+                output = f"{base} ({number}).mp4"
+                number += 1
+            shutil.move(made, output)
+        self.phase = "done"
+        self.progress.close()
+        self.game.stop()
+        if error:
+            QMessageBox.warning(self.window, "Recording", error.strip())
+        else:
+            self.window.statusBar().showMessage("Recorded " + output)
+        self.window.recording = None
+
+    def cancel(self):
+        if self.phase != "done":
+            self.phase = "done"
+            self.timer.stop()
+            self.game.stop()
+            self.window.statusBar().showMessage("Recording canceled")
+            self.window.recording = None
+
+    def exited(self):
+        if self.phase not in ("done",):
+            self.finish("The recorder quit. " + self.error)
+
+
 class Window(QMainWindow):
     def __init__(self, settings):
         super().__init__()
@@ -251,6 +527,7 @@ class Window(QMainWindow):
         self.index = None
         self.pending_demo = None
         self.seeking_slider = False
+        self.recording = None
 
         self.setWindowTitle("MoH Demo Replay")
         self.resize(1000, 640)
@@ -334,6 +611,10 @@ class Window(QMainWindow):
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.time)
         controls.addWidget(self.speed)
+        record = QPushButton("Record…")
+        record.setToolTip("Record a video of this demo")
+        record.clicked.connect(self.record)
+        controls.addWidget(record)
 
         central = QWidget()
         box = QVBoxLayout(central)
@@ -457,9 +738,9 @@ class Window(QMainWindow):
             self.time.setText(f"{clock(time)} / {clock(duration)}")
         only = self.state.get("only")
         if only == "kills":
-            mode = "only the kills" + (" by " + plain(self.state["player"]) if self.state.get("player") else "")
+            mode = "only the kills" + (" by " + self.state["player"] if self.state.get("player") else "")
         elif only == "watched":
-            mode = "only while " + plain(self.state.get("player", "")) + " is watched"
+            mode = "only while " + self.state.get("player", "") + " is watched"
         else:
             mode = ""
         if not demo:
@@ -470,7 +751,7 @@ class Window(QMainWindow):
         elif self.index:
             maps = ", ".join(m["map"] for m in self.index["maps"])
             text = f"<b>{html.escape(demo)}</b> — {html.escape(maps)}, {clock(duration)}"
-            recorder = plain(self.index["recorder"]["name"])
+            recorder = self.index["recorder"]["name"]
             text += f", recorded by {html.escape(recorder)}" if recorder else ""
             text += " (truncated)" if self.index.get("truncated") else ""
             text += f"<br>Playing {html.escape(mode)}" if mode else ""
@@ -486,8 +767,8 @@ class Window(QMainWindow):
         self.player.blockSignals(True)
         self.player.clear()
         self.player.addItem("All players", "")
-        for name in sorted(names, key=lambda n: plain(n).lower()):
-            self.player.addItem(plain(name), name)
+        for name in sorted(names, key=str.lower):
+            self.player.addItem(name, name)
         found = self.player.findData(current)
         self.player.setCurrentIndex(max(0, found))
         self.player.blockSignals(False)
@@ -507,11 +788,9 @@ class Window(QMainWindow):
         player = self.player.currentData() or ""
         self.kills.clear()
         for kill in (self.index or {}).get("kills", []):
-            if player and plain(player).lower() != plain(kill["killerName"]).lower():
+            if player and not same_player(player, kill["killerName"]):
                 continue
-            killer = plain(kill["killerName"]) if kill["killerName"] else ""
-            victim = plain(kill["victimName"])
-            how = plain(kill["text"])
+            killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
             item.setData(0, Qt.UserRole, kill["time"] - KILL_BEFORE)
             self.kills.addTopLevelItem(item)
@@ -536,8 +815,27 @@ class Window(QMainWindow):
             return
         self.game.send("demoonly watched " + quoted(player))
 
+    def record(self):
+        demo = self.state.get("demo")
+        if not demo:
+            QMessageBox.information(self, "Record a video", "Play a demo first.")
+            return
+        if self.recording:
+            QMessageBox.information(self, "Record a video", "A video is already being recorded.")
+            return
+        player = self.player.currentData() or ""
+        index = self.index or {}
+        kills = sum(1 for k in index.get("kills", []) if not player or same_player(k["killerName"], player))
+        watched = any(same_player(w["name"], player) for w in index.get("watched", [])) if player else False
+        dialog = RecordDialog(self.settings, self.state.get("time", 0), player, kills, watched, self)
+        if dialog.exec():
+            self.recording = Recording(self, demo, dialog.job(demo))
+            self.recording.start()
+
     def closeEvent(self, event):
         self.poller.stop()
+        if self.recording:
+            self.recording.cancel()
         self.game.stop()
         super().closeEvent(event)
 
