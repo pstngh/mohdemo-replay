@@ -1,0 +1,23 @@
+name: "macOS Build"
+
+# "Builds" builds every platform for other branches, not for main: this
+# makes sure main still builds on macOS, where the replay app runs too.
+on:
+  push:
+    branches:
+      - 'main'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: macOS
+    uses: ./.github/workflows/shared-build-macos.yml
+    with:
+      environment: 'testing'
