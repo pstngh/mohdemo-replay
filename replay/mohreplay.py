@@ -455,7 +455,7 @@ class Recording(QObject):
 
     def output(self, line):
         if line.startswith("ERROR:") or "Couldn't write" in line or "Couldn't run" in line:
-            self.error = line
+            self.error = line.replace("^1", "")
 
     def poll(self):
         # looked at first: the game says it records before FFmpeg makes the
@@ -493,6 +493,9 @@ class Recording(QObject):
         self.timer.stop()
         made = self.made()
         log = made + ".log"
+        if not error and self.error:
+            # FFmpeg quit midway: what it wrote isn't the whole video
+            error = "The recording stopped. " + self.error
         if not error and not os.path.isfile(made):
             error = "FFmpeg didn't write the video."
         if error and os.path.isfile(log):
