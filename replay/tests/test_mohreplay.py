@@ -408,7 +408,7 @@ class TestWindow(FakeGameCase):
         self.assertTrue(wait_until(lambda: "timescale 2" in self.commands(window.game)))
 
     def shown(self, window):
-        return sorted(window.demos.topLevelItem(i).text(4) for i in range(window.demos.topLevelItemCount())
+        return sorted(window.demos.topLevelItem(i).text(mohreplay.COL_DEMO) for i in range(window.demos.topLevelItemCount())
                       if not window.demos.topLevelItem(i).isHidden())
 
     def test_filter_demos(self):
@@ -438,7 +438,7 @@ class TestLibrary(FakeGameCase):
     def setUp(self):
         super().setUp()
         other = json.loads(json.dumps(DEMO))
-        other["maps"] = [{"time": 0, "map": "dm/mohdm6"}]
+        other["maps"] = [{"time": 0, "map": "dm/mohdm6", "rules": "realism", "realismTicks": 900, "defaultTicks": 0}]
         other["duration"] = 61000
         for kill in other["kills"]:
             kill["killerName"] = kill["killerName"].replace("t-", "<KoS>Bob")
@@ -464,16 +464,19 @@ class TestLibrary(FakeGameCase):
     def test_index_and_cache(self):
         window = self.window()
         self.indexed(window)
-        self.assertEqual(window.demo_items["first"].text(1), "10:00")
-        self.assertEqual(window.demo_items["other"].text(1), "1:01")
-        self.assertEqual(window.demo_items["broken"].text(1), "")
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_LENGTH), "10:00")
+        self.assertEqual(window.demo_items["other"].text(mohreplay.COL_LENGTH), "1:01")
+        self.assertEqual(window.demo_items["broken"].text(mohreplay.COL_LENGTH), "")
         self.assertIn("broken", window.library.failed)
         summary = window.library.demos["first"]
         self.assertEqual(summary["maps"], ["obj/obj_team1"])
         self.assertEqual(summary["players"]["t-"], ["t-", 4, 1])
         self.assertEqual(summary["players"]["phil"], ["^1Phil", 1, 0])
-        self.assertIn("&lt;KoS&gt;Bob (4, 1 multi)", window.demo_items["other"].toolTip(4))
-        self.assertEqual(window.demo_items["first"].text(3), "obj_team1")
+        self.assertIn("&lt;KoS&gt;Bob (4, 1 multi)", window.demo_items["other"].toolTip(mohreplay.COL_DEMO))
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_MAP), "obj_team1")
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_RULES), "")
+        self.assertEqual(window.demo_items["other"].text(mohreplay.COL_RULES), "Realism")
+        self.assertIn("1:01, realism", window.demo_items["other"].toolTip(mohreplay.COL_DEMO))
         self.assertEqual(window.indexing.text(), "")
         cache = window.library.cache
         self.assertTrue(cache.startswith(os.path.join(self.tmp, "cache")))
@@ -495,7 +498,7 @@ class TestLibrary(FakeGameCase):
         os.utime(os.path.join(self.demos, "first.dm3"), (future, future))
         window.library.rescan()
         self.assertTrue(wait_until(lambda: window.library.demos["first"]["duration"] == 125000, 20))
-        self.assertTrue(wait_until(lambda: window.demo_items["first"].text(1) == "2:05"))
+        self.assertTrue(wait_until(lambda: window.demo_items["first"].text(mohreplay.COL_LENGTH) == "2:05"))
 
     def test_new_and_removed_demos(self):
         window = self.window()
@@ -503,7 +506,7 @@ class TestLibrary(FakeGameCase):
         self.add_demo("new", DEMO)
         os.remove(os.path.join(self.demos, "other.dm3"))
         # the folder is watched
-        self.assertTrue(wait_until(lambda: "new" in window.demo_items and window.demo_items["new"].text(1), 20))
+        self.assertTrue(wait_until(lambda: "new" in window.demo_items and window.demo_items["new"].text(mohreplay.COL_LENGTH), 20))
         self.assertNotIn("other", window.demo_items)
         self.assertNotIn("other", window.library.demos)
         self.assertFalse(os.path.exists(os.path.join(window.library.cache, "other.json")))
@@ -519,21 +522,55 @@ class TestLibrary(FakeGameCase):
     def test_filter_by_player(self):
         window = self.window()
         self.indexed(window)
-        self.assertTrue(window.demos.isColumnHidden(2))
+        self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
         window.filter.setText("PHIL")
         self.assertEqual(self.shown(window), ["first", "other"])
-        self.assertFalse(window.demos.isColumnHidden(2))
-        self.assertEqual(window.demo_items["first"].text(2), "^1Phil (1)")
+        self.assertFalse(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_PLAYER), "^1Phil (1)")
         window.filter.setText("kos")
         self.assertEqual(self.shown(window), ["other"])
-        self.assertEqual(window.demo_items["other"].text(2), "<KoS>Bob (4, 1 multi)")
+        self.assertEqual(window.demo_items["other"].text(mohreplay.COL_PLAYER), "<KoS>Bob (4, 1 multi)")
         window.filter.setText("mohdm6 bob")
         self.assertEqual(self.shown(window), ["other"])
         window.filter.setText("obj_team1")
         self.assertEqual(self.shown(window), ["first"])
-        self.assertTrue(window.demos.isColumnHidden(2))
+        self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
         window.filter.setText("nobody")
         self.assertEqual(self.shown(window), [])
+
+    def test_filter_by_rules(self):
+        mixed = json.loads(json.dumps(DEMO))
+        mixed["maps"] = [{"time": 0, "map": "obj/obj_team1", "rules": "default"},
+                         {"time": 300000, "map": "obj/obj_team2", "rules": "realism"},
+                         {"time": 590000, "map": "obj/obj_team4", "rules": ""}]
+        self.add_demo("mixed", mixed)
+        window = self.window()
+        self.indexed(window, ("first", "other", "mixed"))
+        self.assertEqual(window.demo_items["mixed"].text(mohreplay.COL_RULES), "Both")
+        self.assertEqual(self.shown(window), ["broken", "first", "mixed", "other"])
+        window.rules.setCurrentIndex(window.rules.findData("realism"))
+        self.assertEqual(self.shown(window), ["mixed", "other"])
+        window.filter.setText("kos")
+        self.assertEqual(self.shown(window), ["other"])
+        window.filter.setText("")
+        window.rules.setCurrentIndex(window.rules.findData("default"))
+        self.assertEqual(self.shown(window), ["mixed"])
+        # kept for next time
+        self.assertEqual(self.settings.value("rules"), "default")
+        again = self.window()
+        self.assertEqual(again.rules.currentData(), "default")
+
+    def test_rules_of_the_demo_playing(self):
+        realism = json.loads(json.dumps(DEMO))
+        realism["maps"] = [{"time": 0, "map": "obj/obj_team1", "rules": "realism"}]
+        self.add_demo("first", realism)
+        window = self.window()
+        self.playing(window)
+        self.assertIn("obj/obj_team1 (realism)", window.info.text())
+
+    def test_old_indexes(self):
+        # indexes made before the rules were: no rules, as unknown
+        self.assertEqual(mohreplay.summarize(DEMO)["rules"], "")
 
     def test_play_from_a_player_search(self):
         window = self.window()
@@ -546,8 +583,8 @@ class TestLibrary(FakeGameCase):
     def test_sort_by_length(self):
         window = self.window()
         self.indexed(window)
-        window.demos.sortByColumn(1, Qt.AscendingOrder)
-        order = [window.demos.topLevelItem(i).text(4) for i in range(3)]
+        window.demos.sortByColumn(mohreplay.COL_LENGTH, Qt.AscendingOrder)
+        order = [window.demos.topLevelItem(i).text(mohreplay.COL_DEMO) for i in range(3)]
         self.assertEqual(order, ["broken", "other", "first"])
 
 

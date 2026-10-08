@@ -14,9 +14,11 @@ player names are made up.*
 
 ## What it does
 
-- **Find demos.** The list shows each demo's date, length and levels. The
-  filter matches demo names, levels and players: type a name to see every
-  demo that player is in, with their kills and multi-kills.
+- **Find demos.** The list shows each demo's date, length, levels and
+  rules: default or realism servers, told apart by how fast the recorder
+  runs with each weapon. Show only default or realism demos, and filter by
+  demo name, level or player: type a name to see every demo that player is
+  in, with their kills and multi-kills.
 - **Move around a demo.** Its kills, multi-kills and rounds are listed and
   marked on the time slider. A click jumps there, 4 seconds before a kill.
   Pause, skip 10 seconds, go to the next or previous kill or round, play

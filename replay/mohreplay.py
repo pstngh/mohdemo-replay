@@ -38,6 +38,12 @@ PIPE = "replay_pipe"
 KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
 KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
 MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
+# the demo list's columns
+DEMO_COLUMNS = ["Date", "Length", "Rules", "Player", "Map", "Demo"]
+COL_DATE, COL_LENGTH, COL_RULES, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_COLUMNS))
+# the rules of a demo's levels, from mohdemoindex: realism servers change
+# the speeds and the damage of weapons
+RULES = {"default": "Default", "realism": "Realism", "both": "Both"}
 SPEEDS = ["0.25", "0.5", "1", "2", "4"]
 # keys above 127 only: the others stop a demo
 BINDS = {
@@ -178,8 +184,11 @@ def summarize(index):
         add(kill["victimName"])
     for chain in multi_kills(index.get("kills", [])):
         players[clean_name(chain[0]["killerName"])][2] += 1
+    # "realism" or "default" when its levels tell one, "both", or ""
+    kinds = {m.get("rules") for m in index.get("maps", [])} & {"realism", "default"}
+    rules = "both" if len(kinds) == 2 else kinds.pop() if kinds else ""
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
-            "players": players}
+            "players": players, "rules": rules}
 
 
 class Library(QObject):
@@ -978,15 +987,25 @@ class Window(QMainWindow):
         self.filter = QLineEdit(placeholderText="Filter demos by name, map or player")
         self.filter.setClearButtonEnabled(True)
         self.filter.textChanged.connect(self.filter_demos)
-        self.demos = self.make_list(["Date", "Length", "Player", "Map", "Demo"], fit=False)
+        self.rules = QComboBox()
+        self.rules.addItem("All demos", "")
+        self.rules.addItem("Default", "default")
+        self.rules.addItem("Realism", "realism")
+        self.rules.setToolTip("Default or realism servers, told by the speeds of the recorder's weapons")
+        self.rules.setCurrentIndex(max(0, self.rules.findData(settings.value("rules", ""))))
+        self.rules.currentIndexChanged.connect(self.rules_changed)
+        self.demos = self.make_list(DEMO_COLUMNS, fit=False)
         self.demos.setSortingEnabled(True)
-        self.demos.sortByColumn(0, Qt.DescendingOrder)
-        self.demos.itemActivated.connect(lambda item: self.play_demo(item.text(4)))
+        self.demos.sortByColumn(COL_DATE, Qt.DescendingOrder)
+        self.demos.itemActivated.connect(lambda item: self.play_demo(item.text(COL_DEMO)))
         self.add_menu(self.demos, "Record the demos selected…", self.record_demos)
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
-        box.addWidget(self.filter)
+        row = QHBoxLayout()
+        row.addWidget(self.filter, 1)
+        row.addWidget(self.rules)
+        box.addLayout(row)
         box.addWidget(self.demos)
 
         # what's in the demo
@@ -1198,32 +1217,42 @@ class Window(QMainWindow):
                 except OSError:
                     mtime = 0
                 date = QDateTime.fromSecsSinceEpoch(mtime).toString("yyyy-MM-dd hh:mm")
-                item = self.demo_items[name] = SortItem([date, "", "", "", name])
+                item = self.demo_items[name] = SortItem([""] * len(DEMO_COLUMNS))
+                item.setText(COL_DATE, date)
+                item.setText(COL_DEMO, name)
                 self.demos.addTopLevelItem(item)
             summary = self.library.demos.get(name)
-            if summary and item.data(1, Qt.UserRole) != summary["duration"]:
-                item.setText(1, clock(summary["duration"]))
-                item.setData(1, Qt.UserRole, summary["duration"])
-                item.setText(3, ", ".join(m.rsplit("/", 1)[-1] for m in summary["maps"]))
+            if summary and item.data(COL_LENGTH, Qt.UserRole) != summary["duration"]:
+                item.setText(COL_LENGTH, clock(summary["duration"]))
+                item.setData(COL_LENGTH, Qt.UserRole, summary["duration"])
+                item.setText(COL_RULES, RULES.get(summary["rules"], ""))
+                item.setText(COL_MAP, ", ".join(m.rsplit("/", 1)[-1] for m in summary["maps"]))
                 players = sorted(summary["players"].values(), key=lambda p: (-p[1], p[0].lower()))
-                tip = (f"<b>{html.escape(', '.join(summary['maps']))}</b> — {clock(summary['duration'])}<br>"
+                rules = f", {RULES[summary['rules']].lower()}" if summary["rules"] else ""
+                tip = (f"<b>{html.escape(', '.join(summary['maps']))}</b> — {clock(summary['duration'])}{rules}<br>"
                        + html.escape(", ".join(player_kills(p) for p in players)))
-                for column in range(5):
+                for column in range(len(DEMO_COLUMNS)):
                     item.setToolTip(column, tip)
         self.demos.setSortingEnabled(True)
         self.filter_demos()
 
+    def rules_changed(self):
+        self.settings.setValue("rules", self.rules.currentData())
+        self.filter_demos()
+
     def filter_demos(self):
         """Shows the demos where each word is in the name, a map or a
-        player's name, and the players found."""
+        player's name, and the players found; only those of the rules
+        chosen, if any."""
         words = [w for w in (clean_name(w) for w in self.filter.text().split()) if w]
+        rules = self.rules.currentData()
         found_any = False
         for name, item in self.demo_items.items():
             summary = self.library.demos.get(name) or {}
             players = summary.get("players", {})
             maps = " ".join(summary.get("maps", [])).lower()
-            found, shown = {}, True
-            for word in words:
+            found, shown = {}, not rules or summary.get("rules") in (rules, "both")
+            for word in words if shown else ():
                 if word in name.lower() or word in maps:
                     continue
                 hits = [key for key in players if word in key]
@@ -1233,10 +1262,10 @@ class Window(QMainWindow):
                 found.update((key, players[key]) for key in hits)
             item.setHidden(not shown)
             best = sorted(found.values(), key=lambda p: (-p[1], p[0].lower()))
-            item.setText(2, ", ".join(player_kills(p) for p in best))
-            item.setData(2, Qt.UserRole, best[0][0] if best else None)
+            item.setText(COL_PLAYER, ", ".join(player_kills(p) for p in best))
+            item.setData(COL_PLAYER, Qt.UserRole, best[0][0] if best else None)
             found_any |= shown and bool(best)
-        self.demos.setColumnHidden(2, not found_any)
+        self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)
 
     def library_changed(self):
@@ -1248,7 +1277,8 @@ class Window(QMainWindow):
         self.pending_demo = name
         # found by a player's name: that player's kills
         item = self.demo_items.get(name)
-        self.wanted_player = item.data(2, Qt.UserRole) if item and not self.demos.isColumnHidden(2) else None
+        self.wanted_player = (item.data(COL_PLAYER, Qt.UserRole)
+                              if item and not self.demos.isColumnHidden(COL_PLAYER) else None)
         if self.game.running():
             self.game.send("demo " + quoted(name))
         else:
@@ -1297,7 +1327,8 @@ class Window(QMainWindow):
                 self.index = None
                 self.fill_index()
         elif self.index:
-            maps = ", ".join(m["map"] for m in self.index["maps"])
+            maps = ", ".join(m["map"] + (f" ({m['rules']})" if m.get("rules") in ("realism", "default") else "")
+                             for m in self.index["maps"])
             text = f"<b>{html.escape(demo)}</b> — {html.escape(maps)}, {clock(duration)}"
             recorder = self.index["recorder"]["name"]
             text += f", recorded by {html.escape(recorder)}" if recorder else ""
@@ -1467,14 +1498,14 @@ class Window(QMainWindow):
     def record_demos(self):
         """The demos selected, all of them or the kills or multi-kills of the
         player found by the filter, in one video or one each."""
-        names = [item.text(4) for item in self.demos.selectedItems() if not item.isHidden()]
+        names = [item.text(COL_DEMO) for item in self.demos.selectedItems() if not item.isHidden()]
         if not names:
             QMessageBox.information(self, "Record a video", "Select demos first.")
             return
         # the player found in each demo, the one with the most kills
         found = {}
-        if not self.demos.isColumnHidden(2):
-            found = {name: self.demo_items[name].data(2, Qt.UserRole) for name in names}
+        if not self.demos.isColumnHidden(COL_PLAYER):
+            found = {name: self.demo_items[name].data(COL_PLAYER, Qt.UserRole) for name in names}
         player = next((p for p in found.values() if p), "")
 
         def demos_with(column):

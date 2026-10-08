@@ -10,8 +10,10 @@ and PySide6.
 On the first run, Settings asks for the game program (found by itself when
 built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
 with `main/Pak0.pk3`) and the folder with the demos. The list shows each
-demo's length and levels, and the filter finds demos by name, level or
-player: for a player, it shows their kills in each demo, and playing one
+demo's length, levels and rules (default or realism servers, told by the
+recorder's speeds with each weapon; blank when they spectated or played
+too little), the menu next to the filter shows only default or realism
+demos, and the filter finds demos by name, level or player: for a player, it shows their kills in each demo, and playing one
 chooses them. For that, `mohdemoindex`, built next to the game, indexes the
 demos in the background the first time (about two minutes for 700), and the
 indexes are kept in `~/.cache/mohdemo-replay` (`~/Library/Caches` on macOS). Double-click a demo to
