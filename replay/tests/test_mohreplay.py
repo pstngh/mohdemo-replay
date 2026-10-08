@@ -185,6 +185,23 @@ class TestFunctions(unittest.TestCase):
         chains = mohreplay.multi_kills(kills)
         self.assertEqual([[k["time"] for k in chain] for chain in chains], [[0, 3000, 6000, 9000], [1000, 3900, 5000]])
 
+    def test_macos_bundle(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        app = os.path.join(tmp, "openmohaa.app")
+        os.makedirs(os.path.join(app, "Contents", "MacOS"))
+        exe = os.path.join(app, "Contents", "MacOS", "openmohaa")
+        open(exe, "w").close()
+        self.assertEqual(mohreplay.game_program(app), exe)
+        self.assertEqual(mohreplay.game_program(app + "/"), exe)
+        self.assertEqual(mohreplay.game_program(exe), exe)
+        # mohdemoindex is built next to the bundle
+        self.assertEqual(mohreplay.find_indexer(exe), os.path.join(app, "Contents", "MacOS", "mohdemoindex"))
+        open(os.path.join(tmp, "mohdemoindex"), "w").close()
+        self.assertEqual(mohreplay.find_indexer(exe), os.path.join(tmp, "mohdemoindex"))
+        plain = os.path.join(tmp, "openmohaa")
+        self.assertEqual(mohreplay.find_indexer(plain), os.path.join(tmp, "mohdemoindex"))
+
     def test_quoted(self):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 

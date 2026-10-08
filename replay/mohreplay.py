@@ -87,6 +87,23 @@ def parse_clock(text):
     return int(total * 1000)
 
 
+def game_program(path):
+    """The program in a macOS app bundle (openmohaa.app), or path."""
+    if path.rstrip("/").endswith(".app") and os.path.isdir(path):
+        name = os.path.basename(path.rstrip("/"))[:-4]
+        return os.path.join(path, "Contents", "MacOS", name)
+    return path
+
+
+def find_indexer(exe):
+    """mohdemoindex, built next to the game or to its app bundle."""
+    folders = [os.path.dirname(exe)]
+    if os.path.basename(os.path.dirname(os.path.dirname(exe))) == "Contents":
+        folders.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(exe)))))
+    return next((p for p in (os.path.join(f, "mohdemoindex") for f in folders) if os.path.isfile(p)),
+                os.path.join(folders[0], "mohdemoindex"))
+
+
 def find_ffmpeg():
     for path in (shutil.which("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
         if path and os.path.isfile(path):
@@ -195,7 +212,7 @@ class Library(QObject):
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
         self.folder = os.path.abspath(folder) if folder else None
-        self.tool = os.path.join(os.path.dirname(exe), "mohdemoindex") if exe else None
+        self.tool = find_indexer(exe) if exe else None
         if not self.folder or not os.path.isdir(self.folder):
             self.on_change()
             return
@@ -567,7 +584,8 @@ class SettingsDialog(QDialog):
 
     def accept(self):
         for key, edit in self.fields.items():
-            self.settings.setValue(key, edit.text().strip())
+            value = edit.text().strip()
+            self.settings.setValue(key, game_program(value) if key == "exe" else value)
         self.settings.setValue("size", self.size.currentText().strip())
         super().accept()
 
@@ -1594,8 +1612,10 @@ def main():
         if getattr(args, key):
             settings.setValue(key, os.path.abspath(getattr(args, key)))
     if not settings.value("exe"):
-        built = os.path.join(REPO, ".cmake", "RelWithDebInfo", "openmohaa")
-        settings.setValue("exe", built if os.path.isfile(built) else shutil.which("openmohaa") or "")
+        built = [os.path.join(REPO, ".cmake", "RelWithDebInfo", name)
+                 for name in ("openmohaa", os.path.join("openmohaa.app", "Contents", "MacOS", "openmohaa"))]
+        settings.setValue("exe", next((p for p in built if os.path.isfile(p)), shutil.which("openmohaa") or ""))
+    settings.setValue("exe", game_program(settings.value("exe")))
 
     window = Window(settings)
     window.show()

@@ -14,7 +14,7 @@ demo's length and levels, and the filter finds demos by name, level or
 player: for a player, it shows their kills in each demo, and playing one
 chooses them. For that, `mohdemoindex`, built next to the game, indexes the
 demos in the background the first time (about two minutes for 700), and the
-indexes are kept in `~/.cache/mohdemo-replay`. Double-click a demo to
+indexes are kept in `~/.cache/mohdemo-replay` (`~/Library/Caches` on macOS). Double-click a demo to
 play it, click a kill, a multi-kill or a round to jump to it. "Only these
 kills" plays the kills listed (by the player chosen), from the one selected
 or the first, and on the Multi-kills tab, the multi-kills: two kills or
@@ -38,6 +38,12 @@ folder chosen, named from a pattern (`{demo}`, `{start}`, `{player}`,
 H.265 or the graphics card's H.264 encoder: VAAPI on Linux, VideoToolbox on
 macOS), sound and its bitrate are settings, and the Advanced box takes
 FFmpeg output options instead. It needs FFmpeg.
+
+On macOS, the game program can be the `openmohaa.app` bundle, and
+`mohdemoindex` is looked for next to it as well. The recorder shows a window
+there, as SDL can't draw without one, and the sound of videos needs the
+game built with OpenAL Soft's headers, as the release builds are. The app
+hasn't been tried on a Mac yet.
 
 The app starts the game with a throwaway home folder, sends it console
 commands through its pipe (`com_pipefile`) and shows what the game reports
