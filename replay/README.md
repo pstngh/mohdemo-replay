@@ -15,15 +15,17 @@ player: for a player, it shows their kills in each demo, and playing one
 chooses them. For that, `mohdemoindex`, built next to the game, indexes the
 demos in the background the first time (about two minutes for 700), and the
 indexes are kept in `~/.cache/mohdemo-replay`. Double-click a demo to
-play it, click a kill or a round to jump to it. "Only these kills" plays the
-kills listed (by the player chosen), from the one selected or the first.
+play it, click a kill, a multi-kill or a round to jump to it. "Only these
+kills" plays the kills listed (by the player chosen), from the one selected
+or the first, and on the Multi-kills tab, the multi-kills: two kills or
+more by a player, each at most 3 seconds after the one before.
 The time slider marks the kills listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
 
-Record… makes an MP4 of the demo playing: a stretch of time, the kills
-(of the player chosen above) one after the other, or only while a player is
-watched. A second copy of the game records it in the background, without a
+Record… makes an MP4 of the demo playing: a stretch of time, the kills or
+the multi-kills (of the player chosen above) one after the other, or only
+while a player is watched. A second copy of the game records it in the background, without a
 window on Linux and faster than real time, while you keep watching; the
 video lands in the folder chosen, named from a pattern (`{demo}`, `{start}`,
 `{player}`, `{date}`). Size, frames per second, quality, codec (H.264,

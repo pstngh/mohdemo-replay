@@ -172,6 +172,17 @@ class TestFunctions(unittest.TestCase):
         self.assertTrue(mohreplay.same_player("a^", "A^"))
         self.assertFalse(mohreplay.same_player("phil", "phill"))
 
+    def test_multi_kills(self):
+        def kill(time, killer, victim="x"):
+            return {"time": time, "killerName": killer, "victimName": victim}
+        kills = [kill(0, "a"), kill(1000, "^1B"), kill(3000, "A"), kill(5000, "b"), kill(6000, "a"),
+                 kill(7000, ""), kill(9000, "a"), kill(20000, "c"), kill(23001, "c")]
+        chains = mohreplay.multi_kills(kills)
+        self.assertEqual([[k["time"] for k in chain] for chain in chains], [[0, 3000, 6000, 9000]])
+        kills.insert(3, kill(3900, "b"))
+        chains = mohreplay.multi_kills(kills)
+        self.assertEqual([[k["time"] for k in chain] for chain in chains], [[0, 3000, 6000, 9000], [1000, 3900, 5000]])
+
     def test_quoted(self):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 
@@ -337,6 +348,27 @@ class TestWindow(FakeGameCase):
         self.assertEqual(self.commands(window.game)[-2:], ["demoseek 6.000", 'demoonly kills "t-"'])
         self.assertIn("only the kills by t-", window.info.text())
 
+    def test_multi_kills_tab(self):
+        window = self.window()
+        self.playing(window)
+        self.assertEqual(window.multikills.topLevelItemCount(), 1)
+        item = window.multikills.topLevelItem(0)
+        self.assertEqual([item.text(i) for i in range(4)], ["0:10", "t-", "3", "^1Phil, Bob, Al"])
+        window.tabs.setCurrentWidget(window.multikills)
+        self.assertEqual(window.only_kills_button.text(), "Only these multi-kills")
+        self.assertEqual([m[0] for m in window.slider.kills], [10000, 12000, 14500])
+        window.only_kills()
+        self.assertTrue(wait_until(lambda: window.state.get("only") == "multikills"))
+        self.assertEqual(self.commands(window.game)[-2:], ["demoseek 6.000", "demoonly multikills"])
+        self.assertIn("Playing only the multi-kills", window.info.text())
+        window.player.setCurrentIndex(window.player.findData("^1Phil"))
+        self.assertEqual(window.multikills.topLevelItemCount(), 0)
+        window.only_kills()
+        self.assertEqual(self.messages.shown[-1], ("Only these multi-kills", "There are no multi-kills to play."))
+        window.tabs.setCurrentWidget(window.kills)
+        self.assertEqual(window.only_kills_button.text(), "Only these kills")
+        self.assertEqual(len(window.slider.kills), 1)
+
     def test_only_watched(self):
         window = self.window()
         self.playing(window)
@@ -411,9 +443,9 @@ class TestLibrary(FakeGameCase):
         self.assertIn("broken", window.library.failed)
         summary = window.library.demos["first"]
         self.assertEqual(summary["maps"], ["obj/obj_team1"])
-        self.assertEqual(summary["players"]["t-"], ["t-", 4])
-        self.assertEqual(summary["players"]["phil"], ["^1Phil", 1])
-        self.assertIn("&lt;KoS&gt;Bob (4)", window.demo_items["other"].toolTip(4))
+        self.assertEqual(summary["players"]["t-"], ["t-", 4, 1])
+        self.assertEqual(summary["players"]["phil"], ["^1Phil", 1, 0])
+        self.assertIn("&lt;KoS&gt;Bob (4, 1 multi)", window.demo_items["other"].toolTip(4))
         self.assertEqual(window.demo_items["first"].text(3), "obj_team1")
         self.assertEqual(window.indexing.text(), "")
         cache = window.library.cache
@@ -467,7 +499,7 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["first"].text(2), "^1Phil (1)")
         window.filter.setText("kos")
         self.assertEqual(self.shown(window), ["other"])
-        self.assertEqual(window.demo_items["other"].text(2), "<KoS>Bob (4)")
+        self.assertEqual(window.demo_items["other"].text(2), "<KoS>Bob (4, 1 multi)")
         window.filter.setText("mohdm6 bob")
         self.assertEqual(self.shown(window), ["other"])
         window.filter.setText("obj_team1")
@@ -543,6 +575,20 @@ class TestRecording(FakeGameCase):
         self.assertEqual((video["only"], video["player"]), ("kills", "t-"))
         self.assertEqual(video["cvars"]["s_loopback"], "0")
         self.assertIn("-an", video["cvars"]["cl_aviPipeFormat"])
+
+    def test_record_multi_kills(self):
+        window = self.window()
+        self.playing(window)
+        dialogs = []
+
+        def setup(dialog):
+            dialogs.append(dialog)
+            dialog.multikills.setChecked(True)
+            dialog.pattern.setText("multi")
+        self.record(window, setup)
+        self.assertEqual(dialogs[0].multikills.text(), "The 1 multi-kills")
+        self.assertTrue(wait_until(lambda: os.path.isfile(os.path.join(self.videos, "multi.mp4")), 20))
+        self.assertEqual(self.video("multi.mp4")["only"], "multikills")
 
     def test_no_overwrite(self):
         window = self.window()

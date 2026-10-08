@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 PIPE = "replay_pipe"
 KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
+MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
 SPEEDS = ["0.25", "0.5", "1", "2", "4"]
 # keys above 127 only: the others stop a demo
 BINDS = {
@@ -111,6 +112,30 @@ def same_player(a, b):
     return clean_name(a) == clean_name(b)
 
 
+def multi_kills(kills):
+    """The multi-kills, as demoonly multikills plays them: lists of two
+    kills or more by a player, each at most MULTI_KILL_GAP after the one
+    before, in the order they start."""
+    chains, last = [], {}
+    for kill in kills:
+        if not kill["killerName"]:
+            continue
+        key = clean_name(kill["killerName"])
+        chain = last.get(key)
+        if chain and kill["time"] - chain[-1]["time"] <= MULTI_KILL_GAP:
+            chain.append(kill)
+        else:
+            last[key] = chain = [kill]
+            chains.append(chain)
+    return [chain for chain in chains if len(chain) > 1]
+
+
+def player_kills(player):
+    """"name (kills, multi-kills)" from a summary's [name, kills, multi-kills]."""
+    name, kills, multi = player
+    return f"{name} ({kills}, {multi} multi)" if multi else f"{name} ({kills})"
+
+
 def list_demos(folder):
     """{name without .dm3: path} of the demos in folder."""
     try:
@@ -121,18 +146,20 @@ def list_demos(folder):
 
 def summarize(index):
     """What the demo list shows of an index: its maps, length and players,
-    {clean name: [name, kills]}."""
+    {clean name: [name, kills, multi-kills]}."""
     players = {}
 
     def add(name, kills=0):
         if name:
-            players.setdefault(clean_name(name), [name, 0])[1] += kills
+            players.setdefault(clean_name(name), [name, 0, 0])[1] += kills
     add(index.get("recorder", {}).get("name", ""))
     for watched in index.get("watched", []):
         add(watched["name"])
     for kill in index.get("kills", []):
         add(kill["killerName"], 1)
         add(kill["victimName"])
+    for chain in multi_kills(index.get("kills", [])):
+        players[clean_name(chain[0]["killerName"])][2] += 1
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
             "players": players}
 
@@ -547,7 +574,7 @@ class SettingsDialog(QDialog):
 class RecordDialog(QDialog):
     """What to record and how, kept in the settings."""
 
-    def __init__(self, settings, time, player, kills, watched, parent=None):
+    def __init__(self, settings, time, player, kills, multikills, watched, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Record a video")
         self.settings = settings
@@ -562,15 +589,18 @@ class RecordDialog(QDialog):
             row.addWidget(widget)
         self.kills = QRadioButton(f"The {kills} kills" + (" by " + player if player else ""))
         self.kills.setEnabled(kills > 0)
+        self.multikills = QRadioButton(f"The {multikills} multi-kills" + (" by " + player if player else ""))
+        self.multikills.setEnabled(multikills > 0)
         self.watched = QRadioButton("While " + player + " is watched" if player else "While a player is watched")
         self.watched.setEnabled(bool(player) and watched)
         group = QButtonGroup(self)
-        for button in (self.range, self.kills, self.watched):
+        for button in (self.range, self.kills, self.multikills, self.watched):
             group.addButton(button)
         self.range.setChecked(True)
         what = QVBoxLayout()
         what.addLayout(row)
         what.addWidget(self.kills)
+        what.addWidget(self.multikills)
         what.addWidget(self.watched)
         form.addRow("Record", what)
 
@@ -672,8 +702,8 @@ class RecordDialog(QDialog):
             commands = [f"demoseek {seconds(start)}", f"demovideo replay {seconds(end)}"]
         else:
             start, end = 0, None
-            only = f"kills {quoted(self.player)}" if self.kills.isChecked() and self.player else (
-                "kills" if self.kills.isChecked() else f"watched {quoted(self.player)}")
+            only = ("kills" if self.kills.isChecked() else "multikills" if self.multikills.isChecked()
+                    else "watched") + (" " + quoted(self.player) if self.player else "")
             commands = ["demoseek 0", "demoonly " + only, "demovideo replay"]
         try:
             name = self.pattern.text().format_map({
@@ -810,7 +840,7 @@ class Window(QMainWindow):
         self.seeking_slider = False
         self.recording = None
         self.last_jump = (None, 0)
-        self.round_marks = []
+        self.round_marks = self.kill_marks = self.multi_marks = []
         self.library = Library(self.library_changed, self)
         self.demo_items = {}  # name: item
         self.wanted_player = None  # to choose once the demo plays
@@ -838,7 +868,7 @@ class Window(QMainWindow):
         self.info.setWordWrap(True)
         self.player = QComboBox()
         self.player.currentIndexChanged.connect(self.fill_kills)
-        only_kills = QPushButton("Only these kills")
+        self.only_kills_button = only_kills = QPushButton("Only these kills")
         only_kills.setToolTip("Play only the kills listed, from the one selected or the first")
         only_kills.clicked.connect(self.only_kills)
         follow = QPushButton("Only while watched")
@@ -854,14 +884,17 @@ class Window(QMainWindow):
         players.addWidget(everything)
 
         self.kills = self.make_list(["Time", "Killer", "Victim", "How"])
+        self.multikills = self.make_list(["Time", "Player", "Kills", "Victims"])
         self.rounds = self.make_list(["Time", "Round", "Result"])
         # a click jumps, so does Enter
-        for tree in (self.kills, self.rounds):
+        for tree in (self.kills, self.multikills, self.rounds):
             tree.itemClicked.connect(self.jump_to_item)
             tree.itemActivated.connect(self.jump_to_item)
-        tabs = QTabWidget()
+        self.tabs = tabs = QTabWidget()
         tabs.addTab(self.kills, "Kills")
+        tabs.addTab(self.multikills, "Multi-kills")
         tabs.addTab(self.rounds, "Rounds")
+        tabs.currentChanged.connect(self.tab_changed)
         right = QWidget()
         box = QVBoxLayout(right)
         box.setContentsMargins(0, 0, 0, 0)
@@ -1013,7 +1046,7 @@ class Window(QMainWindow):
                 item.setText(3, ", ".join(m.rsplit("/", 1)[-1] for m in summary["maps"]))
                 players = sorted(summary["players"].values(), key=lambda p: (-p[1], p[0].lower()))
                 tip = (f"<b>{html.escape(', '.join(summary['maps']))}</b> — {clock(summary['duration'])}<br>"
-                       + html.escape(", ".join(f"{n} ({k})" for n, k in players)))
+                       + html.escape(", ".join(player_kills(p) for p in players)))
                 for column in range(5):
                     item.setToolTip(column, tip)
         self.demos.setSortingEnabled(True)
@@ -1039,7 +1072,7 @@ class Window(QMainWindow):
                 found.update((key, players[key]) for key in hits)
             item.setHidden(not shown)
             best = sorted(found.values(), key=lambda p: (-p[1], p[0].lower()))
-            item.setText(2, ", ".join(f"{n} ({k})" for n, k in best))
+            item.setText(2, ", ".join(player_kills(p) for p in best))
             item.setData(2, Qt.UserRole, best[0][0] if best else None)
             found_any |= shown and bool(best)
         self.demos.setColumnHidden(2, not found_any)
@@ -1090,8 +1123,9 @@ class Window(QMainWindow):
             self.slider.setValue(time)
             self.time.setText(f"{clock(time)} / {clock(duration)}")
         only = self.state.get("only")
-        if only == "kills":
-            mode = "only the kills" + (" by " + self.state["player"] if self.state.get("player") else "")
+        if only in ("kills", "multikills"):
+            mode = ("only the kills" if only == "kills" else "only the multi-kills") + (
+                " by " + self.state["player"] if self.state.get("player") else "")
         elif only == "watched":
             mode = "only while " + self.state.get("player", "") + " is watched"
         else:
@@ -1144,17 +1178,34 @@ class Window(QMainWindow):
 
     def fill_kills(self):
         player = self.player.currentData() or ""
+        kills = (self.index or {}).get("kills", [])
         self.kills.clear()
-        marks = []
-        for kill in (self.index or {}).get("kills", []):
+        self.kill_marks = []
+        for kill in kills:
             if player and not same_player(player, kill["killerName"]):
                 continue
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
             item.setData(0, Qt.UserRole, kill["time"] - KILL_BEFORE)
             self.kills.addTopLevelItem(item)
-            marks.append((kill["time"], how))
-        self.slider.set_marks(marks, self.round_marks)
+            self.kill_marks.append((kill["time"], how))
+        self.multikills.clear()
+        self.multi_marks = []
+        for chain in multi_kills(kills):
+            if player and not same_player(player, chain[0]["killerName"]):
+                continue
+            victims = ", ".join(kill["victimName"] or "?" for kill in chain)
+            item = QTreeWidgetItem([clock(chain[0]["time"]), chain[0]["killerName"], str(len(chain)), victims])
+            item.setData(0, Qt.UserRole, chain[0]["time"] - KILL_BEFORE)
+            self.multikills.addTopLevelItem(item)
+            self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
+        self.tab_changed()
+
+    def tab_changed(self):
+        """The slider marks the kills of the tab, and the button plays them."""
+        multi = self.tabs.currentWidget() is self.multikills
+        self.slider.set_marks(self.multi_marks if multi else self.kill_marks, self.round_marks)
+        self.only_kills_button.setText("Only these multi-kills" if multi else "Only these kills")
 
     # actions
 
@@ -1170,14 +1221,18 @@ class Window(QMainWindow):
         self.game.send("demoseek " + seconds(self.slider.value()))
 
     def only_kills(self):
-        """Plays the kills listed, from the one selected or the first."""
-        item = self.kills.currentItem() or self.kills.topLevelItem(0)
+        """Plays the kills or multi-kills listed, from the one selected or the
+        first."""
+        multi = self.tabs.currentWidget() is self.multikills
+        tree = self.multikills if multi else self.kills
+        item = tree.currentItem() or tree.topLevelItem(0)
         if not item:
-            QMessageBox.information(self, "Only these kills", "There are no kills to play.")
+            QMessageBox.information(self, self.only_kills_button.text(),
+                                    f"There are no {'multi-kills' if multi else 'kills'} to play.")
             return
         player = self.player.currentData() or ""
         self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)))
-        self.game.send("demoonly kills" + (" " + quoted(player) if player else ""))
+        self.game.send(f"demoonly {'multikills' if multi else 'kills'}" + (" " + quoted(player) if player else ""))
 
     def only_watched(self):
         """Plays while the player is watched, from the first time."""
@@ -1204,8 +1259,9 @@ class Window(QMainWindow):
         player = self.player.currentData() or ""
         index = self.index or {}
         kills = sum(1 for k in index.get("kills", []) if not player or same_player(k["killerName"], player))
+        multi = sum(1 for c in multi_kills(index.get("kills", [])) if not player or same_player(c[0]["killerName"], player))
         watched = any(same_player(w["name"], player) for w in index.get("watched", [])) if player else False
-        dialog = RecordDialog(self.settings, self.state.get("time", 0), player, kills, watched, self)
+        dialog = RecordDialog(self.settings, self.state.get("time", 0), player, kills, multi, watched, self)
         if dialog.exec():
             self.recording = Recording(self, demo, dialog.job(demo))
             self.recording.start()
