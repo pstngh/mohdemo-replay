@@ -10,7 +10,7 @@ and PySide6.
 On the first run, Settings asks for the game program (found by itself when
 built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
 with `main/Pak0.pk3`) and the folder with the demos. The list shows each
-demo's length, levels and rules (default or realism servers, told by the
+demo's length (demos under 5 minutes aren't listed), levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
 too little), the menu next to the filter shows only default or realism
 demos, and the filter finds demos by name, level or player: for a player, it shows their kills in each demo, and playing one

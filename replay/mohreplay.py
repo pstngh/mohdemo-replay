@@ -40,6 +40,7 @@ GAME_CONFIG = os.path.join("main", "configs", "omconfig.cfg")
 KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
 KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
 MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
+MIN_LENGTH = 5 * 60000  # msec: shorter demos aren't listed, once indexed
 # the demo list's columns
 DEMO_COLUMNS = ["Date", "Length", "Rules", "Player", "Map", "Demo"]
 COL_DATE, COL_LENGTH, COL_RULES, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_COLUMNS))
@@ -1276,7 +1277,7 @@ class Window(QMainWindow):
     def filter_demos(self):
         """Shows the demos where each word is in the name, a map or a
         player's name, and the players found; only those of the rules
-        chosen, if any."""
+        chosen, if any, and not those shorter than MIN_LENGTH."""
         words = [w for w in (clean_name(w) for w in self.filter.text().split()) if w]
         rules = self.rules.currentData()
         found_any = False
@@ -1285,6 +1286,7 @@ class Window(QMainWindow):
             players = summary.get("players", {})
             maps = " ".join(summary.get("maps", [])).lower()
             found, shown = {}, not rules or summary.get("rules") in (rules, "both")
+            shown = shown and summary.get("duration", MIN_LENGTH) >= MIN_LENGTH
             for word in words if shown else ():
                 if word in name.lower() or word in maps:
                     continue

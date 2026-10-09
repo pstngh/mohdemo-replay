@@ -476,7 +476,7 @@ class TestLibrary(FakeGameCase):
         super().setUp()
         other = json.loads(json.dumps(DEMO))
         other["maps"] = [{"time": 0, "map": "dm/mohdm6", "rules": "realism", "realismTicks": 900, "defaultTicks": 0}]
-        other["duration"] = 61000
+        other["duration"] = 361000
         for kill in other["kills"]:
             kill["killerName"] = kill["killerName"].replace("t-", "<KoS>Bob")
         self.add_demo("other", other)
@@ -502,7 +502,7 @@ class TestLibrary(FakeGameCase):
         window = self.window()
         self.indexed(window)
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_LENGTH), "10:00")
-        self.assertEqual(window.demo_items["other"].text(mohreplay.COL_LENGTH), "1:01")
+        self.assertEqual(window.demo_items["other"].text(mohreplay.COL_LENGTH), "6:01")
         self.assertEqual(window.demo_items["broken"].text(mohreplay.COL_LENGTH), "")
         self.assertIn("broken", window.library.failed)
         summary = window.library.demos["first"]
@@ -513,7 +513,7 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_MAP), "obj_team1")
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_RULES), "")
         self.assertEqual(window.demo_items["other"].text(mohreplay.COL_RULES), "Realism")
-        self.assertIn("1:01, realism", window.demo_items["other"].toolTip(mohreplay.COL_DEMO))
+        self.assertIn("6:01, realism", window.demo_items["other"].toolTip(mohreplay.COL_DEMO))
         self.assertEqual(window.indexing.text(), "")
         cache = window.library.cache
         self.assertTrue(cache.startswith(os.path.join(self.tmp, "cache")))
@@ -616,6 +616,19 @@ class TestLibrary(FakeGameCase):
         self.playing(window)
         self.assertEqual(window.player.currentData(), "^1Phil")
         self.assertEqual(window.kills.topLevelItemCount(), 1)
+
+    def test_short_demos_hidden(self):
+        self.add_demo("short", dict(DEMO, duration=mohreplay.MIN_LENGTH - 1))
+        self.add_demo("long enough", dict(DEMO, duration=mohreplay.MIN_LENGTH))
+        window = self.window()
+        # shown until their length is known
+        self.assertIn("short", self.shown(window))
+        self.indexed(window, ("first", "other", "short", "long enough"))
+        self.assertEqual(window.demo_items["short"].text(mohreplay.COL_LENGTH), "4:59")
+        self.assertEqual(self.shown(window), ["broken", "first", "long enough", "other"])
+        # whatever the filter
+        window.filter.setText("t-")
+        self.assertNotIn("short", self.shown(window))
 
     def test_sort_by_length(self):
         window = self.window()
@@ -883,6 +896,9 @@ class TestRecording(FakeGameCase):
         self.assertEqual(sorted((p["only"], p["player"]) for p in parts), [("kills", "^2T-"), ("kills", "t-")])
 
     def test_whole_demos_one_video_each(self):
+        # short, to record quickly, so listed anyway
+        self.patches.append(mock.patch.object(mohreplay, "MIN_LENGTH", 0))
+        self.patches[-1].start()
         self.add_demo("second", dict(DEMO, duration=30000))
         window = self.window()
         TestLibrary.indexed(self, window, ("first", "second"))
