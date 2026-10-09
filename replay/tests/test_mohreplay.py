@@ -513,6 +513,8 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_MAP), "obj_team1")
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_RULES), "")
         self.assertEqual(window.demo_items["other"].text(mohreplay.COL_RULES), "Realism")
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_RECORDER), "t-")
+        self.assertEqual(window.demo_items["broken"].text(mohreplay.COL_RECORDER), "")
         self.assertIn("6:01, realism", window.demo_items["other"].toolTip(mohreplay.COL_DEMO))
         self.assertEqual(window.indexing.text(), "")
         cache = window.library.cache

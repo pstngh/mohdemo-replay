@@ -42,8 +42,8 @@ KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
 MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
 MIN_LENGTH = 5 * 60000  # msec: shorter demos aren't listed, once indexed
 # the demo list's columns
-DEMO_COLUMNS = ["Date", "Length", "Rules", "Player", "Map", "Demo"]
-COL_DATE, COL_LENGTH, COL_RULES, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_COLUMNS))
+DEMO_COLUMNS = ["Date", "Length", "Rules", "Recorder", "Player", "Map", "Demo"]
+COL_DATE, COL_LENGTH, COL_RULES, COL_RECORDER, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_COLUMNS))
 # the rules of a demo's levels, from mohdemoindex: realism servers change
 # the speeds and the damage of weapons
 RULES = {"default": "Default", "realism": "Realism", "both": "Both"}
@@ -172,8 +172,8 @@ def list_demos(folder):
 
 
 def summarize(index):
-    """What the demo list shows of an index: its maps, length and players,
-    {clean name: [name, kills, multi-kills]}."""
+    """What the demo list shows of an index: its maps, length, recorder and
+    players, {clean name: [name, kills, multi-kills]}."""
     players = {}
 
     def add(name, kills=0):
@@ -191,7 +191,7 @@ def summarize(index):
     kinds = {m.get("rules") for m in index.get("maps", [])} & {"realism", "default"}
     rules = "both" if len(kinds) == 2 else kinds.pop() if kinds else ""
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
-            "players": players, "rules": rules}
+            "recorder": index.get("recorder", {}).get("name", ""), "players": players, "rules": rules}
 
 
 class Library(QObject):
@@ -1087,7 +1087,7 @@ class Window(QMainWindow):
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([400, 700])
+        splitter.setSizes([560, 440])
 
         # playback
         self.slider = Timeline()
@@ -1260,6 +1260,7 @@ class Window(QMainWindow):
                 item.setText(COL_LENGTH, clock(summary["duration"]))
                 item.setData(COL_LENGTH, Qt.UserRole, summary["duration"])
                 item.setText(COL_RULES, RULES.get(summary["rules"], ""))
+                item.setText(COL_RECORDER, summary["recorder"])
                 item.setText(COL_MAP, ", ".join(m.rsplit("/", 1)[-1] for m in summary["maps"]))
                 players = sorted(summary["players"].values(), key=lambda p: (-p[1], p[0].lower()))
                 rules = f", {RULES[summary['rules']].lower()}" if summary["rules"] else ""
