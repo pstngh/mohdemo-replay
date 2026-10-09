@@ -85,6 +85,8 @@ binds, without the app:
 | `demonextround`, `demoprevround` | jump to the next or previous round |
 | `demoonly kills [player]` | play only the kills, by that player while shown if given |
 | `demoonly multikills [player]` | play only the multi-kills, by that player while shown if given |
+| `demoonly shownkills` | play only the kills of whoever is shown (the recorder playing, or the player they follow), while they're shown |
+| `demoonly shownmultikills` | the same, of the multi-kills |
 | `demoonly watched <player>` | play only while that player is shown |
 | `demoonly` | play everything again |
 | `timescale <speed>` | playback speed, 1 is normal |

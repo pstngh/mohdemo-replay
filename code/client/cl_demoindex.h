@@ -78,7 +78,7 @@ typedef struct {
     int         duration;
     qboolean    paused;
     qboolean    seeking;
-    const char *only;      // what demoonly plays: "", "kills", "watched" or "multikills"
+    const char *only;      // what demoonly plays: "", "kills", "watched", "multikills", "shownkills" or "shownmultikills"
     const char *player;    // the player demoonly is about
     const char *recording; // the video being recorded, if any
 } demoState_t;

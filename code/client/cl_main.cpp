@@ -716,7 +716,9 @@ typedef enum {
 	DEMOONLY_ALL,
 	DEMOONLY_KILLS,		// the kills, by cl_demoOnlyPlayer if set
 	DEMOONLY_WATCHED,	// while cl_demoOnlyPlayer is watched
-	DEMOONLY_MULTIKILLS	// the kills of multi-kills, by cl_demoOnlyPlayer if set
+	DEMOONLY_MULTIKILLS,	// the kills of multi-kills, by cl_demoOnlyPlayer if set
+	DEMOONLY_SHOWNKILLS,	// the kills of whoever is shown, while they're shown
+	DEMOONLY_SHOWNMULTIKILLS	// the same, of multi-kills
 } demoOnly_t;
 
 static demoOnly_t	cl_demoOnly;
@@ -1027,7 +1029,7 @@ while the time goes on
 ====================
 */
 static void CL_UpdateDemoState( void ) {
-	static const char	*only[] = { "", "kills", "watched", "multikills" };
+	static const char	*only[] = { "", "kills", "watched", "multikills", "shownkills", "shownmultikills" };
 	static char		last[MAX_STRING_CHARS];
 	static int		lastWrite;
 	demoState_t		state;
@@ -1178,20 +1180,24 @@ The stretch around index event i that demoonly plays, if any
 static qboolean CL_DemoStretch( int i, int *start, int *end ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
 	qboolean			player = cl_demoOnlyPlayer[0] != 0;
+	qboolean			multi = cl_demoOnly == DEMOONLY_MULTIKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
+	qboolean			shown = player || cl_demoOnly == DEMOONLY_SHOWNKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
 	int					from, to;
 	int					j;
 
 	switch ( cl_demoOnly ) {
 	case DEMOONLY_KILLS:
 	case DEMOONLY_MULTIKILLS:
+	case DEMOONLY_SHOWNKILLS:
+	case DEMOONLY_SHOWNMULTIKILLS:
 		if ( ev->type != DEMOEVENT_KILL || ( player && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) )
-			|| ( cl_demoOnly == DEMOONLY_MULTIKILLS && !CL_DemoInMultiKill( i, player ) ) ) {
+			|| ( multi && !CL_DemoInMultiKill( i, shown ) ) ) {
 			return qfalse;
 		}
 		*start = ev->time - CL_DemoKillBefore();
 		*end = ev->time + Q_max( 0, (int)( cl_demoKillAfter->value * 1000 ) );
-		// a player's kills only while they're the one shown
-		if ( player ) {
+		// a player's kills, or whoever's shown, only while they're the one shown
+		if ( shown ) {
 			if ( !CL_DemoKillShown( i, &from, &to ) ) {
 				return qfalse;
 			}
@@ -1284,7 +1290,7 @@ static void CL_RunDemoOnly( void ) {
 ====================
 CL_DemoOnly_f
 
-demoonly [kills [player] | multikills [player] | watched <player>]
+demoonly [kills [player] | multikills [player] | shownkills | shownmultikills | watched <player>]
 ====================
 */
 static void CL_DemoOnly_f( void ) {
@@ -1306,10 +1312,14 @@ static void CL_DemoOnly_f( void ) {
 		only = DEMOONLY_KILLS;
 	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "multikills" ) ) {
 		only = DEMOONLY_MULTIKILLS;
+	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "shownkills" ) && !player[0] ) {
+		only = DEMOONLY_SHOWNKILLS;
+	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "shownmultikills" ) && !player[0] ) {
+		only = DEMOONLY_SHOWNMULTIKILLS;
 	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "watched" ) && player[0] ) {
 		only = DEMOONLY_WATCHED;
 	} else {
-		Com_Printf( "demoonly [kills [player] | multikills [player] | watched <player>]: play only the kills, the multi-kills, or while a player is watched, all without arguments\n" );
+		Com_Printf( "demoonly [kills [player] | multikills [player] | shownkills | shownmultikills | watched <player>]: play only the kills, the multi-kills, the kills or multi-kills of whoever is shown, or while a player is watched, all without arguments\n" );
 		return;
 	}
 
@@ -1324,6 +1334,8 @@ static void CL_DemoOnly_f( void ) {
 
 	if ( only == DEMOONLY_KILLS || only == DEMOONLY_MULTIKILLS ) {
 		Com_Printf( "Playing only the %s%s%s\n", only == DEMOONLY_KILLS ? "kills" : "multi-kills", player[0] ? " by " : "", player );
+	} else if ( only == DEMOONLY_SHOWNKILLS || only == DEMOONLY_SHOWNMULTIKILLS ) {
+		Com_Printf( "Playing only the %s of whoever is shown\n", only == DEMOONLY_SHOWNKILLS ? "kills" : "multi-kills" );
 	} else {
 		Com_Printf( "Playing only while %s is watched\n", player );
 	}
