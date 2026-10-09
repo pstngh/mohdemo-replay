@@ -4918,9 +4918,12 @@ CL_TryStartIntro
 */
 void CL_TryStartIntro(void)
 {
-    if (developer->integer || !cl_playintro->integer) {
+    // Modified in OPM
+    //  Without the intro, start at the main menu: the console only opens by
+    //  itself for developers
+    if (developer->integer) {
         UI_ToggleConsole();
-    } else {
+    } else if (cl_playintro->integer) {
         // FIXME: no intro from now
         Cvar_Set(cl_playintro->name, "0");
         UI_StartIntro_f();
@@ -5303,7 +5306,8 @@ void CL_InitializeUI(void)
     ui_legalscreen_fadeout = Cvar_Get("ui_legalscreen_fadeout", "1", 0);
     ui_legalscreen_stay    = Cvar_Get("ui_legalscreen_stay", "3", 0);
     cl_greenfps            = Cvar_Get("cl_greenfps", "0", 1);
-    cl_playintro           = Cvar_Get("cl_playintro", "1", 0);
+    // Changed in OPM: no intro unless asked for
+    cl_playintro           = Cvar_Get("cl_playintro", "0", 0);
     cl_movieaudio          = Cvar_Get("cl_movieaudio", "1", 0);
     Cvar_Get("ui_startmap", "", 1);
     Cvar_Get("dlg_badsave", "This save game is invalid", 0);

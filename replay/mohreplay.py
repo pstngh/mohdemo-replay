@@ -388,7 +388,7 @@ class Game:
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "60",
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
-                     "+set", "cl_skipintro", "1", "+exec", "replay.cfg", *extra]
+                     "+exec", "replay.cfg", *extra]
         # Wayland first, then XWayland if it doesn't start
         self.driver = driver or os.environ.get("SDL_VIDEODRIVER") or ("wayland" if sys.platform.startswith("linux") else "")
         self.launch()
