@@ -676,16 +676,22 @@ def only_clip(demo, only="", player=""):
             "commands": ["demoseek 0", "demopause 0", only, "demovideo {part}"]}
 
 
-def stretches(spans):
-    """(start, end) spans in msec, joined when less than a second apart, as
-    demoonly does."""
+def stretches(spans, switches=()):
+    """(start, end) spans in msec, joined as demoonly does: when less than a
+    second apart, unless the player shown changes in between (switches: the
+    times it does, in order), which stays a cut."""
     joined = []
     for start, end in sorted(spans):
-        if joined and start <= joined[-1][1] + 1000:
-            joined[-1][1] = max(joined[-1][1], end)
+        if joined and start > joined[-1][1]:
+            i = bisect.bisect_left(switches, joined[-1][1])
+            cut = start > joined[-1][1] + 1000 or (i < len(switches) and switches[i] <= start)
         else:
+            cut = not joined
+        if cut:
             joined.append([max(0, start), end])
-    return joined
+        else:
+            joined[-1][1] = max(joined[-1][1], end)
+    return [tuple(span) for span in joined]
 
 
 class RecordDialog(QDialog):
@@ -1446,28 +1452,36 @@ class Window(QMainWindow):
         return {id(k): (k, start, end) for k, start, end in shown_kills(index)
                 if player == SHOWN or same_player(player, k["killerName"])}
 
+    def switches(self):
+        """When the player shown changes: the kills of a player or of whoever
+        is shown aren't joined across it, all the kills are."""
+        return [w["time"] for w in (self.index or {}).get("watched", [])] if self.player.currentData() else []
+
     def fill_kills(self):
+        """The kills listed, each item with when it starts and its clips: the
+        stretches demoonly plays."""
         player = self.player.currentData() or ""
         kills = self.player_kills(player)
+        spans = {}
         self.kills.clear()
         self.kill_marks = []
         for kill, start, end in kills.values():
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
-            span = (max(start, kill["time"] - KILL_BEFORE), min(end, kill["time"] + KILL_AFTER))
+            span = spans[id(kill)] = (max(start, kill["time"] - KILL_BEFORE), min(end, kill["time"] + KILL_AFTER))
             item.setData(0, Qt.UserRole, span[0])
-            item.setData(1, Qt.UserRole, span)
+            item.setData(1, Qt.UserRole, [span])
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
         self.multikills.clear()
         self.multi_marks = []
+        switches = self.switches()
         for chain in multi_kills([kill for kill, _, _ in kills.values()]):
-            first, last = kills[id(chain[0])], kills[id(chain[-1])]
             victims = ", ".join(kill["victimName"] or "?" for kill in chain)
             item = QTreeWidgetItem([clock(chain[0]["time"]), chain[0]["killerName"], str(len(chain)), victims])
-            span = (max(first[1], chain[0]["time"] - KILL_BEFORE), min(last[2], chain[-1]["time"] + KILL_AFTER))
-            item.setData(0, Qt.UserRole, span[0])
-            item.setData(1, Qt.UserRole, span)
+            clips = stretches([spans[id(kill)] for kill in chain], switches)
+            item.setData(0, Qt.UserRole, clips[0][0])
+            item.setData(1, Qt.UserRole, clips)
             self.multikills.addTopLevelItem(item)
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
         self.tab_changed()
@@ -1573,7 +1587,7 @@ class Window(QMainWindow):
             QMessageBox.information(self, "Record a video", "Select kills of the demo playing first.")
             return
         kind = "multi-kills" if tree is self.multikills else "kills"
-        spans = stretches(item.data(1, Qt.UserRole) for item in items)
+        spans = stretches([span for item in items for span in item.data(1, Qt.UserRole)], self.switches())
         dialog = RecordDialog(self.settings, [("selected", f"The {len(items)} {kind} selected", True)],
                               join=len(spans) > 1, parent=self)
         if not dialog.exec():

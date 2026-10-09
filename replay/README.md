@@ -96,8 +96,11 @@ binds, without the app:
 | `demovideo <name> [end time]` | record into an MP4, see below |
 
 `cl_demoKillBefore` and `cl_demoKillAfter` set how many seconds of each kill
-are shown (4 and 2). A multi-kill is two kills or more by a player, each at
-most `cl_demoMultiKill` seconds (3) after the one before.
+are shown (4 and 2). Kills less than a second apart play as one, without a
+jump, except for a player's kills or whoever's is shown when the player
+shown changes in between: that stays a cut. A multi-kill is two kills or
+more by a player, each at most `cl_demoMultiKill` seconds (3) after the one
+before.
 
 While the recorder follows a player, most servers with the 1.12 Reborn patch
 put the camera in that player's head, where their own arms and gun are in

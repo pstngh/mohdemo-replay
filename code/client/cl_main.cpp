@@ -1227,10 +1227,47 @@ static qboolean CL_DemoStretch( int i, int *start, int *end ) {
 
 /*
 ====================
+CL_DemoJoins
+
+Whether demoonly plays on from end to start, where the stretch of index
+event i starts: when it's less than a second, unless it's about who is
+shown and the player shown changes then, which stays a cut
+====================
+*/
+static qboolean CL_DemoJoins( int i, int end, int start ) {
+	int		j;
+
+	if ( start <= end ) {
+		return qtrue;
+	}
+	if ( start > end + 1000 ) {
+		return qfalse;
+	}
+	if ( ( cl_demoOnly == DEMOONLY_KILLS || cl_demoOnly == DEMOONLY_MULTIKILLS ) && !cl_demoOnlyPlayer[0] ) {
+		return qtrue;
+	}
+
+	// the events go forward in time, and event i is at start or after
+	for ( j = i; j >= 0 && cl_demoIndex.events[j].time >= end; j-- ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH && cl_demoIndex.events[j].time <= start ) {
+			return qfalse;
+		}
+	}
+	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time <= start; j++ ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+/*
+====================
 CL_DemoNextStretch
 
 The first stretch demoonly plays that ends after time, with the ones that
-follow within a second
+it joins, from the start of the demo: from within a joined stretch, it
+plays on to the next
 ====================
 */
 static qboolean CL_DemoNextStretch( int time, int *start, int *end ) {
@@ -1239,22 +1276,23 @@ static qboolean CL_DemoNextStretch( int time, int *start, int *end ) {
 	int			i;
 
 	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
-		if ( !CL_DemoStretch( i, &s, &e ) || e <= time ) {
+		if ( !CL_DemoStretch( i, &s, &e ) ) {
 			continue;
 		}
 
-		if ( !found ) {
-			*start = Q_max( 0, s );
-			*end = e;
-			found = qtrue;
-		} else if ( s > *end + 1000 ) {
-			break;
-		} else {
+		if ( found && CL_DemoJoins( i, *end, s ) ) {
 			*end = Q_max( *end, e );
+			continue;
 		}
+		if ( found && *end > time ) {
+			break;
+		}
+		*start = Q_max( 0, s );
+		*end = e;
+		found = qtrue;
 	}
 
-	return found;
+	return found && *end > time;
 }
 
 /*

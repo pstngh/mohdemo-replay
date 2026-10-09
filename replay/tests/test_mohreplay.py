@@ -220,6 +220,15 @@ class TestFunctions(unittest.TestCase):
     def test_quoted(self):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 
+    def test_stretches(self):
+        spans = [(6000, 12000), (-500, 1500), (8000, 14000), (14800, 20000), (25000, 30000), (30600, 32000)]
+        # overlapping or less than a second apart
+        self.assertEqual(mohreplay.stretches(spans), [(0, 1500), (6000, 20000), (25000, 32000)])
+        # but not when the player shown changes in between, even right at the end
+        self.assertEqual(mohreplay.stretches(spans, [10000, 30000]),
+                         [(0, 1500), (6000, 20000), (25000, 30000), (30600, 32000)])
+        self.assertEqual(mohreplay.stretches(spans, [14500]), [(0, 1500), (6000, 14000), (14800, 20000), (25000, 32000)])
+
 
 class TestTimeline(unittest.TestCase):
     def setUp(self):
@@ -407,7 +416,7 @@ class TestWindow(FakeGameCase):
         item = window.kills.topLevelItem(0)
         self.assertEqual(window.kills.topLevelItemCount(), 1)
         # only while he's shown
-        self.assertEqual(item.data(1, Qt.UserRole), (199000, 201000))
+        self.assertEqual(item.data(1, Qt.UserRole), [(199000, 201000)])
         window.only_kills()
         self.assertTrue(wait_until(lambda: self.commands(window.game)[-2:] == ["demoseek 199.000", 'demoonly kills "^1Phil"']))
         # the same client under another name
@@ -429,7 +438,7 @@ class TestWindow(FakeGameCase):
         rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
         self.assertEqual([(row.text(0), row.text(1)) for row in rows],
                          [("0:10", "t-"), ("0:12", "t-"), ("0:14", "t-"), ("5:01", "^1Phil"), ("5:03", "^1Phil")])
-        self.assertEqual(rows[3].data(1, Qt.UserRole), (300000, 303000))
+        self.assertEqual(rows[3].data(1, Qt.UserRole), [(300000, 303000)])
         self.assertEqual([m[0] for m in window.slider.kills], [10000, 12000, 14500, 301000, 303500])
         window.only_kills()
         self.assertTrue(wait_until(lambda: window.state.get("only") == "shownkills"))
@@ -440,7 +449,7 @@ class TestWindow(FakeGameCase):
         rows = [window.multikills.topLevelItem(i) for i in range(window.multikills.topLevelItemCount())]
         self.assertEqual([[row.text(i) for i in range(4)] for row in rows],
                          [["0:10", "t-", "3", "^1Phil, Bob, Al"], ["5:01", "^1Phil", "2", "t-, Al"]])
-        self.assertEqual(rows[1].data(1, Qt.UserRole), (300000, 305500))
+        self.assertEqual(rows[1].data(1, Qt.UserRole), [(300000, 305500)])
         self.assertEqual(len(window.slider.kills), 5)
         window.multikills.setCurrentItem(rows[1])
         window.only_kills()
@@ -957,6 +966,31 @@ class TestRecording(FakeGameCase):
         self.assertEqual(sorted(os.listdir(self.videos)), ["kill 0-06.mp4", "kill 6-36.mp4"])
         self.assertEqual(self.settings.value("rec/join"), "false")
 
+    def test_selected_kills_cut_where_the_player_shown_changes(self):
+        demo = json.loads(json.dumps(DEMO))
+        # t- kills 0.8 s apart, then 0.5 s on each side of half a second of Phil
+        demo["watched"] = [{"time": 0, "client": 0, "name": "t-"}, {"time": 40000, "client": 1, "name": "^1Phil"},
+                           {"time": 40500, "client": 0, "name": "t-"}]
+        demo["kills"] = [{"time": time, "killer": 0, "killerName": "t-", "victim": 1, "victimName": "^1Phil",
+                          "text": "Phil was rifled by t-"} for time in (20000, 26800, 38000, 44000)]
+        self.add_demo("cut", demo)
+        window = self.window()
+        self.playing(window, "cut")
+        for player, clips in ((mohreplay.SHOWN, [(16000, 28800), (34000, 40000), (40500, 46000)]),
+                              ("t-", [(16000, 28800), (34000, 40000), (40500, 46000)]),
+                              ("", [(16000, 28800), (34000, 46000)])):
+            window.player.setCurrentIndex(window.player.findData(player))
+            for row in range(window.kills.topLevelItemCount()):
+                window.kills.topLevelItem(row).setSelected(True)
+
+            def setup(dialog, name=player.strip("\0") or "all"):
+                dialog.join.setChecked(True)
+                dialog.pattern.setText(name)
+            self.record(window, setup, lambda: window.record_selected(window.kills))
+            self.done(window, len(window.jobs))
+            parts = self.video((player.strip("\0") or "all") + ".mp4")["joined"]
+            self.assertEqual([(p["start"], p["end"]) for p in parts], clips, player)
+
     def test_selected_multi_kill(self):
         window = self.window()
         self.playing(window)
@@ -1121,7 +1155,8 @@ class TestRealGame(FakeGameCase):
         window.player.setCurrentIndex(window.player.findData(mohreplay.SHOWN))
         self.assertEqual(window.kills.topLevelItemCount(), len(mohreplay.shown_kills(window.index)))
         rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
-        clips = mohreplay.stretches(row.data(1, Qt.UserRole) for row in rows)
+        clips = mohreplay.stretches([span for row in rows for span in row.data(1, Qt.UserRole)],
+                                    [w["time"] for w in window.index["watched"]])
         # from the kill before the first one by a player the recorder follows
         recorder = window.index["recorder"]["name"]
         followed = next(i for i, row in enumerate(rows) if not mohreplay.same_player(row.text(1), recorder))
@@ -1138,7 +1173,7 @@ class TestRealGame(FakeGameCase):
         self.assertGreater(len(set(samples)), 20)
         # a frame may be drawn past a clip before demoonly jumps
         self.assertEqual([t for t in samples if not any(s - 150 <= t <= e + 150 for s, e in clips)], [])
-        start, stop = rows[followed].data(1, Qt.UserRole)
+        start, stop = rows[followed].data(1, Qt.UserRole)[0]
         self.assertTrue(any(start <= t <= stop for t in samples), "the followed player's kill wasn't played")
 
     def test_play_seek_and_record(self):

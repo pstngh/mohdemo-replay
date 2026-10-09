@@ -113,10 +113,11 @@ taken for the game; CI now builds `main` for macOS too.
      seconds into it.
    - `demoonly kills [player]`: only the kills, from `cl_demoKillBefore`
      before to `cl_demoKillAfter` (2) after, joined when less than a second
-     apart. `demoonly watched <player>`: only while that player is shown.
-     `demoonly` alone: everything. It jumps over the rest, pauses after the
-     last stretch and plays everything from there; a new demo plays
-     everything.
+     apart (played through, not jumped; a player's kills not across a change
+     of the player shown). `demoonly watched <player>`: only while that
+     player is shown. `demoonly` alone: everything. It jumps over the rest,
+     pauses after the last stretch and plays everything from there; a new
+     demo plays everything.
 
    Players are given by name, without colors or case, like the index's
    `killerName` and `watched` names.
