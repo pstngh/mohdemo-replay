@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
 )
 
 PIPE = "replay_pipe"
+# the game's settings in its home folder, which is thrown away after each game
+GAME_CONFIG = os.path.join("main", "configs", "omconfig.cfg")
 KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
 KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
 MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
@@ -337,15 +339,24 @@ class SortItem(QTreeWidgetItem):
         return self.text(column).lower() < other.text(column).lower()
 
 
+def kept_config():
+    """Where the game's settings are kept from one game to the next."""
+    return os.path.join(QStandardPaths.writableLocation(QStandardPaths.GenericConfigLocation),
+                        "mohdemo-replay", "omconfig.cfg")
+
+
 class Game:
-    """The game process, its throwaway home folder and its command pipe."""
+    """The game process, its throwaway home folder and its command pipe. It
+    starts with the settings kept from earlier games, and keeps those changed
+    in it unless keep_config is False."""
 
     QUIT_WAIT = 3000  # msec given to quit, then to SIGTERM
     TERM_WAIT = 2000
 
-    def __init__(self, on_output, on_exit):
+    def __init__(self, on_output, on_exit, keep_config=True):
         self.on_output = on_output
         self.on_exit = on_exit
+        self.keep_config = keep_config
         self.process = None
         self.home = None
         self.queue = []
@@ -363,6 +374,12 @@ class Game:
         main = os.path.join(self.home, "main")
         os.makedirs(main)
         os.symlink(os.path.abspath(demos), os.path.join(main, "demos"))
+        config = os.path.join(self.home, GAME_CONFIG)
+        os.makedirs(os.path.dirname(config))
+        try:
+            shutil.copyfile(kept_config(), config)
+        except OSError:
+            pass  # none kept yet
         with open(os.path.join(main, "replay.cfg"), "w") as f:
             f.writelines(f'bind {key} "{command}"\n' for key, command in BINDS.items())
 
@@ -411,6 +428,7 @@ class Game:
             return
         self.flusher.stop()
         self.queue.clear()
+        self.save_config()
         self.on_exit()
 
     def send(self, command):
@@ -463,8 +481,22 @@ class Game:
                     self.process.waitForFinished(2000)
         self.cleanup()
 
+    def save_config(self):
+        """Keeps the settings the game wrote (it does as soon as one changes)
+        for the next games."""
+        if not self.keep_config or not self.home:
+            return
+        kept = kept_config()
+        try:
+            os.makedirs(os.path.dirname(kept), exist_ok=True)
+            shutil.copyfile(os.path.join(self.home, GAME_CONFIG), kept + ".new")
+            os.replace(kept + ".new", kept)
+        except OSError:
+            pass  # the game didn't write any
+
     def cleanup(self):
         if self.home:
+            self.save_config()
             demos = os.path.join(self.home, "main", "demos")
             if os.path.islink(demos):
                 os.unlink(demos)
@@ -808,7 +840,8 @@ class Recorder(QObject):
         self.loaded = None  # the demo the recorder plays
         self.parts = []
         self.joiner = None
-        self.game = Game(self.output, self.exited)
+        # with the settings of the game watched, but changing none
+        self.game = Game(self.output, self.exited, keep_config=False)
         self.clock = QElapsedTimer()
         self.timer = QTimer(self, interval=200, timeout=self.poll)
 

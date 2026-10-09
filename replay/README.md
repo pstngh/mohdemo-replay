@@ -50,7 +50,11 @@ hasn't been tried on a Mac yet.
 The app starts the game with a throwaway home folder, sends it console
 commands through its pipe (`com_pipefile`) and shows what the game reports
 in `demoindex.json` and `demostate.json` (`cl_demoFiles 1`). On Linux it
-asks for Wayland first, then XWayland.
+asks for Wayland first, then XWayland. The settings changed in the game (its
+options, the console, key binds) are kept for the next games in
+`~/.config/mohdemo-replay/omconfig.cfg` (`~/Library/Preferences` on macOS),
+and videos are recorded with them; the window size and the app's keys are
+always the app's.
 
 ## Keys in the game window
 

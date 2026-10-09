@@ -115,7 +115,8 @@ class FakeGameCase(unittest.TestCase):
         # quitting while videos are recorded
         self.patches.append(mock.patch.object(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes))
         self.patches.append(mock.patch.dict(os.environ, {**self.env, "SDL_VIDEODRIVER": "offscreen"}))
-        self.patches.append(mock.patch.dict(os.environ, {"XDG_CACHE_HOME": os.path.join(self.tmp, "cache")}))
+        self.patches.append(mock.patch.dict(os.environ, {"XDG_CACHE_HOME": os.path.join(self.tmp, "cache"),
+                                                         "XDG_CONFIG_HOME": os.path.join(self.tmp, "config")}))
         for patch in self.patches:
             patch.start()
         self.windows = []
@@ -279,6 +280,42 @@ class TestGame(FakeGameCase):
         self.assertFalse(os.path.exists(home))
         # the demos are only linked, never removed
         self.assertTrue(os.path.isfile(os.path.join(self.demos, "first.dm3")))
+
+    def test_settings_kept(self):
+        game = self.start()
+        self.assertFalse(os.path.exists(os.path.join(game.home, mohreplay.GAME_CONFIG)))
+        # what the game writes when a setting changes
+        with open(os.path.join(game.home, mohreplay.GAME_CONFIG), "w") as f:
+            f.write('seta cg_fov "90"\n')
+        game.stop()
+        with open(mohreplay.kept_config()) as f:
+            self.assertEqual(f.read(), 'seta cg_fov "90"\n')
+        # the next game starts with them
+        game.start(self.exe, self.game_dir, self.demos, 640, 480)
+        with open(os.path.join(game.home, mohreplay.GAME_CONFIG)) as f:
+            self.assertEqual(f.read(), 'seta cg_fov "90"\n')
+        # and when it quits by itself, they're kept already
+        with open(os.path.join(game.home, mohreplay.GAME_CONFIG), "w") as f:
+            f.write('seta cg_fov "100"\n')
+        game.send("quit")
+        self.assertTrue(wait_until(lambda: self.exits))
+        with open(mohreplay.kept_config()) as f:
+            self.assertEqual(f.read(), 'seta cg_fov "100"\n')
+
+    def test_recorder_settings_not_kept(self):
+        with open(os.path.join(self.tmp, "kept.cfg"), "w") as f:
+            f.write('seta cg_fov "90"\n')
+        os.makedirs(os.path.dirname(mohreplay.kept_config()))
+        shutil.copyfile(os.path.join(self.tmp, "kept.cfg"), mohreplay.kept_config())
+        game = mohreplay.Game(lambda line: None, lambda: None, keep_config=False)
+        self.addCleanup(game.stop)
+        game.start(self.exe, self.game_dir, self.demos, 640, 480)
+        with open(os.path.join(game.home, mohreplay.GAME_CONFIG), "r+") as f:
+            self.assertEqual(f.read(), 'seta cg_fov "90"\n')
+            f.write('seta cg_fov "120"\n')
+        game.stop()
+        with open(mohreplay.kept_config()) as f:
+            self.assertEqual(f.read(), 'seta cg_fov "90"\n')
 
     def test_xwayland_when_wayland_fails(self):
         with mock.patch.dict(os.environ, {"FAKEGAME_FAIL_DRIVER": "wayland"}):
