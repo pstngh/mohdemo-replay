@@ -1087,16 +1087,63 @@ static int CL_DemoKillBefore( void ) {
 
 /*
 ====================
+CL_DemoKillShown
+
+Whether the killer of kill event i is the player shown at the time, and if
+so from when to when they're shown. A player's kills only play then: at
+other times, the demo shows someone else.
+====================
+*/
+static qboolean CL_DemoKillShown( int i, int *from, int *to ) {
+	const demoEvent_t	*kill = &cl_demoIndex.events[i];
+	const demoEvent_t	*watch = NULL;
+	int					j;
+
+	// the last player shown from the time of the kill or before
+	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time <= kill->time; j++ ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH ) {
+			watch = &cl_demoIndex.events[j];
+		}
+	}
+	for ( j = i - 1; !watch && j >= 0; j-- ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH ) {
+			watch = &cl_demoIndex.events[j];
+		}
+	}
+
+	if ( !watch || !kill->name[0] ) {
+		return qfalse;
+	}
+	// a player who changed names since is still the same client
+	if ( !( watch->client >= 0 && watch->client == kill->client ) && !CL_DemoPlayerIs( watch->name, kill->name ) ) {
+		return qfalse;
+	}
+
+	*from = watch->time;
+	*to = cl_demoIndex.duration;
+	for ( j = watch - cl_demoIndex.events + 1; j < cl_demoIndex.numEvents; j++ ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH ) {
+			*to = cl_demoIndex.events[j].time;
+			break;
+		}
+	}
+	return qtrue;
+}
+
+/*
+====================
 CL_DemoInMultiKill
 
 Whether kill event i is part of a multi-kill: its killer killed someone
-else at most cl_demoMultiKill seconds before or after it
+else at most cl_demoMultiKill seconds before or after it, also while shown
+if shown is set
 ====================
 */
-static qboolean CL_DemoInMultiKill( int i ) {
+static qboolean CL_DemoInMultiKill( int i, qboolean shown ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
 	const demoEvent_t	*other;
 	int					gap = Q_max( 0, (int)( cl_demoMultiKill->value * 1000 ) );
+	int					from, to;
 	int					j;
 
 	if ( !ev->name[0] ) {
@@ -1106,13 +1153,15 @@ static qboolean CL_DemoInMultiKill( int i ) {
 	// the events go forward in time
 	for ( j = i - 1; j >= 0 && ev->time - cl_demoIndex.events[j].time <= gap; j-- ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name ) ) {
+		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name )
+			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
 	}
 	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time - ev->time <= gap; j++ ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name ) ) {
+		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name )
+			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
 	}
@@ -1128,18 +1177,28 @@ The stretch around index event i that demoonly plays, if any
 */
 static qboolean CL_DemoStretch( int i, int *start, int *end ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	qboolean			player = cl_demoOnlyPlayer[0] != 0;
+	int					from, to;
 	int					j;
 
 	switch ( cl_demoOnly ) {
 	case DEMOONLY_KILLS:
 	case DEMOONLY_MULTIKILLS:
-		if ( ev->type != DEMOEVENT_KILL || ( cl_demoOnlyPlayer[0] && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) )
-			|| ( cl_demoOnly == DEMOONLY_MULTIKILLS && !CL_DemoInMultiKill( i ) ) ) {
+		if ( ev->type != DEMOEVENT_KILL || ( player && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) )
+			|| ( cl_demoOnly == DEMOONLY_MULTIKILLS && !CL_DemoInMultiKill( i, player ) ) ) {
 			return qfalse;
 		}
 		*start = ev->time - CL_DemoKillBefore();
 		*end = ev->time + Q_max( 0, (int)( cl_demoKillAfter->value * 1000 ) );
-		return qtrue;
+		// a player's kills only while they're the one shown
+		if ( player ) {
+			if ( !CL_DemoKillShown( i, &from, &to ) ) {
+				return qfalse;
+			}
+			*start = Q_max( *start, from );
+			*end = Q_min( *end, to );
+		}
+		return *end > *start;
 
 	case DEMOONLY_WATCHED:
 		if ( ev->type != DEMOEVENT_WATCH || !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) ) {
@@ -1282,6 +1341,7 @@ static void CL_DemoJumpToKill( qboolean next ) {
 	const demoEvent_t	*ev;
 	const char			*player;
 	int					time, target, best;
+	int					from, to;
 	int					i;
 
 	if ( !clc.demoplaying ) {
@@ -1300,6 +1360,13 @@ static void CL_DemoJumpToKill( qboolean next ) {
 		}
 
 		target = Q_max( 0, ev->time - CL_DemoKillBefore() );
+		// a player's kills only while they're the one shown
+		if ( player[0] ) {
+			if ( !CL_DemoKillShown( i, &from, &to ) ) {
+				continue;
+			}
+			target = Q_max( target, from );
+		}
 		if ( next && target > time + 100 ) {
 			best = target;
 			break;

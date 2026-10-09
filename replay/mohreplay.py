@@ -10,6 +10,7 @@ do is a console command, so it all works with key binds too.
 """
 
 import argparse
+import bisect
 import errno
 import functools
 import hashlib
@@ -157,6 +158,25 @@ def multi_kills(kills):
     return [chain for chain in chains if len(chain) > 1]
 
 
+def shown_kills(index):
+    """The kills made while their killer is the player shown, as demoonly
+    plays a player's kills (at other times the demo shows someone else):
+    [(kill, from, to)], with when they're shown around it."""
+    watched = index.get("watched", [])
+    times = [w["time"] for w in watched]
+    shown = []
+    for kill in index.get("kills", []):
+        i = bisect.bisect_right(times, kill["time"]) - 1
+        if i < 0 or not kill["killerName"]:
+            continue
+        w = watched[i]
+        # a player who changed names since is still the same client
+        if (w["client"] >= 0 and w["client"] == kill["killer"]) or same_player(w["name"], kill["killerName"]):
+            end = watched[i + 1]["time"] if i + 1 < len(watched) else index.get("duration", 0)
+            shown.append((kill, w["time"], end))
+    return shown
+
+
 def player_kills(player):
     """"name (kills, multi-kills)" from a summary's [name, kills, multi-kills]."""
     name, kills, multi = player
@@ -173,7 +193,8 @@ def list_demos(folder):
 
 def summarize(index):
     """What the demo list shows of an index: its maps, length, recorder and
-    players, {clean name: [name, kills, multi-kills]}."""
+    players, {clean name: [name, kills, multi-kills]}, counting the kills
+    made while they're shown."""
     players = {}
 
     def add(name, kills=0):
@@ -183,9 +204,12 @@ def summarize(index):
     for watched in index.get("watched", []):
         add(watched["name"])
     for kill in index.get("kills", []):
-        add(kill["killerName"], 1)
+        add(kill["killerName"])
         add(kill["victimName"])
-    for chain in multi_kills(index.get("kills", [])):
+    shown = [kill for kill, _, _ in shown_kills(index)]
+    for kill in shown:
+        add(kill["killerName"], 1)
+    for chain in multi_kills(shown):
         players[clean_name(chain[0]["killerName"])][2] += 1
     # "realism" or "default" when its levels tell one, "both", or ""
     kinds = {m.get("rules") for m in index.get("maps", [])} & {"realism", "default"}
@@ -1404,29 +1428,37 @@ class Window(QMainWindow):
         self.round_marks = [(start, f"Round {number}") for number, start in enumerate(starts, 1) if number > 1]
         self.fill_kills()
 
+    def player_kills(self, player):
+        """The kills listed, all of them or the player's while they're shown,
+        as {id(kill): (kill, from, to)} in order, with when they can be
+        played: as demoonly kills plays them."""
+        index = self.index or {}
+        if not player:
+            return {id(k): (k, 0, index.get("duration", 0) + KILL_AFTER) for k in index.get("kills", [])}
+        return {id(k): (k, start, end) for k, start, end in shown_kills(index) if same_player(player, k["killerName"])}
+
     def fill_kills(self):
         player = self.player.currentData() or ""
-        kills = (self.index or {}).get("kills", [])
+        kills = self.player_kills(player)
         self.kills.clear()
         self.kill_marks = []
-        for kill in kills:
-            if player and not same_player(player, kill["killerName"]):
-                continue
+        for kill, start, end in kills.values():
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
-            item.setData(0, Qt.UserRole, kill["time"] - KILL_BEFORE)
-            item.setData(1, Qt.UserRole, (kill["time"] - KILL_BEFORE, kill["time"] + KILL_AFTER))
+            span = (max(start, kill["time"] - KILL_BEFORE), min(end, kill["time"] + KILL_AFTER))
+            item.setData(0, Qt.UserRole, span[0])
+            item.setData(1, Qt.UserRole, span)
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
         self.multikills.clear()
         self.multi_marks = []
-        for chain in multi_kills(kills):
-            if player and not same_player(player, chain[0]["killerName"]):
-                continue
+        for chain in multi_kills([kill for kill, _, _ in kills.values()]):
+            first, last = kills[id(chain[0])], kills[id(chain[-1])]
             victims = ", ".join(kill["victimName"] or "?" for kill in chain)
             item = QTreeWidgetItem([clock(chain[0]["time"]), chain[0]["killerName"], str(len(chain)), victims])
-            item.setData(0, Qt.UserRole, chain[0]["time"] - KILL_BEFORE)
-            item.setData(1, Qt.UserRole, (chain[0]["time"] - KILL_BEFORE, chain[-1]["time"] + KILL_AFTER))
+            span = (max(first[1], chain[0]["time"] - KILL_BEFORE), min(last[2], chain[-1]["time"] + KILL_AFTER))
+            item.setData(0, Qt.UserRole, span[0])
+            item.setData(1, Qt.UserRole, span)
             self.multikills.addTopLevelItem(item)
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
         self.tab_changed()
@@ -1489,8 +1521,8 @@ class Window(QMainWindow):
             return
         player = self.player.currentData() or ""
         index = self.index or {}
-        kills = sum(1 for k in index.get("kills", []) if not player or same_player(k["killerName"], player))
-        multi = sum(1 for c in multi_kills(index.get("kills", [])) if not player or same_player(c[0]["killerName"], player))
+        listed = [kill for kill, _, _ in self.player_kills(player).values()]
+        kills, multi = len(listed), len(multi_kills(listed))
         watched = any(same_player(w["name"], player) for w in index.get("watched", [])) if player else False
         by = " by " + player if player else ""
         dialog = RecordDialog(self.settings, [

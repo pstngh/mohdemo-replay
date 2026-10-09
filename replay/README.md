@@ -20,7 +20,10 @@ indexes are kept in `~/.cache/mohdemo-replay` (`~/Library/Caches` on macOS). Dou
 play it, click a kill, a multi-kill or a round to jump to it. "Only these
 kills" plays the kills listed (by the player chosen), from the one selected
 or the first, and on the Multi-kills tab, the multi-kills: two kills or
-more by a player, each at most 3 seconds after the one before.
+more by a player, each at most 3 seconds after the one before. A player's
+kills are only those made while the demo shows them (the recorder playing,
+or the player the recorder follows), and only while they're shown, so a
+video of them never shows someone else.
 The time slider marks the kills listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
@@ -78,10 +81,10 @@ binds, without the app:
 | `demoseek <time>` | jump to a time (seconds or minutes:seconds), alone prints the time |
 | `demoskip <time>` | move forward, or back with a negative time |
 | `demopause [0\|1]` | pause or play, toggles without an argument |
-| `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill, by that player if given |
+| `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill, by that player while shown if given |
 | `demonextround`, `demoprevround` | jump to the next or previous round |
-| `demoonly kills [player]` | play only the kills, by that player if given |
-| `demoonly multikills [player]` | play only the multi-kills, by that player if given |
+| `demoonly kills [player]` | play only the kills, by that player while shown if given |
+| `demoonly multikills [player]` | play only the multi-kills, by that player while shown if given |
 | `demoonly watched <player>` | play only while that player is shown |
 | `demoonly` | play everything again |
 | `timescale <speed>` | playback speed, 1 is normal |

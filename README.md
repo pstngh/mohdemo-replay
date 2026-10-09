@@ -25,8 +25,8 @@ player names are made up.*
   Pause, skip 10 seconds, go to the next or previous kill or round, play
   from 0.25× to 4×.
 - **Watch only what matters.** Play only the kills or multi-kills, of
-  everyone or of one player, or only while a player is watched. The rest is
-  skipped.
+  everyone or of one player (while the demo shows them), or only while a
+  player is watched. The rest is skipped.
 - **Record videos.** MP4 with sound, at the size and frame rate you choose,
   recorded in the background faster than real time while you keep watching.
   Record a stretch of time, the kills or multi-kills, the kills you select,
