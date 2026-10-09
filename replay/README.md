@@ -23,17 +23,20 @@ or the first, and on the Multi-kills tab, the multi-kills: two kills or
 more by a player, each at most 3 seconds after the one before. A player's
 kills are only those made while the demo shows them (the recorder playing,
 or the player the recorder follows), and only while they're shown, so a
-video of them never shows someone else.
+video of them never shows someone else. "Whoever is shown", in the Player
+menu, lists the frags shown: the recorder's while they play and those of
+the players they follow, while they follow them.
 The time slider marks the kills listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
 
 Record… makes an MP4 of the demo playing: a stretch of time, the kills or
-the multi-kills (of the player chosen above) one after the other, or only
-while a player is watched. A right-click on kills or multi-kills selected
-records those, and on demos selected, all of them or the kills or
-multi-kills of the player the filter found, each demo with its own spelling
-of the name: in one video, or one each. Videos are recorded one after the
+the multi-kills (of the player chosen above) or the frags or multi-kills
+shown, one after the other, or only while a player is watched. A
+right-click on kills or multi-kills selected records those, and on demos
+selected, all of them, the kills or multi-kills of the player the filter
+found, each demo with its own spelling of the name, or the frags or
+multi-kills shown: in one video, or one each. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
 Linux and faster than real time, while you keep watching; FFmpeg joins the
 clips of a video without encoding them again. The Videos panel lists them

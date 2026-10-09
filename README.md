@@ -25,13 +25,14 @@ player names are made up.*
   Pause, skip 10 seconds, go to the next or previous kill or round, play
   from 0.25× to 4×.
 - **Watch only what matters.** Play only the kills or multi-kills, of
-  everyone or of one player (while the demo shows them), or only while a
-  player is watched. The rest is skipped.
+  everyone, of one player (while the demo shows them) or of whoever is
+  shown (the recorder's frags and those of the players they follow), or
+  only while a player is watched. The rest is skipped.
 - **Record videos.** MP4 with sound, at the size and frame rate you choose,
   recorded in the background faster than real time while you keep watching.
   Record a stretch of time, the kills or multi-kills, the kills you select,
-  or a player's kills across many demos, in one video or one each. Videos
-  wait in a queue.
+  or a player's kills or the frags shown across many demos, in one video or
+  one each. Videos wait in a queue.
 - **No app needed.** Everything is a game console command (`demoseek`,
   `demonextkill`, `demoonly`, `demovideo`…), so it all works with key binds
   too.
