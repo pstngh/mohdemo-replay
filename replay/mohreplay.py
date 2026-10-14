@@ -129,7 +129,7 @@ def find_ffmpeg():
 @functools.lru_cache(maxsize=4096)
 def clean_name(name):
     """The engine's rule for names: without ^ and a letter or digit, only
-    printable ASCII, any case (Q_CleanStr)."""
+    printable ASCII, any case (Q_CleanStr), spaces as one."""
     out, i = [], 0
     while i < len(name):
         if name[i] == "^" and i + 1 < len(name) and name[i + 1].isascii() and name[i + 1].isalnum():
@@ -138,7 +138,7 @@ def clean_name(name):
         if " " <= name[i] <= "~":
             out.append(name[i])
         i += 1
-    return "".join(out).lower()
+    return " ".join(word for word in "".join(out).lower().split(" ") if word)
 
 
 def same_player(a, b):
@@ -1137,15 +1137,19 @@ class Window(QMainWindow):
         self.speed.setToolTip("Playback speed")
         self.speed.currentTextChanged.connect(lambda s: self.game.send("timescale " + s.rstrip("×")))
         controls = QHBoxLayout()
+        # the kill buttons go to the kills listed
         for icon, tip, command in ((QStyle.SP_MediaSkipBackward, "Previous round (PgDn)", "demoprevround"),
-                                   (QStyle.SP_MediaSeekBackward, "Previous kill (Down)", "demoprevkill"),
+                                   (QStyle.SP_MediaSeekBackward, "Previous kill listed (Down)",
+                                    lambda: self.kill_commands()[1]),
                                    (None, "Back 10 seconds (Left: 5)", "demoskip -10")):
-            controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(c), "-10 s"))
+            controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
+                c() if callable(c) else c), "-10 s"))
         controls.addWidget(self.play)
         for icon, tip, command in ((None, "Forward 10 seconds (Right: 5)", "demoskip 10"),
-                                   (QStyle.SP_MediaSeekForward, "Next kill (Up)", "demonextkill"),
+                                   (QStyle.SP_MediaSeekForward, "Next kill listed (Up)", lambda: self.kill_commands()[0]),
                                    (QStyle.SP_MediaSkipForward, "Next round (PgUp)", "demonextround")):
-            controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(c), "+10 s"))
+            controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
+                c() if callable(c) else c), "+10 s"))
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.time)
         controls.addWidget(self.speed)
@@ -1452,6 +1456,15 @@ class Window(QMainWindow):
         return {id(k): (k, start, end) for k, start, end in shown_kills(index)
                 if player == SHOWN or same_player(player, k["killerName"])}
 
+    def kill_commands(self):
+        """The commands to the next and previous kills listed: anyone's, the
+        player's while shown or whoever's is shown."""
+        player = self.player.currentData() or ""
+        if player == SHOWN:
+            return "demonextshownkill", "demoprevshownkill"
+        by = " " + quoted(player) if player else ""
+        return "demonextkill" + by, "demoprevkill" + by
+
     def switches(self):
         """When the player shown changes: the kills of a player or of whoever
         is shown aren't joined across it, all the kills are."""
@@ -1484,6 +1497,10 @@ class Window(QMainWindow):
             item.setData(1, Qt.UserRole, clips)
             self.multikills.addTopLevelItem(item)
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
+        # Up and Down too
+        next_kill, prev_kill = self.kill_commands()
+        self.game.send("bind UPARROW " + next_kill)
+        self.game.send("bind DOWNARROW " + prev_kill)
         self.tab_changed()
 
     def tab_changed(self):

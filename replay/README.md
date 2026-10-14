@@ -71,7 +71,7 @@ other letters, numbers, Space and Enter do nothing. The app binds these keys:
 | --- | --- |
 | Pause | pause or play |
 | Left / Right | back or forward 5 seconds |
-| Down / Up | previous or next kill |
+| Down / Up | previous or next kill listed: of the player chosen in the app, or anyone's |
 | PgDn / PgUp | previous or next round |
 
 ## Console commands

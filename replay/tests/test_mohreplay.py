@@ -187,6 +187,8 @@ class TestFunctions(unittest.TestCase):
         self.assertTrue(mohreplay.same_player("^1Phil", "phil"))
         self.assertTrue(mohreplay.same_player("T-", "t-"))
         self.assertTrue(mohreplay.same_player("a^", "A^"))
+        # as a key bind passes it
+        self.assertTrue(mohreplay.same_player("|Fatal-Finns|  Granu ", "|fatal-finns| granu"))
         self.assertFalse(mohreplay.same_player("phil", "phill"))
 
     def test_multi_kills(self):
@@ -532,6 +534,19 @@ class TestWindow(FakeGameCase):
         self.assertTrue(wait_until(lambda: window.state.get("paused")))
         window.speed.setCurrentText("2×")
         self.assertTrue(wait_until(lambda: "timescale 2" in self.commands(window.game)))
+
+    def test_kill_buttons_and_keys_go_to_the_kills_listed(self):
+        window = self.window()
+        self.playing(window)
+        buttons = {button.toolTip(): button for button in window.findChildren(mohreplay.QToolButton)}
+        for player, next_kill, prev_kill in (("t-", 'demonextkill "t-"', 'demoprevkill "t-"'),
+                                             (mohreplay.SHOWN, "demonextshownkill", "demoprevshownkill"),
+                                             ("", "demonextkill", "demoprevkill")):
+            window.player.setCurrentIndex(window.player.findData(player))
+            buttons["Next kill listed (Up)"].click()
+            buttons["Previous kill listed (Down)"].click()
+            self.assertTrue(wait_until(lambda: self.commands(window.game)[-4:] == [
+                "bind UPARROW " + next_kill, "bind DOWNARROW " + prev_kill, next_kill, prev_kill]), player)
 
     def shown(self, window):
         return sorted(window.demos.topLevelItem(i).text(mohreplay.COL_DEMO) for i in range(window.demos.topLevelItemCount())
