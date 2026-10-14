@@ -471,9 +471,11 @@ class Game:
         self.save_config()
         self.on_exit()
 
-    def send(self, command):
+    def send(self, *commands):
+        """Commands sent together are written at once, so the game runs them
+        in the same frame."""
         if self.running():
-            self.queue.append(command)
+            self.queue.extend(commands)
             self.flush()
 
     def flush(self):
@@ -729,7 +731,8 @@ def demoonly_plan(index, only="", player=""):
         chains = multi_kills([k for k, _, _ in kills])
         keep = {id(k) for chain in chains for k in chain}
         kills, count = [x for x in kills if id(x[0]) in keep], len(chains)
-    spans = [(max(start, k["time"] - KILL_BEFORE), min(end, duration, k["time"] + KILL_AFTER)) for k, start, end in kills]
+    spans = [(max(start, k["time"] - KILL_BEFORE), min(end, duration, k["time"] + KILL_AFTER))
+             for k, start, end in kills]
     return count, stretches([span for span in spans if span[1] > span[0]], switches)
 
 
@@ -987,8 +990,8 @@ class Recorder(QObject):
             self.send_clip()
 
     def send_clip(self):
-        for command in self.job["clips"][self.clip]["commands"]:
-            self.game.send(command.replace("{part}", self.part()))
+        commands = self.job["clips"][self.clip]["commands"]
+        self.game.send(*(command.replace("{part}", self.part()) for command in commands))
         self.phase = "starting"
 
     def poll(self):
@@ -1576,8 +1579,7 @@ class Window(QMainWindow):
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
         # Up and Down too
         next_kill, prev_kill = self.kill_commands()
-        self.game.send("bind UPARROW " + next_kill)
-        self.game.send("bind DOWNARROW " + prev_kill)
+        self.game.send("bind UPARROW " + next_kill, "bind DOWNARROW " + prev_kill)
         self.tab_changed()
 
     def tab_changed(self):
@@ -1610,11 +1612,11 @@ class Window(QMainWindow):
                                     f"There are no {'multi-kills' if multi else 'kills'} to play.")
             return
         player = self.player.currentData() or ""
-        self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)))
         if player == SHOWN:
-            self.game.send(f"demoonly shown{'multikills' if multi else 'kills'}")
+            only = f"demoonly shown{'multikills' if multi else 'kills'}"
         else:
-            self.game.send(f"demoonly {'multikills' if multi else 'kills'}" + (" " + quoted(player) if player else ""))
+            only = f"demoonly {'multikills' if multi else 'kills'}" + (" " + quoted(player) if player else "")
+        self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)), only)
 
     def only_watched(self):
         """Plays while the player is watched, from the first time."""
@@ -1627,8 +1629,7 @@ class Window(QMainWindow):
         if start is None:
             QMessageBox.information(self, "Only while watched", player + " isn't watched in this demo.")
             return
-        self.game.send("demoseek " + seconds(start))
-        self.game.send("demoonly watched " + quoted(player))
+        self.game.send("demoseek " + seconds(start), "demoonly watched " + quoted(player))
 
     # recording
 
