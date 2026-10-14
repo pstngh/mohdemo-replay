@@ -36,10 +36,13 @@ shown, one after the other, or only while a player is watched. A
 right-click on kills or multi-kills selected records those, and on demos
 selected, all of them, the kills or multi-kills of the player the filter
 found, each demo with its own spelling of the name, or the frags or
-multi-kills shown: in one video, or one each. Videos are recorded one after the
+multi-kills shown: in one video, or one each. Each choice tells how many
+kills it holds and how long the video will be, and the last one is chosen
+again next time. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
 Linux and faster than real time, while you keep watching; FFmpeg joins the
-clips of a video without encoding them again. The Videos panel lists them
+clips of a video without encoding them again. The Videos panel lists them,
+with how far the one recording is and how long it has left
 (Cancel, Open folder, double-click to watch one), and each lands in the
 folder chosen, named from a pattern (`{demo}`, `{start}`, `{player}`,
 `{date}`). Size, frames per second, quality, codec (H.264,

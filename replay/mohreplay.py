@@ -44,9 +44,11 @@ MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, 
 MIN_LENGTH = 5 * 60000  # msec: shorter demos aren't listed, once indexed
 # the Player menu's "Whoever is shown": not a name, which can't hold a NUL
 SHOWN = "\0shown"
-# what Record… offers for whoever is shown, as demoonly shownkills and shownmultikills
-SHOWN_KILLS = "frags shown: the recorder's and the players they follow"
-SHOWN_MULTI = "multi-kills shown"
+# what Record… offers for whoever is shown, as demoonly shownkills and
+# shownmultikills: one and several
+SHOWN_KILLS = ("frag shown", "frags shown")
+SHOWN_WHO = ": the recorder's and the players they follow"
+SHOWN_MULTI = ("multi-kill shown", "multi-kills shown")
 # the demo list's columns
 DEMO_COLUMNS = ["Date", "Length", "Rules", "Recorder", "Player", "Map", "Demo"]
 COL_DATE, COL_LENGTH, COL_RULES, COL_RECORDER, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_COLUMNS))
@@ -299,6 +301,14 @@ class Library(QObject):
         self.total = len(self.waiting) + len(self.busy)
         self.start_workers()
         self.on_change()
+
+    def index(self, name):
+        """The index kept of a demo, None if there's none."""
+        try:
+            with open(os.path.join(self.cache, name + ".json"), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, TypeError, ValueError):
+            return None
 
     def load(self, name):
         try:
@@ -663,17 +673,18 @@ class SettingsDialog(QDialog):
 
 def range_clip(demo, start, end):
     """A clip of demo from start to end, in msec. {part} in the commands is
-    the name of the video the recorder writes."""
-    return {"demo": demo, "start": start, "end": end,
+    the name of the video the recorder writes, and spans what it plays."""
+    return {"demo": demo, "start": start, "end": end, "spans": [(start, end)],
             "commands": ["demoonly", f"demoseek {seconds(start)}", "demopause 0", f"demovideo {{part}} {seconds(end)}"]}
 
 
-def only_clip(demo, only="", player=""):
+def only_clip(demo, only="", player="", spans=None):
     """A clip of what demoonly plays ("kills", "multikills", "shownkills",
-    "shownmultikills", "watched"), or of all of demo."""
-    only = f"demoonly {only}" + (" " + quoted(player) if player else "") if only else "demoonly"
-    return {"demo": demo, "start": 0, "end": None,
-            "commands": ["demoseek 0", "demopause 0", only, "demovideo {part}"]}
+    "shownmultikills", "watched"), or of all of demo; spans: what that is,
+    from demoonly_plan(), if known."""
+    command = f"demoonly {only}" + (" " + quoted(player) if player else "") if only else "demoonly"
+    return {"demo": demo, "start": 0, "end": None, "spans": spans,
+            "commands": ["demoseek 0", "demopause 0", command, "demovideo {part}"]}
 
 
 def stretches(spans, switches=()):
@@ -692,6 +703,51 @@ def stretches(spans, switches=()):
         else:
             joined[-1][1] = max(joined[-1][1], end)
     return [tuple(span) for span in joined]
+
+
+def demoonly_plan(index, only="", player=""):
+    """What demoonly <only> [player] plays in a demo, as the engine does,
+    from its index: (how many kills or multi-kills, [(start, end)] in msec),
+    all of the demo without only."""
+    duration = index.get("duration", 0)
+    watched = index.get("watched", [])
+    switches = [w["time"] for w in watched]
+    if not only:
+        return 0, [(0, duration)]
+    if only == "watched":
+        spans = [(w["time"], watched[i + 1]["time"] if i + 1 < len(watched) else duration)
+                 for i, w in enumerate(watched) if same_player(w["name"], player)]
+        return 0, stretches(spans, switches)
+    if only.startswith("shown") or player:
+        kills = [(k, start, end) for k, start, end in shown_kills(index)
+                 if not player or same_player(player, k["killerName"])]
+    else:
+        # anyone's, whoever is shown
+        kills, switches = [(k, 0, duration) for k in index.get("kills", [])], []
+    count = len(kills)
+    if only.endswith("multikills"):
+        chains = multi_kills([k for k, _, _ in kills])
+        keep = {id(k) for chain in chains for k in chain}
+        kills, count = [x for x in kills if id(x[0]) in keep], len(chains)
+    spans = [(max(start, k["time"] - KILL_BEFORE), min(end, duration, k["time"] + KILL_AFTER)) for k, start, end in kills]
+    return count, stretches([span for span in spans if span[1] > span[0]], switches)
+
+
+def the(count, one, many):
+    """"The 3 kills", "The kill" or "No kills"."""
+    return f"The {count} {many}" if count > 1 else f"The {one}" if count else f"No {many}"
+
+
+def about(msec):
+    """How long, roughly: "about 40 min"."""
+    minutes = round(msec / 60000)
+    if minutes < 1:
+        return "under a minute"
+    return f"about {minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"about {minutes} min"
+
+
+def length(spans):
+    return sum(end - start for start, end in spans)
 
 
 class RecordDialog(QDialog):
@@ -724,8 +780,12 @@ class RecordDialog(QDialog):
             button.setEnabled(enabled)
             group.addButton(button)
             what.addWidget(button)
+        # the last choice, if it's offered
+        last = self.range if settings.value("rec/what") == "range" else self.choices.get(settings.value("rec/what"))
         first = self.range or next((b for b in self.choices.values() if b.isEnabled()), None)
-        if first:
+        if last and last.isEnabled():
+            last.setChecked(True)
+        elif first:
             first.setChecked(True)
         form.addRow("Record", what)
         self.join = QCheckBox("One video for all")
@@ -834,6 +894,8 @@ class RecordDialog(QDialog):
             self.settings.setValue("rec/" + key, value)
         if self.offers_join:
             self.settings.setValue("rec/join", "true" if self.join.isChecked() else "false")
+        if self.range or len(self.choices) > 1:
+            self.settings.setValue("rec/what", self.what())
         super().accept()
 
     def job(self, label, clips, demo, player=""):
@@ -879,6 +941,7 @@ class Recorder(QObject):
         # with the settings of the game watched, but changing none
         self.game = Game(self.output, self.exited, keep_config=False)
         self.clock = QElapsedTimer()
+        self.elapsed = QElapsedTimer()
         self.timer = QTimer(self, interval=200, timeout=self.poll)
 
     def start(self):
@@ -892,6 +955,7 @@ class Recorder(QObject):
         driver = "offscreen" if sys.platform.startswith("linux") else None
         self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
                         job["width"], job["height"], extra, driver)
+        self.elapsed.start()
         self.on_progress(self.job, "Starting the recorder…")
         self.timer.start()
         self.next_clip()
@@ -945,15 +1009,28 @@ class Recorder(QObject):
             elif self.clock.elapsed() > 180000 or self.error:
                 self.finish("The recording didn't start. " + self.error)
         elif self.phase == "recording":
-            clip, time = self.job["clips"][self.clip], state.get("time", 0)
-            text = f"Recording {clock(time)}"
-            if clip["end"]:
-                text += f", {max(0, min(99, (time - clip['start']) * 100 // max(1, clip['end'] - clip['start'])))}%"
+            text = "Recording " + self.how_far(state.get("time", 0))
             if len(self.job["clips"]) > 1:
                 text += f" (clip {self.clip + 1} of {len(self.job['clips'])})"
             self.on_progress(self.job, text + "…")
             if not state.get("recording"):
                 self.clip_done()
+
+    def how_far(self, time):
+        """How much of the video is done, and how long the rest will take,
+        from what the clips play, else the time in the demo."""
+        clips = self.job["clips"]
+        total = sum(length(clip["spans"] or []) for clip in clips)
+        if not total or any(clip["spans"] is None for clip in clips):
+            return clock(time)
+        done = sum(length(clip["spans"]) for clip in clips[:self.clip])
+        done += sum(max(0, min(end, time) - start) for start, end in clips[self.clip]["spans"])
+        share = min(0.99, done / total)
+        text = f"{int(share * 100)}%"
+        # once it's going
+        if share >= 0.02:
+            text += ", " + about(self.elapsed.elapsed() * (1 - share) / share) + " left"
+        return text
 
     def clip_done(self):
         if self.error:
@@ -1564,25 +1641,26 @@ class Window(QMainWindow):
             QMessageBox.information(self, "Record a video", "Play a demo first.")
             return
         player = self.player.currentData() or ""
-        choices = []
+        index = self.index or {}
+        keys = ["kills", "multikills", "shownkills", "shownmultikills", "watched"]
         # whoever is shown in the Player menu: their kills are the frags shown
         if player == SHOWN:
-            player = ""
-        else:
-            listed = [kill for kill, _, _ in self.player_kills(player).values()]
-            kills, multi = len(listed), len(multi_kills(listed))
-            by = " by " + player if player else ""
-            choices = [("kills", f"The {kills} kills{by}", kills > 0),
-                       ("multikills", f"The {multi} multi-kills{by}", multi > 0)]
-        shown = [kill for kill, _, _ in self.player_kills(SHOWN).values()]
-        shown_count, shown_multi = len(shown), len(multi_kills(shown))
-        index = self.index or {}
-        watched = any(same_player(w["name"], player) for w in index.get("watched", [])) if player else False
-        dialog = RecordDialog(self.settings, choices + [
-            ("shownkills", f"The {shown_count} {SHOWN_KILLS}", shown_count > 0),
-            ("shownmultikills", f"The {shown_multi} {SHOWN_MULTI}", shown_multi > 0),
-            ("watched", f"While {player} is watched" if player else "While a player is watched", watched),
-        ], self.state.get("time", 0), parent=self)
+            player, keys = "", keys[2:]
+        by = " by " + player if player else ""
+        texts = {"kills": ("kill" + by, "kills" + by), "multikills": ("multi-kill" + by, "multi-kills" + by),
+                 "shownkills": SHOWN_KILLS, "shownmultikills": SHOWN_MULTI}
+        plans, labels, choices = {}, {}, []
+        for key in keys:
+            if key == "watched":
+                plans[key] = demoonly_plan(index, key, player) if player else (0, [])
+                labels[key] = f"While {player} is watched" if player else "While a player is watched"
+                enabled = bool(plans[key][1])
+            else:
+                plans[key] = demoonly_plan(index, key, "" if key.startswith("shown") else player)
+                labels[key] = the(plans[key][0], *texts[key]) + (SHOWN_WHO if key == "shownkills" else "")
+                enabled = plans[key][0] > 0
+            choices.append((key, labels[key] + (", " + about(length(plans[key][1])) if enabled else ""), enabled))
+        dialog = RecordDialog(self.settings, choices, self.state.get("time", 0), parent=self)
         if not dialog.exec():
             return
         what = dialog.what()
@@ -1591,9 +1669,9 @@ class Window(QMainWindow):
             label = f"{demo}, {clock(start)} to {clock(end)}"
             clip = range_clip(demo, start, end)
         else:
-            label = demo + ", " + dialog.choices[what].text()[0].lower() + dialog.choices[what].text()[1:]
+            label = demo + ", " + labels[what][0].lower() + labels[what][1:]
             player = "" if what.startswith("shown") else player
-            clip = only_clip(demo, what, player)
+            clip = only_clip(demo, what, player, plans[what][1])
         self.add_job(dialog.job(label, [clip], demo, player))
 
     def record_selected(self, tree):
@@ -1603,17 +1681,19 @@ class Window(QMainWindow):
         if not demo or not items:
             QMessageBox.information(self, "Record a video", "Select kills of the demo playing first.")
             return
-        kind = "multi-kills" if tree is self.multikills else "kills"
+        one = "multi-kill" if tree is self.multikills else "kill"
+        kind = f"{len(items)} {one}s" if len(items) > 1 else one
         spans = stretches([span for item in items for span in item.data(1, Qt.UserRole)], self.switches())
-        dialog = RecordDialog(self.settings, [("selected", f"The {len(items)} {kind} selected", True)],
-                              join=len(spans) > 1, parent=self)
+        dialog = RecordDialog(self.settings, [
+            ("selected", f"{the(len(items), one, one + 's')} selected, {about(length(spans))}", True)],
+            join=len(spans) > 1, parent=self)
         if not dialog.exec():
             return
         player = self.player.currentData() or ""
         player = "" if player == SHOWN else player
         clips = [range_clip(demo, start, end) for start, end in spans]
         if dialog.join.isChecked() or len(clips) == 1:
-            self.add_job(dialog.job(f"{demo}, {len(items)} {kind}", clips, demo, player))
+            self.add_job(dialog.job(f"{demo}, {kind}", clips, demo, player))
         else:
             for clip in clips:
                 self.add_job(dialog.job(f"{demo}, {clock(clip['start'])} to {clock(clip['end'])}", [clip], demo, player))
@@ -1632,44 +1712,51 @@ class Window(QMainWindow):
             found = {name: self.demo_items[name].data(COL_PLAYER, Qt.UserRole) for name in names}
         player = next((p for p in found.values() if p), "")
 
-        def demos_with(column, anyone=False):
-            """The demos where the player found has kills (1) or multi-kills
-            (2) while shown, anyone if none or anyone is set."""
-            with_some = []
-            for name in names:
-                players = (self.library.demos.get(name) or {}).get("players", {})
-                if found.get(name) and not anyone:
-                    counts = players.get(clean_name(found[name]), [0, 0, 0])
-                    if counts[column]:
-                        with_some.append(name)
-                elif any(p[column] for p in players.values()):
-                    with_some.append(name)
-            return with_some
-        with_kills, with_multi = demos_with(1), demos_with(2)
-        with_shown, with_shown_multi = demos_with(1, True), demos_with(2, True)
-        whose = player + "'s" if player else "All the"
+        # what each choice records of each demo, from the indexes kept:
+        # {key: {name: (count, spans or None)}}, the demos with some
+        plans = {}
+        indexes = {name: self.library.index(name) for name in names}
+        for key in ("kills", "multikills", "shownkills", "shownmultikills", "everything"):
+            plans[key] = {}
+            for name, index in indexes.items():
+                if index is None:
+                    if key == "everything":
+                        plans[key][name] = (0, None)
+                    continue
+                plan = demoonly_plan(index, "" if key == "everything" else key,
+                                     found.get(name) or "" if key in ("kills", "multikills") else "")
+                if plan[0] or key == "everything":
+                    plans[key][name] = plan
 
-        def where(count):
-            return "" if len(names) == 1 else f", in {count} of the {len(names)} demos"
+        def text(key, label):
+            """label, in how many demos, how long."""
+            spans = [plan[1] for plan in plans[key].values()]
+            if len(names) > 1 and key != "everything":
+                label += f", in {len(spans)} of the {len(names)} demos"
+            if spans and None not in spans:
+                label += ", " + about(sum(length(s) for s in spans))
+            return key, label, bool(spans)
+        count = {key: sum(plan[0] for plan in plans[key].values()) for key in plans}
+        by = " by " + player if player else ""
         dialog = RecordDialog(self.settings, [
-            ("kills", f"{whose} kills{where(len(with_kills))}", bool(with_kills)),
-            ("multikills", f"{whose} multi-kills{where(len(with_multi))}", bool(with_multi)),
-            ("shownkills", f"The {SHOWN_KILLS}{where(len(with_shown))}", bool(with_shown)),
-            ("shownmultikills", f"The {SHOWN_MULTI}{where(len(with_shown_multi))}", bool(with_shown_multi)),
-            ("everything", "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos", True),
+            text("kills", the(count["kills"], "kill" + by, "kills" + by)),
+            text("multikills", the(count["multikills"], "multi-kill" + by, "multi-kills" + by)),
+            text("shownkills", the(count["shownkills"], *SHOWN_KILLS) + SHOWN_WHO),
+            text("shownmultikills", the(count["shownmultikills"], *SHOWN_MULTI)),
+            text("everything", "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos"),
         ], join=len(names) > 1, parent=self)
         if not dialog.exec():
             return
         what = dialog.what()
-        chosen = {"kills": with_kills, "multikills": with_multi, "shownkills": with_shown,
-                  "shownmultikills": with_shown_multi, "everything": names}[what]
-        whose = whose if player else whose.lower()
-        kind = {"kills": f"{whose} kills", "multikills": f"{whose} multi-kills", "shownkills": "frags shown",
-                "shownmultikills": SHOWN_MULTI, "everything": ""}[what]
+        chosen = list(plans[what])
+        whose = player + "'s" if player else "all the"
+        kind = {"kills": f"{whose} kills", "multikills": f"{whose} multi-kills", "shownkills": SHOWN_KILLS[1],
+                "shownmultikills": SHOWN_MULTI[1], "everything": ""}[what]
         # no player for whoever is shown
         if what.startswith("shown"):
             found, player = {}, ""
-        clips = [only_clip(name, "" if what == "everything" else what, found.get(name) or "") for name in chosen]
+        clips = [only_clip(name, "" if what == "everything" else what, found.get(name) or "", plans[what][name][1])
+                 for name in chosen]
         if dialog.join.isChecked() or len(clips) == 1:
             demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
             self.add_job(dialog.job(demo + (f", {kind}" if kind else ""), clips, demo, player))
