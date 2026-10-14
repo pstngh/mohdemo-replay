@@ -978,18 +978,18 @@ const void *RB_TakeVideoFrameCmd( const void *data )
 	avipadlen = avipadwidth - linelen;
 
 	cBuf = PADP(cmd->captureBuffer, packAlign);
-		
-	qglReadPixels(0, 0, cmd->width, cmd->height, GL_RGB,
-		GL_UNSIGNED_BYTE, cBuf);
-
-	memcount = padwidth * cmd->height;
-
-	// gamma correct
-	if(glConfig.deviceSupportsGamma)
-		R_GammaCorrect(cBuf, memcount);
 
 	if(cmd->motionJpeg)
 	{
+		qglReadPixels(0, 0, cmd->width, cmd->height, GL_RGB,
+			GL_UNSIGNED_BYTE, cBuf);
+
+		memcount = padwidth * cmd->height;
+
+		// gamma correct
+		if(glConfig.deviceSupportsGamma)
+			R_GammaCorrect(cBuf, memcount);
+
 		memcount = RE_SaveJPGToBuffer(cmd->encodeBuffer, linelen * cmd->height,
 			r_aviMotionJpegQuality->integer,
 			cmd->width, cmd->height, cBuf, padlen);
@@ -999,21 +999,38 @@ const void *RB_TakeVideoFrameCmd( const void *data )
 	{
 		byte *lineend, *memend;
 		byte *srcptr, *destptr;
-	
+
+		// Changed in OPM
+		//  Read as BGRA, the framebuffer's own layout, which drivers copy
+		//  as is: RGB is converted pixel by pixel, 6.6 instead of 2.4 msec
+		//  at 1920x1080 on radeonsi. Then B, G and R are kept.
+		linelen = cmd->width * 4;
+		padwidth = PAD(linelen, packAlign);
+		padlen = padwidth - linelen;
+
+		qglReadPixels(0, 0, cmd->width, cmd->height, GL_BGRA,
+			GL_UNSIGNED_BYTE, cBuf);
+
+		memcount = padwidth * cmd->height;
+
+		// gamma correct
+		if(glConfig.deviceSupportsGamma)
+			R_GammaCorrect(cBuf, memcount);
+
 		srcptr = cBuf;
 		destptr = cmd->encodeBuffer;
 		memend = srcptr + memcount;
 		
-		// swap R and B and remove line paddings
+		// drop A and remove line paddings
 		while(srcptr < memend)
 		{
 			lineend = srcptr + linelen;
 			while(srcptr < lineend)
 			{
-				*destptr++ = srcptr[2];
-				*destptr++ = srcptr[1];
 				*destptr++ = srcptr[0];
-				srcptr += 3;
+				*destptr++ = srcptr[1];
+				*destptr++ = srcptr[2];
+				srcptr += 4;
 			}
 			
 			Com_Memset(destptr, '\0', avipadlen);

@@ -436,7 +436,9 @@ qboolean CL_OpenAVIForWriting( const char *fileName, qboolean pipe )
   // FFmpeg gets the frames as they are
   afd.motionJpeg = !afd.pipe && cl_aviMotionJpeg->integer;
 
-  afd.cBuffer = ( byte * )Z_Malloc( afd.width * afd.height * 4 );
+  // Changed in OPM
+  //  Room for BGRA lines padded to GL_PACK_ALIGNMENT, from an aligned start
+  afd.cBuffer = ( byte * )Z_Malloc( ( afd.width * 4 + 8 ) * afd.height + 16 );
   afd.eBuffer = ( byte * )Z_Malloc( afd.width * afd.height * 4 );
 
   afd.a.rate = S_LoopbackRate( );
