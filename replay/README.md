@@ -85,6 +85,7 @@ binds, without the app:
 | `demoskip <time>` | move forward, or back with a negative time |
 | `demopause [0\|1]` | pause or play, toggles without an argument |
 | `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill, by that player while shown if given |
+| `demonextshownkill`, `demoprevshownkill` | jump to before the next or previous kill of whoever is shown |
 | `demonextround`, `demoprevround` | jump to the next or previous round |
 | `demoonly kills [player]` | play only the kills, by that player while shown if given |
 | `demoonly multikills [player]` | play only the multi-kills, by that player while shown if given |

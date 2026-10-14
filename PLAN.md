@@ -119,8 +119,8 @@ taken for the game; CI now builds `main` for macOS too.
      pauses after the last stretch and plays everything from there; a new
      demo plays everything.
 
-   Players are given by name, without colors or case, like the index's
-   `killerName` and `watched` names.
+   Players are given by name, without colors, case or extra spaces, like
+   the index's `killerName` and `watched` names.
 4. **The app.** Done: `replay/mohreplay.py` (see `replay/README.md`). It
    starts `openmohaa` with a throwaway `fs_homepath` holding a link to the
    demos folder, `cl_demoFiles 1` and key binds (Pause, arrows, PgUp/PgDn),

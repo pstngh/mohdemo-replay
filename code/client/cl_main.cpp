@@ -1064,9 +1064,33 @@ static void CL_UpdateDemoState( void ) {
 
 /*
 ====================
+CL_DemoCleanName
+
+Without colors, and spaces as one: a name in a key bind loses its runs of
+spaces and those at its ends
+====================
+*/
+static char *CL_DemoCleanName( char *name ) {
+	char	*in, *out;
+
+	Q_CleanStr( name );
+	for ( in = out = name; *in; in++ ) {
+		if ( *in != ' ' || ( out > name && out[-1] != ' ' ) ) {
+			*out++ = *in;
+		}
+	}
+	if ( out > name && out[-1] == ' ' ) {
+		out--;
+	}
+	*out = 0;
+	return name;
+}
+
+/*
+====================
 CL_DemoPlayerIs
 
-The same name, without colors and case
+The same name, without colors, case and extra spaces
 ====================
 */
 static qboolean CL_DemoPlayerIs( const char *playerName, const char *player ) {
@@ -1075,7 +1099,7 @@ static qboolean CL_DemoPlayerIs( const char *playerName, const char *player ) {
 
 	Q_strncpyz( a, playerName, sizeof( a ) );
 	Q_strncpyz( b, player, sizeof( b ) );
-	return !Q_stricmp( Q_CleanStr( a ), Q_CleanStr( b ) );
+	return !Q_stricmp( CL_DemoCleanName( a ), CL_DemoCleanName( b ) );
 }
 
 /*
@@ -1384,10 +1408,11 @@ static void CL_DemoOnly_f( void ) {
 CL_DemoJumpToKill
 
 To the start of the next kill, or of the previous one, or of this one if
-more than a second in, by the player given as argument if any
+more than a second in, by the player given as argument if any, or by
+whoever is shown if shown is set
 ====================
 */
-static void CL_DemoJumpToKill( qboolean next ) {
+static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
 	const demoEvent_t	*ev;
 	const char			*player;
 	int					time, target, best;
@@ -1399,7 +1424,7 @@ static void CL_DemoJumpToKill( qboolean next ) {
 		return;
 	}
 
-	player = Cmd_Args();
+	player = shown ? "" : Cmd_Args();
 	time = CL_DemoTime();
 	best = -1;
 
@@ -1410,8 +1435,8 @@ static void CL_DemoJumpToKill( qboolean next ) {
 		}
 
 		target = Q_max( 0, ev->time - CL_DemoKillBefore() );
-		// a player's kills only while they're the one shown
-		if ( player[0] ) {
+		// a player's kills, or whoever's is shown, only while they're the one shown
+		if ( player[0] || shown ) {
 			if ( !CL_DemoKillShown( i, &from, &to ) ) {
 				continue;
 			}
@@ -1427,7 +1452,7 @@ static void CL_DemoJumpToKill( qboolean next ) {
 	}
 
 	if ( best < 0 ) {
-		Com_Printf( "No %s kill%s%s\n", next ? "next" : "previous", player[0] ? " by " : "", player );
+		Com_Printf( "No %s kill%s%s%s\n", next ? "next" : "previous", shown ? " shown" : "", player[0] ? " by " : "", player );
 		return;
 	}
 
@@ -1435,11 +1460,19 @@ static void CL_DemoJumpToKill( qboolean next ) {
 }
 
 static void CL_DemoNextKill_f( void ) {
-	CL_DemoJumpToKill( qtrue );
+	CL_DemoJumpToKill( qtrue, qfalse );
 }
 
 static void CL_DemoPrevKill_f( void ) {
-	CL_DemoJumpToKill( qfalse );
+	CL_DemoJumpToKill( qfalse, qfalse );
+}
+
+static void CL_DemoNextShownKill_f( void ) {
+	CL_DemoJumpToKill( qtrue, qtrue );
+}
+
+static void CL_DemoPrevShownKill_f( void ) {
+	CL_DemoJumpToKill( qfalse, qtrue );
 }
 
 /*
@@ -4625,6 +4658,8 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("demoonly", CL_DemoOnly_f);
 	Cmd_AddCommand ("demonextkill", CL_DemoNextKill_f);
 	Cmd_AddCommand ("demoprevkill", CL_DemoPrevKill_f);
+	Cmd_AddCommand ("demonextshownkill", CL_DemoNextShownKill_f);
+	Cmd_AddCommand ("demoprevshownkill", CL_DemoPrevShownKill_f);
 	Cmd_AddCommand ("demonextround", CL_DemoNextRound_f);
 	Cmd_AddCommand ("demoprevround", CL_DemoPrevRound_f);
 	Cmd_AddCommand ("demovideo", CL_DemoVideo_f);
@@ -4738,6 +4773,8 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("demoonly");
 	Cmd_RemoveCommand ("demonextkill");
 	Cmd_RemoveCommand ("demoprevkill");
+	Cmd_RemoveCommand ("demonextshownkill");
+	Cmd_RemoveCommand ("demoprevshownkill");
 	Cmd_RemoveCommand ("demonextround");
 	Cmd_RemoveCommand ("demoprevround");
 	Cmd_RemoveCommand ("demovideo");
