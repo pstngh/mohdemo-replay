@@ -804,6 +804,22 @@ fileHandle_t FS_PipeOpenWrite( const char *command, const char *filename ) {
 
 /*
 ===========
+FS_PipeFile
+
+Added in OPM
+The FILE of a pipe from FS_PipeOpenWrite, for writing to it from another
+thread, where FS_Write's messages can't be printed
+===========
+*/
+FILE *FS_PipeFile( fileHandle_t f ) {
+	if ( f <= 0 || f >= MAX_FILE_HANDLES || !fsh[f].isPipe ) {
+		return NULL;
+	}
+	return fsh[f].handleFiles.file.o;
+}
+
+/*
+===========
 FS_OSPath_HomeData
 
 Added in OPM

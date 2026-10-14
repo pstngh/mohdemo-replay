@@ -23,6 +23,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "client.h"
 #include "snd_local.h"
 
+// Added in OPM
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
 #define INDEX_FILE_EXTENSION ".index.dat"
 
 // Added in OPM
@@ -86,6 +91,137 @@ static aviFileData_t afd;
 static byte buffer[ MAX_AVI_BUFFER ];
 static int  bufIndex;
 
+// Added in OPM
+//  What goes to FFmpeg is written by a thread of its own, through a ring
+//  of a few frames, so the game draws the next frame while FFmpeg reads
+//  this one: writing a frame into the pipe takes as long as FFmpeg takes
+//  to read it, 3 to 8 msec at 1920x1080. Never freed, so that nothing is
+//  destroyed at exit while the thread may be running.
+struct pipeOut_t
+{
+  std::thread             *thread;
+  std::mutex              lock;
+  std::condition_variable changed;
+  FILE                    *file;
+  byte                    *ring;
+  size_t                  size;     // of the ring
+  size_t                  start;    // of what's to write
+  size_t                  used;     // what's to write
+  bool                    closing;
+  bool                    failed;   // writing failed, FFmpeg may have quit
+};
+static pipeOut_t *pipeOut;
+
+/*
+===============
+CL_PipeWriter
+
+The thread writing what's in the ring to FFmpeg
+===============
+*/
+static void CL_PipeWriter( pipeOut_t *out )
+{
+  std::unique_lock<std::mutex> lock( out->lock );
+  size_t length;
+  bool failed;
+
+  for( ;; )
+  {
+    out->changed.wait( lock, [ out ] { return out->used || out->closing; } );
+    if( !out->used )
+      return;
+
+    // the part up to the end of the ring, written without the lock
+    length = Q_min( out->used, out->size - out->start );
+    lock.unlock( );
+    failed = fwrite( out->ring + out->start, 1, length, out->file ) < length;
+    lock.lock( );
+
+    out->failed = out->failed || failed;
+    out->start = ( out->start + length ) % out->size;
+    out->used -= length;
+    out->changed.notify_all( );
+  }
+}
+
+/*
+===============
+CL_PipeOpen
+
+Starts the writer of f, with room for frames of frameSize bytes
+===============
+*/
+static void CL_PipeOpen( fileHandle_t f, size_t frameSize )
+{
+  if( !pipeOut )
+    pipeOut = new pipeOut_t;
+
+  pipeOut->file = FS_PipeFile( f );
+  pipeOut->size = 3 * frameSize + MAX_AVI_BUFFER;
+  pipeOut->ring = ( byte * )Z_Malloc( pipeOut->size );
+  pipeOut->start = pipeOut->used = 0;
+  pipeOut->closing = pipeOut->failed = false;
+  pipeOut->thread = new std::thread( CL_PipeWriter, pipeOut );
+}
+
+/*
+===============
+CL_PipeWrite
+
+Puts buf in the ring, waiting for room, or returns qfalse if writing failed
+===============
+*/
+static qboolean CL_PipeWrite( const void *buf, size_t len )
+{
+  pipeOut_t *out = pipeOut;
+  std::unique_lock<std::mutex> lock( out->lock );
+  const byte *in = ( const byte * )buf;
+  size_t end, length;
+
+  while( len )
+  {
+    out->changed.wait( lock, [ out ] { return out->used < out->size || out->failed; } );
+    if( out->failed )
+      return qfalse;
+
+    // the free part up to the end of the ring, copied without the lock:
+    // the writer doesn't touch it
+    end = ( out->start + out->used ) % out->size;
+    length = Q_min( len, Q_min( out->size - out->used, out->size - end ) );
+    lock.unlock( );
+    Com_Memcpy( out->ring + end, in, length );
+    lock.lock( );
+
+    out->used += length;
+    in += length;
+    len -= length;
+    out->changed.notify_all( );
+  }
+  return qtrue;
+}
+
+/*
+===============
+CL_PipeClose
+
+Waits for the writer to write what's left, false if writing failed
+===============
+*/
+static bool CL_PipeClose( void )
+{
+  {
+    std::lock_guard<std::mutex> lock( pipeOut->lock );
+    pipeOut->closing = true;
+    pipeOut->changed.notify_all( );
+  }
+  pipeOut->thread->join( );
+  delete pipeOut->thread;
+  pipeOut->thread = NULL;
+  Z_Free( pipeOut->ring );
+  pipeOut->ring = NULL;
+  return !pipeOut->failed;
+}
+
 /*
 ===============
 SafeFS_Write
@@ -97,6 +233,14 @@ static ID_INLINE void SafeFS_Write( const void *buf, int len, fileHandle_t f )
   //  The recording stops at the next frame, as FFmpeg may have quit
   if( afd.failed )
     return;
+
+  // Added in OPM
+  if( afd.pipe && f == afd.f )
+  {
+    if( !CL_PipeWrite( buf, len ) )
+      afd.failed = qtrue;
+    return;
+  }
 
   if( FS_Write( buf, len, f ) < len )
     afd.failed = qtrue;
@@ -412,6 +556,8 @@ qboolean CL_OpenAVIForWriting( const char *fileName, qboolean pipe )
       return qfalse;
     }
     afd.pipe = qtrue;
+    // a frame and its chunk header, its lines padded to 4 bytes
+    CL_PipeOpen( afd.f, ( (size_t)cls.glconfig.vidWidth * 3 + 4 ) * cls.glconfig.vidHeight + 8 );
   }
   else
   {
@@ -731,6 +877,12 @@ qboolean CL_CloseAVI( void )
   //  FFmpeg reads it as a stream, and writes the video when it ends
   if( afd.pipe )
   {
+    // what's left of it first
+    if( !CL_PipeClose( ) && !afd.failed )
+    {
+      Com_Printf( S_COLOR_RED "Couldn't write %s, see its .log file\n", afd.fileName );
+      afd.failed = qtrue;
+    }
     FS_FCloseFile( afd.f );
     Z_Free( afd.cBuffer );
     Z_Free( afd.eBuffer );
