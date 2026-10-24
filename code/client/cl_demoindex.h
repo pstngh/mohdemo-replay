@@ -46,6 +46,8 @@ typedef struct {
     char            name[MAX_NAME_LENGTH];
     char            otherName[MAX_NAME_LENGTH];
     char            text[MAX_STRING_CHARS];
+    // for a kill: the killer and the victim were last seen on the same team
+    qboolean        teamKill;
     // for a level: the recorder's snapshots at a top speed only realism
     // servers give, and at one only default servers give
     int realismTicks;

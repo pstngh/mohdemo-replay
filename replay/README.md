@@ -106,6 +106,12 @@ shown changes in between: that stays a cut. A multi-kill is two kills or
 more by a player, each at most `cl_demoMultiKill` seconds (3) after the one
 before.
 
+Team kills (the killer and the victim last seen on the same team, also when
+everyone plays on one team) aren't kills: they aren't listed, counted, part
+of multi-kills or gone to by the next and previous kill, and they only play,
+and are only recorded, with a kill by the same player at most 2 seconds
+before or after them: a teammate hit while shooting at an enemy.
+
 While the recorder follows a player, most servers with the 1.12 Reborn patch
 put the camera in that player's head, where their own arms and gun are in
 the way. `cg_followcamera 1` (the default) puts it behind them, where stock

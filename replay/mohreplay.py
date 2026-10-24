@@ -41,6 +41,9 @@ GAME_CONFIG = os.path.join("main", "configs", "omconfig.cfg")
 KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
 KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
 MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
+# msec at most between a team kill and a kill of its killer that plays, for
+# the team kill to play too, as the engine's DEMO_TEAMKILL_NEAR
+TEAM_KILL_NEAR = 2000
 MIN_LENGTH = 5 * 60000  # msec: shorter demos aren't listed, once indexed
 # the Player menu's "Whoever is shown": not a name, which can't hold a NUL
 SHOWN = "\0shown"
@@ -150,10 +153,10 @@ def same_player(a, b):
 def multi_kills(kills):
     """The multi-kills, as demoonly multikills plays them: lists of two
     kills or more by a player, each at most MULTI_KILL_GAP after the one
-    before, in the order they start."""
+    before, in the order they start. Team kills don't count."""
     chains, last = [], {}
     for kill in kills:
-        if not kill["killerName"]:
+        if not kill["killerName"] or kill.get("teamKill"):
             continue
         key = clean_name(kill["killerName"])
         chain = last.get(key)
@@ -182,6 +185,26 @@ def shown_kills(index):
             end = watched[i + 1]["time"] if i + 1 < len(watched) else index.get("duration", 0)
             shown.append((kill, w["time"], end))
     return shown
+
+
+def team_kills_with(kills, frags):
+    """The team kills among kills, [(kill, from, to)], that play with frags,
+    as demoonly plays them: those at most TEAM_KILL_NEAR from a kill by
+    their killer in frags, like a teammate hit while shooting at an enemy."""
+    times = {}
+    for frag in frags:
+        times.setdefault(clean_name(frag["killerName"]), []).append(frag["time"])
+    for when in times.values():
+        when.sort()
+    kept = []
+    for kill in kills:
+        if not kill[0].get("teamKill") or not kill[0]["killerName"]:
+            continue
+        when = times.get(clean_name(kill[0]["killerName"]), [])
+        i = bisect.bisect_left(when, kill[0]["time"] - TEAM_KILL_NEAR)
+        if i < len(when) and when[i] <= kill[0]["time"] + TEAM_KILL_NEAR:
+            kept.append(kill)
+    return kept
 
 
 def player_kills(player):
@@ -213,7 +236,7 @@ def summarize(index):
     for kill in index.get("kills", []):
         add(kill["killerName"])
         add(kill["victimName"])
-    shown = [kill for kill, _, _ in shown_kills(index)]
+    shown = [kill for kill, _, _ in shown_kills(index) if not kill.get("teamKill")]
     for kill in shown:
         add(kill["killerName"], 1)
     for chain in multi_kills(shown):
@@ -710,7 +733,8 @@ def stretches(spans, switches=()):
 def demoonly_plan(index, only="", player=""):
     """What demoonly <only> [player] plays in a demo, as the engine does,
     from its index: (how many kills or multi-kills, [(start, end)] in msec),
-    all of the demo without only."""
+    all of the demo without only. Team kills aren't counted, and only play
+    with a kill of their killer near them."""
     duration = index.get("duration", 0)
     watched = index.get("watched", [])
     switches = [w["time"] for w in watched]
@@ -726,11 +750,13 @@ def demoonly_plan(index, only="", player=""):
     else:
         # anyone's, whoever is shown
         kills, switches = [(k, 0, duration) for k in index.get("kills", [])], []
-    count = len(kills)
+    frags = [x for x in kills if not x[0].get("teamKill")]
+    count = len(frags)
     if only.endswith("multikills"):
-        chains = multi_kills([k for k, _, _ in kills])
+        chains = multi_kills([k for k, _, _ in frags])
         keep = {id(k) for chain in chains for k in chain}
-        kills, count = [x for x in kills if id(x[0]) in keep], len(chains)
+        frags, count = [x for x in frags if id(x[0]) in keep], len(chains)
+    kills = frags + team_kills_with(kills, [k for k, _, _ in frags])
     spans = [(max(start, k["time"] - KILL_BEFORE), min(end, duration, k["time"] + KILL_AFTER))
              for k, start, end in kills]
     return count, stretches([span for span in spans if span[1] > span[0]], switches)
@@ -1527,9 +1553,10 @@ class Window(QMainWindow):
         self.fill_kills()
 
     def player_kills(self, player):
-        """The kills listed, all of them, the player's while they're shown or
+        """The kills to list, all of them, the player's while they're shown or
         whoever's is shown (SHOWN), as {id(kill): (kill, from, to)} in order,
-        with when they can be played: as demoonly kills plays them."""
+        with when they can be played: as demoonly kills plays them. Team
+        kills too, for the clips of the kills near them."""
         index = self.index or {}
         if not player:
             return {id(k): (k, 0, index.get("duration", 0) + KILL_AFTER) for k in index.get("kills", [])}
@@ -1552,27 +1579,33 @@ class Window(QMainWindow):
 
     def fill_kills(self):
         """The kills listed, each item with when it starts and its clips: the
-        stretches demoonly plays."""
+        stretches demoonly plays. Team kills aren't kills: they're only in
+        the clips of a kill of their killer near them, as demoonly plays."""
         player = self.player.currentData() or ""
-        kills = self.player_kills(player)
-        spans = {}
+        kills = list(self.player_kills(player).values())
+        spans = {id(kill): (max(start, kill["time"] - KILL_BEFORE), min(end, kill["time"] + KILL_AFTER))
+                 for kill, start, end in kills}
+        switches = self.switches()
         self.kills.clear()
         self.kill_marks = []
-        for kill, start, end in kills.values():
+        for kill, _, _ in kills:
+            if kill.get("teamKill"):
+                continue
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
+            span = spans[id(kill)]
+            clips = stretches([span] + [spans[id(k)] for k, _, _ in team_kills_with(kills, [kill])], switches)
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
-            span = spans[id(kill)] = (max(start, kill["time"] - KILL_BEFORE), min(end, kill["time"] + KILL_AFTER))
             item.setData(0, Qt.UserRole, span[0])
-            item.setData(1, Qt.UserRole, [span])
+            item.setData(1, Qt.UserRole, clips)
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
         self.multikills.clear()
         self.multi_marks = []
-        switches = self.switches()
-        for chain in multi_kills([kill for kill, _, _ in kills.values()]):
+        for chain in multi_kills([kill for kill, _, _ in kills]):
             victims = ", ".join(kill["victimName"] or "?" for kill in chain)
             item = QTreeWidgetItem([clock(chain[0]["time"]), chain[0]["killerName"], str(len(chain)), victims])
-            clips = stretches([spans[id(kill)] for kill in chain], switches)
+            clips = stretches([spans[id(kill)] for kill in chain]
+                              + [spans[id(k)] for k, _, _ in team_kills_with(kills, chain)], switches)
             item.setData(0, Qt.UserRole, clips[0][0])
             item.setData(1, Qt.UserRole, clips)
             self.multikills.addTopLevelItem(item)

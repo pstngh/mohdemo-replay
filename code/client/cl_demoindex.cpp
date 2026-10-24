@@ -73,6 +73,7 @@ typedef struct {
     int      firstUntimed; // events waiting for the time of the next snapshot
     int      watched;
     int      level; // the map event of the level playing, -1 before the first
+    int      teams[MAX_CLIENTS]; // the team each player was last seen on, TEAM_NONE if not seen
 
     diName_t knownNames[DI_KNOWN_NAMES];
     int      numKnownNames;
@@ -402,6 +403,28 @@ static void DI_LearnName(diParser_t *p, char *text)
 
 /*
 ===============
+DI_IsTeamKill
+
+The obituary of a team kill reads like any other, so the teams of the
+killer and the victim are compared, as last seen before it, in team games.
+Also when everyone is on one team, as in practice games on objective maps:
+the game takes those kills off too.
+===============
+*/
+static qboolean DI_IsTeamKill(diParser_t *p, int killer, int victim)
+{
+    if (killer < 0 || killer >= MAX_CLIENTS || victim < 0 || victim >= MAX_CLIENTS || killer == victim) {
+        return qfalse;
+    }
+    if (atoi(Info_ValueForKey(DI_ConfigString(p, CS_SERVERINFO), "g_gametype")) < GT_TEAM) {
+        return qfalse;
+    }
+
+    return p->teams[killer] != TEAM_NONE && p->teams[killer] == p->teams[victim];
+}
+
+/*
+===============
 DI_Print
 
 Kills come to everyone as "\x04Victim was ... by Killer ...", or a few other
@@ -433,6 +456,7 @@ static void DI_Print(diParser_t *p, const char *s)
         if (ev->otherName[0]) {
             ev->client = DI_FindPlayer(p, end, qfalse, ev->name, &end);
         }
+        ev->teamKill = DI_IsTeamKill(p, ev->client, ev->other);
         Q_strncpyz(ev->text, text, sizeof(ev->text));
         return;
     }
@@ -501,6 +525,10 @@ static void DI_ServerCommand(diParser_t *p, const char *s)
         i = CPT_NormalizeConfigstring(atoi(argv[1]));
         if (DI_SetConfigString(p, i, joined) && i >= CS_PLAYERS && i < CS_PLAYERS + MAX_CLIENTS) {
             DI_RememberPlayer(p, i - CS_PLAYERS);
+            if (!joined[0]) {
+                // left: whoever comes next in that slot isn't seen yet
+                p->teams[i - CS_PLAYERS] = TEAM_NONE;
+            }
         }
         return;
     }
@@ -529,6 +557,7 @@ static qboolean DI_ParseGamestate(diParser_t *p, msg_t *msg)
 
     memset(&p->gameState, 0, sizeof(p->gameState));
     memset(p->baselines, 0, sizeof(p->baselines));
+    memset(p->teams, 0, sizeof(p->teams));
     p->snap.valid = qfalse;
 
     p->serverCommandSequence = MSG_ReadLong(msg);
@@ -735,6 +764,37 @@ static void DI_UpdateWatched(diParser_t *p)
 
 /*
 ===============
+DI_UpdateTeams
+
+The recorder's team from their stats, which stay theirs while they follow
+someone, and the other players' from the flags of their entities
+===============
+*/
+static void DI_UpdateTeams(diParser_t *p)
+{
+    const entityState_t *ent;
+    int                  team = p->snap.ps.stats[STAT_TEAM];
+    int                  i;
+
+    if (p->clientNum >= 0 && p->clientNum < MAX_CLIENTS && (team == TEAM_ALLIES || team == TEAM_AXIS)) {
+        p->teams[p->clientNum] = team;
+    }
+
+    for (i = 0; i < p->snap.numEntities; i++) {
+        ent = &p->parseEntities[(p->snap.parseEntitiesNum + i) & (DI_PARSE_ENTITIES - 1)];
+        if (ent->number < 0 || ent->number >= MAX_CLIENTS) {
+            continue;
+        }
+        if (ent->eFlags & EF_ALLIES) {
+            p->teams[ent->number] = TEAM_ALLIES;
+        } else if (ent->eFlags & EF_AXIS) {
+            p->teams[ent->number] = TEAM_AXIS;
+        }
+    }
+}
+
+/*
+===============
 DI_CountRulesSpeed
 
 Realism servers change the top speeds: the StG 44 and BAR run at 233 and
@@ -895,6 +955,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
     p->snap                                       = newSnap;
     p->snapshots[newSnap.messageNum & PACKET_MASK] = newSnap;
     DI_CountRulesSpeed(p, &newSnap.ps);
+    DI_UpdateTeams(p);
 
     if (p->started) {
         DI_UpdateWatched(p);
@@ -1148,6 +1209,7 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             DI_String(b, ev->otherName);
             DI_Append(b, ", \"text\": ", 10);
             DI_String(b, ev->text);
+            DI_Printf(b, ", \"teamKill\": %s", ev->teamKill ? "true" : "false");
             break;
         case DEMOEVENT_ROUNDSTART:
             break;

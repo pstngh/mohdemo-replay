@@ -724,6 +724,10 @@ typedef enum {
 static demoOnly_t	cl_demoOnly;
 static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
 
+// msec at most between a team kill and a kill of its killer that plays, for
+// the team kill to play too: a teammate hit while shooting at an enemy
+#define DEMO_TEAMKILL_NEAR	2000
+
 static void CL_IndexDemo( void );
 
 /*
@@ -966,7 +970,7 @@ static void CL_IndexDemo( void ) {
 	char			path[MAX_OSPATH];
 	char			*json;
 	fileHandle_t	f;
-	int				i, kills, rounds;
+	int				i, kills, teamKills, rounds;
 	int				start;
 
 	DemoIndex_Free( &cl_demoIndex );
@@ -984,12 +988,13 @@ static void CL_IndexDemo( void ) {
 	DemoIndex_Build( &cl_demoIndex, CL_ReadDemoIndexFile, &f );
 	FS_FCloseFile( f );
 
-	kills = rounds = 0;
+	kills = teamKills = rounds = 0;
 	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
-		kills += cl_demoIndex.events[i].type == DEMOEVENT_KILL;
+		kills += cl_demoIndex.events[i].type == DEMOEVENT_KILL && !cl_demoIndex.events[i].teamKill;
+		teamKills += cl_demoIndex.events[i].type == DEMOEVENT_KILL && cl_demoIndex.events[i].teamKill;
 		rounds += cl_demoIndex.events[i].type == DEMOEVENT_ROUNDEND;
 	}
-	Com_Printf( "Demo index: %d kills, %d round ends in %s, read in %d ms%s\n", kills, rounds,
+	Com_Printf( "Demo index: %d kills, %d team kills, %d round ends in %s, read in %d ms%s\n", kills, teamKills, rounds,
 		CL_DemoTimeString( cl_demoIndex.duration ), Sys_Milliseconds() - start,
 		cl_demoIndex.truncated ? ", the demo is truncated" : "" );
 
@@ -1176,22 +1181,98 @@ static qboolean CL_DemoInMultiKill( int i, qboolean shown ) {
 		return qfalse;
 	}
 
-	// the events go forward in time
+	// the events go forward in time; team kills don't count
 	for ( j = i - 1; j >= 0 && ev->time - cl_demoIndex.events[j].time <= gap; j-- ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name )
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
 			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
 	}
 	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time - ev->time <= gap; j++ ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && CL_DemoPlayerIs( other->name, ev->name )
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
 			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
 	}
 	return qfalse;
+}
+
+static qboolean CL_DemoKillStretch( int i, int *start, int *end );
+
+/*
+====================
+CL_DemoTeamKillPlays
+
+Whether team kill event i plays with the kills: only when a kill of its
+killer that plays is at most DEMO_TEAMKILL_NEAR msec before or after it
+====================
+*/
+static qboolean CL_DemoTeamKillPlays( int i ) {
+	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	const demoEvent_t	*other;
+	int					start, end;
+	int					j;
+
+	if ( !ev->name[0] ) {
+		return qfalse;
+	}
+
+	// the events go forward in time
+	for ( j = i - 1; j >= 0 && ev->time - cl_demoIndex.events[j].time <= DEMO_TEAMKILL_NEAR; j-- ) {
+		other = &cl_demoIndex.events[j];
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
+			&& CL_DemoKillStretch( j, &start, &end ) ) {
+			return qtrue;
+		}
+	}
+	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time - ev->time <= DEMO_TEAMKILL_NEAR; j++ ) {
+		other = &cl_demoIndex.events[j];
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
+			&& CL_DemoKillStretch( j, &start, &end ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+====================
+CL_DemoKillStretch
+
+The stretch around kill event i that demoonly plays, if any
+====================
+*/
+static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
+	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	qboolean			player = cl_demoOnlyPlayer[0] != 0;
+	qboolean			multi = cl_demoOnly == DEMOONLY_MULTIKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
+	qboolean			shown = player || cl_demoOnly == DEMOONLY_SHOWNKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
+	int					from, to;
+
+	if ( ev->type != DEMOEVENT_KILL ) {
+		return qfalse;
+	}
+	if ( ev->teamKill ) {
+		if ( !CL_DemoTeamKillPlays( i ) ) {
+			return qfalse;
+		}
+	} else if ( ( player && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) ) || ( multi && !CL_DemoInMultiKill( i, shown ) ) ) {
+		return qfalse;
+	}
+
+	*start = ev->time - CL_DemoKillBefore();
+	*end = ev->time + Q_max( 0, (int)( cl_demoKillAfter->value * 1000 ) );
+	// a player's kills, or whoever's shown, only while they're the one shown
+	if ( shown ) {
+		if ( !CL_DemoKillShown( i, &from, &to ) ) {
+			return qfalse;
+		}
+		*start = Q_max( *start, from );
+		*end = Q_min( *end, to );
+	}
+	return *end > *start;
 }
 
 /*
@@ -1203,10 +1284,6 @@ The stretch around index event i that demoonly plays, if any
 */
 static qboolean CL_DemoStretch( int i, int *start, int *end ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
-	qboolean			player = cl_demoOnlyPlayer[0] != 0;
-	qboolean			multi = cl_demoOnly == DEMOONLY_MULTIKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
-	qboolean			shown = player || cl_demoOnly == DEMOONLY_SHOWNKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
-	int					from, to;
 	int					j;
 
 	switch ( cl_demoOnly ) {
@@ -1214,21 +1291,7 @@ static qboolean CL_DemoStretch( int i, int *start, int *end ) {
 	case DEMOONLY_MULTIKILLS:
 	case DEMOONLY_SHOWNKILLS:
 	case DEMOONLY_SHOWNMULTIKILLS:
-		if ( ev->type != DEMOEVENT_KILL || ( player && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) )
-			|| ( multi && !CL_DemoInMultiKill( i, shown ) ) ) {
-			return qfalse;
-		}
-		*start = ev->time - CL_DemoKillBefore();
-		*end = ev->time + Q_max( 0, (int)( cl_demoKillAfter->value * 1000 ) );
-		// a player's kills, or whoever's shown, only while they're the one shown
-		if ( shown ) {
-			if ( !CL_DemoKillShown( i, &from, &to ) ) {
-				return qfalse;
-			}
-			*start = Q_max( *start, from );
-			*end = Q_min( *end, to );
-		}
-		return *end > *start;
+		return CL_DemoKillStretch( i, start, end );
 
 	case DEMOONLY_WATCHED:
 		if ( ev->type != DEMOEVENT_WATCH || !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) ) {
@@ -1430,7 +1493,8 @@ static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
 
 	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
 		ev = &cl_demoIndex.events[i];
-		if ( ev->type != DEMOEVENT_KILL || ( player[0] && !CL_DemoPlayerIs( ev->name, player ) ) ) {
+		// team kills aren't kills to go to
+		if ( ev->type != DEMOEVENT_KILL || ev->teamKill || ( player[0] && !CL_DemoPlayerIs( ev->name, player ) ) ) {
 			continue;
 		}
 

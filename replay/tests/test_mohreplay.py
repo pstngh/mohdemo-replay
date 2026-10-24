@@ -78,6 +78,19 @@ def followed_demo():
     return demo
 
 
+def team_demo():
+    """DEMO with three team kills: t-'s 1.5 s after his third kill and alone
+    at 1:40, and Phil's 1.5 s after his kill at 3:20."""
+    demo = json.loads(json.dumps(DEMO))
+
+    def team_kill(time, killer, name):
+        return {"time": time, "killer": killer, "killerName": name, "victim": 4, "victimName": "Joe",
+                "text": "Joe was rifled by " + name, "teamKill": True}
+    demo["kills"] += [team_kill(16000, 0, "t-"), team_kill(100000, 0, "t-"), team_kill(201500, 1, "^1Phil")]
+    demo["kills"].sort(key=lambda kill: kill["time"])
+    return demo
+
+
 def wait_until(condition, timeout=10.0):
     """Runs Qt's events until condition() is true, False after the timeout."""
     end = time.monotonic() + timeout
@@ -233,6 +246,16 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(plan(followed_demo(), "shownkills"), (5, [(6000, 16500), (300000, 305500)]))
         self.assertEqual(plan(followed_demo(), "shownmultikills"), (2, [(6000, 16500), (300000, 305500)]))
         self.assertEqual(plan(DEMO, "watched", "^1Phil"), (0, [(300000, 600000)]))
+
+    def test_team_kills(self):
+        plan, demo = mohreplay.demoonly_plan, team_demo()
+        # not counted, and only played with a kill of their killer at most 2 s away
+        self.assertEqual(plan(demo, "kills"), (6, [(6000, 18000), (196000, 203500), (246000, 252000), (396000, 402000)]))
+        self.assertEqual(plan(demo, "kills", "T-"), (3, [(6000, 18000)]))
+        # nor part of multi-kills
+        self.assertEqual(plan(demo, "multikills"), (1, [(6000, 18000)]))
+        self.assertEqual([len(chain) for chain in mohreplay.multi_kills(demo["kills"])], [3])
+        self.assertEqual(mohreplay.summarize(demo)["players"]["t-"][1:], [3, 1])
 
     def test_wording(self):
         self.assertEqual([mohreplay.the(n, "kill", "kills") for n in (0, 1, 3)], ["No kills", "The kill", "The 3 kills"])
@@ -1012,6 +1035,26 @@ class TestRecording(FakeGameCase):
         parts = self.video("selected.mp4")["joined"]
         self.assertEqual([(p["start"], p["end"]) for p in parts], [(6000, 14000), (396000, 402000)])
 
+    def test_team_kills_arent_kills(self):
+        self.add_demo("first", team_demo())
+        window = self.window()
+        self.playing(window)
+        # neither listed nor marked
+        rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
+        self.assertEqual([row.text(0) for row in rows], ["0:10", "0:12", "0:14", "3:20", "4:10", "6:40"])
+        self.assertEqual([mark[0] for mark in window.slider.kills], [10000, 12000, 14500, 200000, 250000, 400000])
+        self.assertEqual(window.multikills.topLevelItem(0).text(2), "3")
+        # but the one 1.5 s after t-'s kill at 0:14 is in its video
+
+        def setup(dialog):
+            dialog.pattern.setText("selected")
+        rows[2].setSelected(True)
+        dialog = self.record(window, setup, lambda: window.record_selected(window.kills))
+        self.assertEqual(dialog.choices["selected"].text(), "The kill selected, under a minute")
+        self.done(window)
+        video = self.video("selected.mp4")
+        self.assertEqual((video["start"], video["end"]), (10500, 18000))
+
     def test_selected_kills_one_video_each(self):
         window = self.window()
         self.playing(window)
@@ -1215,7 +1258,8 @@ class TestRealGame(FakeGameCase):
         window.play_demo(self.demo)
         self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
         window.player.setCurrentIndex(window.player.findData(mohreplay.SHOWN))
-        self.assertEqual(window.kills.topLevelItemCount(), len(mohreplay.shown_kills(window.index)))
+        self.assertEqual(window.kills.topLevelItemCount(),
+                         len([k for k, _, _ in mohreplay.shown_kills(window.index) if not k.get("teamKill")]))
         rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
         clips = mohreplay.stretches([span for row in rows for span in row.data(1, Qt.UserRole)],
                                     [w["time"] for w in window.index["watched"]])
