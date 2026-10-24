@@ -235,6 +235,14 @@ class TestFunctions(unittest.TestCase):
     def test_quoted(self):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 
+    def test_with_filters(self):
+        with_filters = mohreplay.with_filters
+        self.assertEqual(with_filters("-c:v libx264 -an", "tmix=frames=4"), "-vf tmix=frames=4 -c:v libx264 -an")
+        self.assertEqual(with_filters("-vf format=nv12,hwupload -c:v h264_vaapi", "tmix=frames=4"),
+                         "-vf tmix=frames=4,format=nv12,hwupload -c:v h264_vaapi")
+        self.assertEqual(with_filters("-an -vf scale=640:-2 -c:v libx264", "a,b"),
+                         "-an -vf a,b,scale=640:-2 -c:v libx264")
+
     def test_demoonly_plan(self):
         plan = mohreplay.demoonly_plan
         self.assertEqual(plan(DEMO), (0, [(0, 600000)]))
@@ -838,8 +846,34 @@ class TestRecording(FakeGameCase):
         self.assertEqual(cvars["cl_aviFrameRate"], "60")
         self.assertEqual((cvars["r_customwidth"], cvars["r_customheight"]), ("1920", "1080"))
         self.assertIn("-crf 20", cvars["cl_aviPipeFormat"])
+        self.assertNotIn("tmix", cvars["cl_aviPipeFormat"])
         self.assertIn("Recorded", window.statusBar().currentMessage())
         self.assertIsNone(window.recorder)
+
+    def test_motion_blur(self):
+        window = self.window()
+        self.playing(window)
+
+        def setup(dialog):
+            self.assertFalse(dialog.blur.isChecked())
+            dialog.blur.setChecked(True)
+            dialog.pattern.setText("blur")
+        self.record(window, setup)
+        self.done(window)
+        cvars = self.video("blur.mp4")["cvars"]
+        self.assertEqual(cvars["cl_aviFrameRate"], "240")
+        self.assertTrue(cvars["cl_aviPipeFormat"].startswith("-vf tmix=frames=4,framestep=4 -c:v libx264 "))
+
+        def advanced(dialog):
+            self.assertTrue(dialog.blur.isChecked())
+            dialog.fps.setCurrentText("30")
+            dialog.advanced.setText("-vf scale=640:-2 -c:v libx264")
+            dialog.pattern.setText("advanced")
+        self.record(window, advanced)
+        self.done(window, 2)
+        cvars = self.video("advanced.mp4")["cvars"]
+        self.assertEqual(cvars["cl_aviFrameRate"], "240")
+        self.assertEqual(cvars["cl_aviPipeFormat"], "-vf tmix=frames=8,framestep=8,scale=640:-2 -c:v libx264")
 
     def test_record_kills_of_a_player_without_sound(self):
         window = self.window()
@@ -1308,6 +1342,33 @@ class TestRealGame(FakeGameCase):
         self.assertEqual((video["width"], video["height"]), (640, 360))
         self.assertAlmostEqual(float(video["duration"]), 3, delta=0.1)
         self.assertTrue(any(s["codec_type"] == "audio" for s in streams))
+
+    def test_record_with_motion_blur(self):
+        """The game draws 240 frames a second, and the video has 60, each
+        blending four."""
+        window = self.window()
+        window.play_demo(self.demo)
+        self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
+
+        def setup(dialog):
+            dialog.start.setText("2:00")
+            dialog.end.setText("2:03")
+            dialog.size.setCurrentText("640x360")
+            dialog.fps.setCurrentText("60")
+            dialog.blur.setChecked(True)
+            dialog.pattern.setText("blur")
+        with mock.patch.object(mohreplay.RecordDialog, "exec", lambda d: (setup(d), d.accept(), d.result())[-1]):
+            window.record()
+        output = os.path.join(self.videos, "blur.mp4")
+        self.assertTrue(wait_until(lambda: window.jobs[0]["status"] not in ("waiting", "recording"), 120), "no video")
+        self.assertEqual(window.jobs[0]["status"], "done", window.jobs[0]["item"].toolTip(2))
+        probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-count_frames", "-show_entries",
+                                "stream=r_frame_rate,nb_read_frames,duration", "-of", "json", output],
+                               capture_output=True, text=True, check=True)
+        video, = json.loads(probe.stdout)["streams"]
+        self.assertEqual(video["r_frame_rate"], "60/1")
+        self.assertAlmostEqual(int(video["nb_read_frames"]), 180, delta=2)
+        self.assertAlmostEqual(float(video["duration"]), 3, delta=0.1)
 
 
 if __name__ == "__main__":

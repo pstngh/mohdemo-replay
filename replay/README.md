@@ -48,7 +48,11 @@ folder chosen, named from a pattern (`{demo}`, `{start}`, `{player}`,
 `{date}`). Size, frames per second, quality, codec (H.264,
 H.265 or the graphics card's H.264 encoder: VAAPI on Linux, VideoToolbox on
 macOS), sound and its bitrate are settings, and the Advanced box takes
-FFmpeg output options instead. It needs FFmpeg.
+FFmpeg output options instead. Motion blur makes each frame of the video a
+blend of the frames the game draws in its time, 240 a second (4 at 60 frames
+per second): motion looks smoother, short flashes dimmer, a cut between two
+kills shows both for a frame, and recording takes about 2.5 times as long,
+nearly 4 with the graphics card's encoder. It needs FFmpeg.
 
 On macOS, the game program can be the `openmohaa.app` bundle, and
 `mohdemoindex` is looked for next to it as well. The recorder shows a window

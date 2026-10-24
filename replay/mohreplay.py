@@ -78,6 +78,16 @@ CODECS = {
     "Hardware H.264": ("-c:v h264_videotoolbox -q:v {quality}" if MACOS else
                        "-vaapi_device /dev/dri/renderD128 -vf format=nv12,hwupload -c:v h264_vaapi -qp {crf}"),
 }
+# with motion blur, the frames a second the game renders, blended into the video's
+BLUR_RATE = 240
+
+
+def with_filters(options, filters):
+    """FFmpeg output options with video filters run before their own, as a
+    second -vf would replace the first."""
+    if " -vf " not in f" {options}":
+        return f"-vf {filters} {options}"
+    return f" {options}".replace(" -vf ", f" -vf {filters},", 1)[1:]
 
 
 def clock(msec):
@@ -844,7 +854,14 @@ class RecordDialog(QDialog):
         self.fps = QComboBox()
         self.fps.addItems(["30", "60", "120"])
         self.fps.setCurrentText(settings.value("rec/fps", "60"))
-        form.addRow("Frames per second", self.fps)
+        self.blur = QCheckBox("Motion blur")
+        self.blur.setToolTip(f"Each frame blends the {BLUR_RATE} frames a second the game draws in its time: "
+                             "smoother motion, slower recording")
+        self.blur.setChecked(settings.value("rec/blur", "false") == "true")
+        row = QHBoxLayout()
+        row.addWidget(self.fps, 1)
+        row.addWidget(self.blur)
+        form.addRow("Frames per second", row)
         self.quality = QSlider(Qt.Horizontal)
         self.quality.setRange(14, 32)
         self.quality.setInvertedAppearance(True)
@@ -916,6 +933,7 @@ class RecordDialog(QDialog):
             return
         for key, value in (("folder", self.folder.text()), ("pattern", self.pattern.text()),
                            ("size", f"{width}x{height}"), ("fps", self.fps.currentText()),
+                           ("blur", "true" if self.blur.isChecked() else "false"),
                            ("crf", self.quality.value()), ("codec", self.codec.currentText()),
                            ("sound", "true" if self.sound.isChecked() else "false"),
                            ("bitrate", self.bitrate.currentText()), ("advanced", self.advanced.text().strip()),
@@ -935,6 +953,12 @@ class RecordDialog(QDialog):
             CODECS[self.codec.currentText()].format(crf=crf, quality=max(1, min(100, 120 - 3 * crf))),
             f"-c:a aac -b:a {self.bitrate.currentText()}" if self.sound.isChecked() else "-an",
             "-movflags +faststart"])
+        fps = int(self.fps.currentText())
+        if self.blur.isChecked():
+            # the game draws several frames for each of the video, which FFmpeg blends
+            frames = max(2, BLUR_RATE // fps)
+            options = with_filters(options, f"tmix=frames={frames},framestep={frames}")
+            fps *= frames
         width, height = (int(v) for v in self.size.currentText().lower().split("x"))
         try:
             name = self.pattern.text().format_map({
@@ -944,7 +968,7 @@ class RecordDialog(QDialog):
             name = demo
         name = "".join(c for c in name if c not in '/\\:*?"<>|').strip() or demo
         return {"label": label, "clips": clips, "options": options, "width": width, "height": height,
-                "fps": self.fps.currentText(), "sound": self.sound.isChecked(),
+                "fps": str(fps), "sound": self.sound.isChecked(),
                 "ffmpeg": self.ffmpeg.text().strip() or "ffmpeg",
                 "output": os.path.join(self.folder.text(), name + ".mp4"), "status": "waiting"}
 
