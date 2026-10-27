@@ -906,6 +906,21 @@ class TestRecording(FakeGameCase):
         self.done(window)
         self.assertEqual(self.video("multi.mp4")["only"], "multikills")
 
+    def test_record_recorder_frags(self):
+        window = self.window()
+        self.playing(window)
+
+        def setup(dialog):
+            dialog.choices["recorderkills"].setChecked(True)
+            dialog.pattern.setText("{demo} {player} recfrags")
+        dialog = self.record(window, setup)
+        self.assertEqual(dialog.choices["recorderkills"].text(), "The 3 recorder frags, under a minute")
+        self.assertEqual(dialog.choices["recordermultikills"].text(), "The recorder multi-kill, under a minute")
+        job, = self.done(window)
+        self.assertEqual(job["item"].text(1), "first, the 3 recorder frags")
+        video = self.video("first t- recfrags.mp4")
+        self.assertEqual((video["start"], video["only"], video["player"]), (0, "kills", "t-"))
+
     def test_record_frags_shown(self):
         window = self.window()
         self.playing(window)
@@ -1219,6 +1234,45 @@ class TestRecording(FakeGameCase):
         self.assertEqual(sorted(n for n in os.listdir(self.videos) if "multi" in n),
                          ["first multi.mp4", "followed multi.mp4"])
         self.assertEqual(self.video("followed multi.mp4")["only"], "shownmultikills")
+
+    def test_record_demos_recorder_frags(self):
+        self.add_demo("followed", followed_demo())
+        self.add_demo("unseen", dict(DEMO, kills=[k for k in DEMO["kills"] if k["time"] > 100000]))
+        window = self.window()
+        TestLibrary.indexed(self, window, ("first", "followed", "unseen"))
+        window.filter.setText("t-")
+        for name in ("first", "followed", "unseen"):
+            window.demo_items[name].setSelected(True)
+
+        def setup(dialog):
+            dialog.choices["recorderkills"].setChecked(True)
+            dialog.join.setChecked(True)
+            dialog.pattern.setText("{demo} {player}")
+        dialog = self.record(window, setup, window.record_demos)
+        self.assertEqual(dialog.choices["kills"].text(), "The 6 kills by t-, in 2 of the 3 demos, under a minute")
+        self.assertEqual(dialog.choices["recorderkills"].text(),
+                         "The 6 recorder frags, in 2 of the 3 demos, under a minute")
+        self.assertEqual(dialog.choices["recordermultikills"].text(),
+                         "The 2 recorder multi-kills, in 2 of the 3 demos, under a minute")
+        job, = self.done(window)
+        self.assertEqual(job["status"], "done", job["item"].toolTip(2))
+        self.assertEqual(job["item"].text(1), "2 demos, recorder frags")
+        # only the recorder's kills, excluding followed players
+        parts = self.video("2 demos.mp4")["joined"]
+        self.assertEqual([(p["only"], p["player"]) for p in parts], [("kills", "t-"), ("kills", "t-")])
+
+        def each(dialog):
+            dialog.choices["recordermultikills"].setChecked(True)
+            dialog.join.setChecked(False)
+            dialog.pattern.setText("{demo} multi")
+        self.record(window, each, window.record_demos)
+        jobs = self.done(window, 3)
+        self.assertEqual(sorted(job["item"].text(1) for job in jobs[1:]),
+                         ["first, recorder multi-kills", "followed, recorder multi-kills"])
+        self.assertEqual(sorted(n for n in os.listdir(self.videos) if "multi" in n),
+                         ["first multi.mp4", "followed multi.mp4"])
+        self.assertEqual(self.video("followed multi.mp4")["only"], "multikills")
+        self.assertEqual(self.video("followed multi.mp4")["player"], "t-")
 
     def test_whole_demos_one_video_each(self):
         # short, to record quickly, so listed anyway
