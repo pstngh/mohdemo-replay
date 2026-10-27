@@ -1054,13 +1054,14 @@ class Recorder(QObject):
         self.loaded = None  # the demo the recorder plays
         self.parts = []
         self.joiner = None
+        self.parts_dir = None
         # with the settings of the game watched, but changing none
         self.game = Game(self.output, self.exited, keep_config=False)
         self.clock = QElapsedTimer()
         self.elapsed = QElapsedTimer()
         self.timer = QTimer(self, interval=200, timeout=self.poll)
 
-    def start(self):
+    def start_game(self):
         settings = self.window.settings
         job = self.job
         extra = ["+set", "s_loopback", "1" if job["sound"] else "0", "+set", "s_khz", "44",
@@ -1074,6 +1075,10 @@ class Recorder(QObject):
         self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
                         job["width"], job["height"], extra, driver,
                         viewmodel=viewmodel, forcemodel=forcemodel)
+
+    def start(self):
+        self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
+        self.start_game()
         self.elapsed.start()
         self.on_progress(self.job, "Starting the recorder…")
         self.timer.start()
@@ -1099,6 +1104,11 @@ class Recorder(QObject):
             return
         demo = self.job["clips"][self.clip]["demo"]
         if demo != self.loaded:
+            if self.loaded is not None:
+                self.phase = "restarting"
+                self.game.stop()
+                self.error = ""
+                self.start_game()
             self.game.send("demo " + quoted(demo))
             self.loaded = demo
             self.phase = "loading"
@@ -1158,7 +1168,15 @@ class Recorder(QObject):
         elif not os.path.isfile(self.made()):
             self.finish("FFmpeg didn't write the video.")
         else:
-            self.parts.append(self.made())
+            if self.parts_dir:
+                part_path = os.path.join(self.parts_dir, f"part{self.clip}.mp4")
+                shutil.move(self.made(), part_path)
+                log = self.made() + ".log"
+                if os.path.isfile(log):
+                    shutil.move(log, part_path + ".log")
+            else:
+                part_path = self.made()
+            self.parts.append(part_path)
             self.next_clip()
 
     def join(self):
@@ -1167,7 +1185,7 @@ class Recorder(QObject):
             self.finish(video=self.parts[0])
             return
         self.on_progress(self.job, f"Joining {len(self.parts)} clips…")
-        folder = os.path.dirname(self.parts[0])
+        folder = self.parts_dir or os.path.dirname(self.parts[0])
         with open(os.path.join(folder, "parts.txt"), "w") as f:
             f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in self.parts)
         self.joiner = QProcess(self)
@@ -1182,7 +1200,8 @@ class Recorder(QObject):
     def joined(self, code=0, status=None):
         if self.phase != "joining":
             return
-        video = os.path.join(os.path.dirname(self.parts[0]), "joined.mp4")
+        folder = self.parts_dir or os.path.dirname(self.parts[0])
+        video = os.path.join(folder, "joined.mp4")
         if code or not os.path.isfile(video):
             text = bytes(self.joiner.readAll()).decode("utf-8", "replace")
             self.finish("FFmpeg couldn't join the clips.\n" + text[-1500:])
@@ -1195,6 +1214,8 @@ class Recorder(QObject):
         self.timer.stop()
         self.phase = "done"
         log = self.made() + ".log"
+        if not os.path.isfile(log) and self.parts:
+            log = self.parts[-1] + ".log"
         if error and os.path.isfile(log):
             with open(log, errors="replace") as f:
                 error += "\n" + f.read()[-1500:]
@@ -1210,6 +1231,9 @@ class Recorder(QObject):
             except OSError as e:
                 error, video = f"Couldn't move the video to {output}: {e}", None
         self.game.stop()
+        if getattr(self, "parts_dir", None) and os.path.isdir(self.parts_dir):
+            shutil.rmtree(self.parts_dir, ignore_errors=True)
+            self.parts_dir = None
         self.on_done(self.job, error.strip(), output if video else None)
 
     def cancel(self):
@@ -1220,6 +1244,9 @@ class Recorder(QObject):
                 self.joiner.kill()
                 self.joiner.waitForFinished(1000)
             self.game.stop()
+            if getattr(self, "parts_dir", None) and os.path.isdir(self.parts_dir):
+                shutil.rmtree(self.parts_dir, ignore_errors=True)
+                self.parts_dir = None
             self.on_done(self.job, "canceled", None)
 
     def exited(self):

@@ -1178,7 +1178,7 @@ void		R_Modellist_f (void);
 //====================================================
 extern	refimport_t		ri;
 
-#define	MAX_DRAWIMAGES			8192
+#define	MAX_DRAWIMAGES			65536
 #define	MAX_LIGHTMAPS			256
 #define	MAX_SKINS				1024
 #define MAX_SPHERE_LIGHTS		512
