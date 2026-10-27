@@ -444,7 +444,7 @@ class Game:
     def running(self):
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
-    def start(self, exe, game, demos, width, height, extra=(), driver=None):
+    def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None):
         self.cleanup()
         self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
@@ -461,15 +461,28 @@ class Game:
             shutil.copyfile(src, config)
         except OSError:
             pass  # none kept yet
+        vm = "1" if (viewmodel is None or str(viewmodel) in ("1", "true", "True")) else "0"
+        fm = "1" if (forcemodel is None or str(forcemodel) in ("1", "true", "True")) else "0"
         with open(os.path.join(main, "replay.cfg"), "w") as f:
             f.writelines(f'bind {key} "{command}"\n' for key, command in BINDS.items())
             f.write('set r_uselod "0"\n')
             f.write('seta r_uselod "0"\n')
+            f.write(f'set cg_drawviewmodel "{vm}"\n')
+            f.write(f'seta cg_drawviewmodel "{vm}"\n')
+            f.write(f'set cg_forceModel "{fm}"\n')
+            f.write(f'seta cg_forceModel "{fm}"\n')
+            f.write('set dm_playermodel "allied_airborne"\n')
+            f.write('seta dm_playermodel "allied_airborne"\n')
+            f.write('set dm_playergermanmodel "german_winter_1"\n')
+            f.write('seta dm_playergermanmodel "german_winter_1"\n')
 
         self.args = [exe, "+set", "fs_basepath", game, "+set", "fs_homepath", self.home,
                      "+set", "com_pipefile", PIPE, "+set", "cl_demoFiles", "1",
-                     "+set", "cg_drawviewmodel", "1", "+set", "cg_fov", "80",
+                     "+set", "cg_drawviewmodel", vm, "+set", "cg_fov", "80",
                      "+set", "r_uselod", "0",
+                     "+set", "cg_forceModel", fm,
+                     "+set", "dm_playermodel", "allied_airborne",
+                     "+set", "dm_playergermanmodel", "german_winter_1",
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "60",
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
@@ -711,6 +724,12 @@ class SettingsDialog(QDialog):
         self.size.setEditable(True)
         self.size.setCurrentText(settings.value("size", "1280x720"))
         form.addRow("Game window size", self.size)
+        self.viewmodel = QCheckBox("Draw weapon viewmodel (cg_drawviewmodel)")
+        self.viewmodel.setChecked(settings.value("viewmodel", "1") in ("1", "true", True))
+        form.addRow("Viewmodel", self.viewmodel)
+        self.forcemodel = QCheckBox("Force models: airborne (Allies) / winter 1 (Axis)")
+        self.forcemodel.setChecked(settings.value("forcemodel", "1") in ("1", "true", True))
+        form.addRow("Force models", self.forcemodel)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -729,6 +748,8 @@ class SettingsDialog(QDialog):
             value = edit.text().strip()
             self.settings.setValue(key, game_program(value) if key == "exe" else value)
         self.settings.setValue("size", self.size.currentText().strip())
+        self.settings.setValue("viewmodel", "1" if self.viewmodel.isChecked() else "0")
+        self.settings.setValue("forcemodel", "1" if self.forcemodel.isChecked() else "0")
         super().accept()
 
 
@@ -876,7 +897,13 @@ class RecordDialog(QDialog):
         self.size.addItems(["1280x720", "1920x1080", "2560x1440", "3840x2160"])
         self.size.setEditable(True)
         self.size.setCurrentText(settings.value("rec/size", "1920x1080"))
-        form.addRow("Size", self.size)
+        self.viewmodel = QCheckBox("Draw viewmodel")
+        self.viewmodel.setToolTip("Draw weapon viewmodel (cg_drawviewmodel 1 or 0)")
+        self.viewmodel.setChecked(settings.value("rec/viewmodel", settings.value("viewmodel", "1")) in ("1", "true", True))
+        row = QHBoxLayout()
+        row.addWidget(self.size, 1)
+        row.addWidget(self.viewmodel)
+        form.addRow("Size", row)
         self.fps = QComboBox()
         self.fps.addItems(["30", "60", "120"])
         self.fps.setCurrentText(settings.value("rec/fps", "60"))
@@ -904,7 +931,13 @@ class RecordDialog(QDialog):
         self.codec = QComboBox()
         self.codec.addItems(list(CODECS))
         self.codec.setCurrentText(settings.value("rec/codec", "H.264"))
-        form.addRow("Codec", self.codec)
+        self.forcemodel = QCheckBox("Force models")
+        self.forcemodel.setToolTip("Force airborne for Allies and german winter 1 for Axis (cg_forceModel 1 or 0)")
+        self.forcemodel.setChecked(settings.value("rec/forcemodel", settings.value("forcemodel", "1")) in ("1", "true", True))
+        row = QHBoxLayout()
+        row.addWidget(self.codec, 1)
+        row.addWidget(self.forcemodel)
+        form.addRow("Codec", row)
         self.sound = QCheckBox("Sound")
         self.sound.setChecked(settings.value("rec/sound", "true") == "true")
         self.bitrate = QComboBox()
@@ -960,6 +993,8 @@ class RecordDialog(QDialog):
         for key, value in (("folder", self.folder.text()), ("pattern", self.pattern.text()),
                            ("size", f"{width}x{height}"), ("fps", self.fps.currentText()),
                            ("blur", "true" if self.blur.isChecked() else "false"),
+                           ("viewmodel", "1" if self.viewmodel.isChecked() else "0"),
+                           ("forcemodel", "1" if self.forcemodel.isChecked() else "0"),
                            ("crf", self.quality.value()), ("codec", self.codec.currentText()),
                            ("sound", "true" if self.sound.isChecked() else "false"),
                            ("bitrate", self.bitrate.currentText()), ("advanced", self.advanced.text().strip()),
@@ -995,6 +1030,8 @@ class RecordDialog(QDialog):
         name = "".join(c for c in name if c not in '/\\:*?"<>|').strip() or demo
         return {"label": label, "clips": clips, "options": options, "width": width, "height": height,
                 "fps": str(fps), "sound": self.sound.isChecked(),
+                "viewmodel": "1" if self.viewmodel.isChecked() else "0",
+                "forcemodel": "1" if self.forcemodel.isChecked() else "0",
                 "ffmpeg": self.ffmpeg.text().strip() or "ffmpeg",
                 "output": os.path.join(self.folder.text(), name + ".mp4"), "status": "waiting"}
 
@@ -1032,8 +1069,11 @@ class Recorder(QObject):
                  "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0"]
         # offscreen where SDL can, the recorder doesn't need a window
         driver = "offscreen" if sys.platform.startswith("linux") else None
+        viewmodel = job.get("viewmodel", settings.value("rec/viewmodel", settings.value("viewmodel", "1")))
+        forcemodel = job.get("forcemodel", settings.value("rec/forcemodel", settings.value("forcemodel", "1")))
         self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
-                        job["width"], job["height"], extra, driver)
+                        job["width"], job["height"], extra, driver,
+                        viewmodel=viewmodel, forcemodel=forcemodel)
         self.elapsed.start()
         self.on_progress(self.job, "Starting the recorder…")
         self.timer.start()
@@ -1346,6 +1386,14 @@ class Window(QMainWindow):
         settings_action.triggered.connect(self.edit_settings)
         self.restart_action = self.menuBar().addAction("Restart game")
         self.restart_action.triggered.connect(self.start_game)
+        self.viewmodel_action = self.menuBar().addAction("Draw viewmodel")
+        self.viewmodel_action.setCheckable(True)
+        self.viewmodel_action.setChecked(settings.value("viewmodel", "1") in ("1", "true", True))
+        self.viewmodel_action.toggled.connect(self.toggle_viewmodel)
+        self.forcemodel_action = self.menuBar().addAction("Force models")
+        self.forcemodel_action.setCheckable(True)
+        self.forcemodel_action.setChecked(settings.value("forcemodel", "1") in ("1", "true", True))
+        self.forcemodel_action.toggled.connect(self.toggle_forcemodel)
         self.menuBar().addAction(self.queue_dock.toggleViewAction())
 
         self.indexing = QLabel()
@@ -1398,8 +1446,22 @@ class Window(QMainWindow):
         exe, game, demos = (self.settings.value(k, "") for k in ("exe", "game", "demos"))
         return os.path.isfile(exe) and os.path.isdir(game) and os.path.isdir(demos)
 
+    def toggle_viewmodel(self, checked):
+        val = "1" if checked else "0"
+        self.settings.setValue("viewmodel", val)
+        if self.game.running():
+            self.game.send(f"set cg_drawviewmodel {val}")
+
+    def toggle_forcemodel(self, checked):
+        val = "1" if checked else "0"
+        self.settings.setValue("forcemodel", val)
+        if self.game.running():
+            self.game.send(f"set cg_forceModel {val}")
+
     def edit_settings(self):
         if SettingsDialog(self.settings, self).exec():
+            self.viewmodel_action.setChecked(self.settings.value("viewmodel", "1") in ("1", "true", True))
+            self.forcemodel_action.setChecked(self.settings.value("forcemodel", "1") in ("1", "true", True))
             self.fill_demos()
             self.library.open(self.settings.value("demos", ""), self.settings.value("exe", ""))
             if self.ready() and self.game.running():
@@ -1414,7 +1476,10 @@ class Window(QMainWindow):
             width, height = (int(v) for v in self.settings.value("size", "1280x720").split("x"))
         except ValueError:
             width, height = 1280, 720
-        self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height)
+        vm = self.settings.value("viewmodel", "1")
+        fm = self.settings.value("forcemodel", "1")
+        self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
+                        viewmodel=vm, forcemodel=fm)
         self.statusBar().showMessage("Starting the game…")
         if self.pending_demo:
             self.game.send("demo " + quoted(self.pending_demo))

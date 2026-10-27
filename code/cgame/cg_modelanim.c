@@ -785,6 +785,10 @@ qboolean CG_IsValidServerModel(const char *modelpath)
     const char *str;
     int         i;
 
+    if (cg.demoPlayback) {
+        return qtrue;
+    }
+
     for (i = 1; i < MAX_MODELS; i++) {
         str = CG_ConfigString(CS_MODELS + i);
         if (!Q_stricmp(str, modelpath)) {
@@ -821,7 +825,7 @@ void CG_CheckValidModels()
             modelpath = va("models/player/%s.tik", dm_playermodel->string);
         }
 
-        cg.serverAlliedModelValid = CG_IsValidServerModel(modelpath);
+        cg.serverAlliedModelValid = cg.demoPlayback || CG_IsValidServerModel(modelpath);
     }
 
     if (dm_playergermanmodel->modified) {
@@ -838,7 +842,7 @@ void CG_CheckValidModels()
             modelpath = va("models/player/%s.tik", dm_playergermanmodel->string);
         }
 
-        cg.serverAxisModelValid = CG_IsValidServerModel(modelpath);
+        cg.serverAxisModelValid = cg.demoPlayback || CG_IsValidServerModel(modelpath);
     }
 
     if (dm_playermodel->modified || dm_playergermanmodel->modified) {
@@ -924,7 +928,7 @@ void CG_UpdateForceModels()
     Com_sprintf(szAlliesModel, sizeof(szAlliesModel), "models/player/%s.tik", pszAlliesPartial);
     Com_sprintf(szAxisModel, sizeof(szAxisModel), "models/player/%s.tik", pszAxisPartial);
 
-    hModel = cg.serverAlliedModelValid ? cgi.R_RegisterModel(szAlliesModel) : 0;
+    hModel = (cg.serverAlliedModelValid || cg.demoPlayback) ? cgi.R_RegisterModel(szAlliesModel) : 0;
     if (!hModel) {
         Com_sprintf(szAlliesModel, sizeof(szAlliesModel), "models/player/%s.tik", dm_playermodel->resetString);
         hModel = cgi.R_RegisterModel(szAlliesModel);
@@ -941,7 +945,7 @@ void CG_UpdateForceModels()
         cg.pAlliedPlayerModel       = NULL;
     }
 
-    hModel = cg.serverAxisModelValid ? cgi.R_RegisterModel(szAxisModel) : 0;
+    hModel = (cg.serverAxisModelValid || cg.demoPlayback) ? cgi.R_RegisterModel(szAxisModel) : 0;
     if (!hModel) {
         Com_sprintf(szAxisModel, sizeof(szAxisModel), "models/player/%s.tik", dm_playergermanmodel->resetString);
         hModel = cgi.R_RegisterModel(szAxisModel);
@@ -972,6 +976,14 @@ Checks player models, and update force models
 */
 void CG_ProcessPlayerModel()
 {
+    static qboolean lastDemoPlayback = qfalse;
+    if (cg.demoPlayback != lastDemoPlayback) {
+        lastDemoPlayback               = cg.demoPlayback;
+        dm_playermodel->modified       = qtrue;
+        dm_playergermanmodel->modified = qtrue;
+        cg_forceModel->modified        = qtrue;
+    }
+
     CG_CheckValidModels();
     if (cg_forceModel->integer) {
         CG_UpdateForceModels();
@@ -1134,7 +1146,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     model.tiki      = cgi.R_Model_GetHandle(cgs.model_draw[s1->modelindex]);
 
     if (s1->number != cg.snap->ps.clientNum && (s1->eType == ET_PLAYER || (s1->eFlags & EF_DEAD))) {
-        if (cg_forceModel->integer && cg_forceModelAllowed) {
+        if (cg_forceModel->integer && (cg_forceModelAllowed || cg.demoPlayback)) {
             //CG_UpdateForceModels();
 
             if (s1->eFlags & EF_AXIS) {
