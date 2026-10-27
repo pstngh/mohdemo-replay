@@ -443,21 +443,30 @@ class Game:
 
     def start(self, exe, game, demos, width, height, extra=(), driver=None):
         self.cleanup()
+        self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
         main = os.path.join(self.home, "main")
         os.makedirs(main)
         os.symlink(os.path.abspath(demos), os.path.join(main, "demos"))
         config = os.path.join(self.home, GAME_CONFIG)
         os.makedirs(os.path.dirname(config))
+        game_cfg = os.path.join(game, GAME_CONFIG)
+        src = game_cfg if os.path.isfile(game_cfg) else (
+            os.path.join(game, "main", "omconfig.cfg") if os.path.isfile(os.path.join(game, "main", "omconfig.cfg")) else kept_config()
+        )
         try:
-            shutil.copyfile(kept_config(), config)
+            shutil.copyfile(src, config)
         except OSError:
             pass  # none kept yet
         with open(os.path.join(main, "replay.cfg"), "w") as f:
             f.writelines(f'bind {key} "{command}"\n' for key, command in BINDS.items())
+            f.write('set r_uselod "0"\n')
+            f.write('seta r_uselod "0"\n')
 
         self.args = [exe, "+set", "fs_basepath", game, "+set", "fs_homepath", self.home,
                      "+set", "com_pipefile", PIPE, "+set", "cl_demoFiles", "1",
+                     "+set", "cg_drawviewmodel", "1", "+set", "cg_fov", "80",
+                     "+set", "r_uselod", "0",
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "60",
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
@@ -558,16 +567,30 @@ class Game:
 
     def save_config(self):
         """Keeps the settings the game wrote (it does as soon as one changes)
-        for the next games."""
+        for the next games and in the game main folder."""
         if not self.keep_config or not self.home:
+            return
+        written = os.path.join(self.home, GAME_CONFIG)
+        if not os.path.isfile(written):
             return
         kept = kept_config()
         try:
             os.makedirs(os.path.dirname(kept), exist_ok=True)
-            shutil.copyfile(os.path.join(self.home, GAME_CONFIG), kept + ".new")
+            shutil.copyfile(written, kept + ".new")
             os.replace(kept + ".new", kept)
         except OSError:
-            pass  # the game didn't write any
+            pass
+        if getattr(self, "game", None):
+            for path in [
+                os.path.join(self.game, GAME_CONFIG),
+                os.path.join(self.game, "main", "omconfig.cfg"),
+            ]:
+                try:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    shutil.copyfile(written, path + ".new")
+                    os.replace(path + ".new", path)
+                except OSError:
+                    pass
 
     def cleanup(self):
         if self.home:
@@ -1376,7 +1399,7 @@ class Window(QMainWindow):
         if SettingsDialog(self.settings, self).exec():
             self.fill_demos()
             self.library.open(self.settings.value("demos", ""), self.settings.value("exe", ""))
-            if self.ready():
+            if self.ready() and self.game.running():
                 self.start_game()
 
     def start_game(self):
@@ -1934,8 +1957,6 @@ def main():
         window.edit_settings()
     elif args.demo:
         window.play_demo(args.demo)
-    else:
-        window.start_game()
     sys.exit(app.exec())
 
 
