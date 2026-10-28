@@ -457,6 +457,7 @@ static void DI_Print(diParser_t *p, const char *s)
             ev->client = DI_FindPlayer(p, end, qfalse, ev->name, &end);
         }
         ev->teamKill = DI_IsTeamKill(p, ev->client, ev->other);
+        ev->grenade  = Q_stristr(text, "grenade") != NULL || Q_stristr(text, "shrapnel") != NULL;
         Q_strncpyz(ev->text, text, sizeof(ev->text));
         return;
     }
@@ -1210,6 +1211,7 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             DI_Append(b, ", \"text\": ", 10);
             DI_String(b, ev->text);
             DI_Printf(b, ", \"teamKill\": %s", ev->teamKill ? "true" : "false");
+            DI_Printf(b, ", \"grenade\": %s", ev->grenade ? "true" : "false");
             break;
         case DEMOEVENT_ROUNDSTART:
             break;

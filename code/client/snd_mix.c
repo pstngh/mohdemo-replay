@@ -133,7 +133,7 @@ void S_TransferStereo16 (unsigned long *pbuf, int endtime)
 		snd_p += snd_linear_count;
 		ls_paintedtime += (snd_linear_count>>1); // snd_linear_count / dma.channels
 
-		if( CL_VideoRecording( ) )
+		if( CL_VideoRecording( ) && !( clc.demoplaying && ( clc.demoSeeking || cl_freezeDemo->integer ) ) )
 			CL_WriteAVIAudioFrame( (byte *)snd_out, snd_linear_count << 1 ); // snd_linear_count * (dma.samplebits/8)
 	}
 }

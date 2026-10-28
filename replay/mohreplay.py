@@ -29,7 +29,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
+    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSlider, QSplitter, QStyle,
     QStyleOptionSlider, QTabWidget, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
@@ -163,13 +163,18 @@ def same_player(a, b):
     return clean_name(a) == clean_name(b)
 
 
+def is_grenade(kill):
+    """Whether kill was made with a grenade or shrapnel."""
+    return bool(kill.get("grenade")) or "grenade" in kill.get("text", "").lower() or "shrapnel" in kill.get("text", "").lower()
+
+
 def multi_kills(kills):
     """The multi-kills, as demoonly multikills plays them: lists of two
     kills or more by a player, each at most MULTI_KILL_GAP after the one
-    before, in the order they start. Team kills don't count."""
+    before, in the order they start. Team kills and grenade kills don't count."""
     chains, last = [], {}
     for kill in kills:
-        if not kill["killerName"] or kill.get("teamKill"):
+        if not kill["killerName"] or kill.get("teamKill") or is_grenade(kill):
             continue
         key = clean_name(kill["killerName"])
         chain = last.get(key)
@@ -187,16 +192,24 @@ def shown_kills(index):
     [(kill, from, to)], with when they're shown around it."""
     watched = index.get("watched", [])
     times = [w["time"] for w in watched]
+    maps = index.get("maps", [])
+    map_times = [m["time"] for m in maps]
     shown = []
     for kill in index.get("kills", []):
         i = bisect.bisect_right(times, kill["time"]) - 1
         if i < 0 or not kill["killerName"]:
             continue
         w = watched[i]
+        mi = bisect.bisect_right(map_times, kill["time"]) - 1
+        map_start = map_times[mi] if mi >= 0 else 0
+        if w["time"] < map_start:
+            continue
         # a player who changed names since is still the same client
         if (w["client"] >= 0 and w["client"] == kill["killer"]) or same_player(w["name"], kill["killerName"]):
             end = watched[i + 1]["time"] if i + 1 < len(watched) else index.get("duration", 0)
-            shown.append((kill, w["time"], end))
+            if mi + 1 < len(map_times):
+                end = min(end, map_times[mi + 1])
+            shown.append((kill, max(w["time"], map_start), end))
     return shown
 
 
@@ -249,7 +262,7 @@ def summarize(index):
     for kill in index.get("kills", []):
         add(kill["killerName"])
         add(kill["victimName"])
-    shown = [kill for kill, _, _ in shown_kills(index) if not kill.get("teamKill")]
+    shown = [kill for kill, _, _ in shown_kills(index) if not kill.get("teamKill") and not is_grenade(kill)]
     for kill in shown:
         add(kill["killerName"], 1)
     for chain in multi_kills(shown):
@@ -444,7 +457,8 @@ class Game:
     def running(self):
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
-    def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None):
+    def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None,
+              kill_before=None, kill_after=None):
         self.cleanup()
         self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
@@ -463,6 +477,8 @@ class Game:
             pass  # none kept yet
         vm = "1" if (viewmodel is None or str(viewmodel) in ("1", "true", "True")) else "0"
         fm = "1" if (forcemodel is None or str(forcemodel) in ("1", "true", "True")) else "0"
+        kb = str(kill_before if kill_before is not None else "4.0")
+        ka = str(kill_after if kill_after is not None else "2.0")
         with open(os.path.join(main, "replay.cfg"), "w") as f:
             f.writelines(f'bind {key} "{command}"\n' for key, command in BINDS.items())
             f.write('set r_uselod "0"\n')
@@ -475,6 +491,10 @@ class Game:
             f.write('seta dm_playermodel "allied_airborne"\n')
             f.write('set dm_playergermanmodel "german_winter_1"\n')
             f.write('seta dm_playergermanmodel "german_winter_1"\n')
+            f.write(f'set cl_demoKillBefore "{kb}"\n')
+            f.write(f'seta cl_demoKillBefore "{kb}"\n')
+            f.write(f'set cl_demoKillAfter "{ka}"\n')
+            f.write(f'seta cl_demoKillAfter "{ka}"\n')
 
         self.args = [exe, "+set", "fs_basepath", game, "+set", "fs_homepath", self.home,
                      "+set", "com_pipefile", PIPE, "+set", "cl_demoFiles", "1",
@@ -483,6 +503,8 @@ class Game:
                      "+set", "cg_forceModel", fm,
                      "+set", "dm_playermodel", "allied_airborne",
                      "+set", "dm_playergermanmodel", "german_winter_1",
+                     "+set", "cl_demoKillBefore", kb,
+                     "+set", "cl_demoKillAfter", ka,
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "60",
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
@@ -730,6 +752,32 @@ class SettingsDialog(QDialog):
         self.forcemodel = QCheckBox("Force models: airborne (Allies) / winter 1 (Axis)")
         self.forcemodel.setChecked(settings.value("forcemodel", "1") in ("1", "true", True))
         form.addRow("Force models", self.forcemodel)
+        self.kill_before = QDoubleSpinBox()
+        self.kill_before.setRange(0.5, 30.0)
+        self.kill_before.setSingleStep(0.5)
+        self.kill_before.setSuffix(" s")
+        self.kill_before.setToolTip("Time shown before each kill (cl_demoKillBefore)")
+        try:
+            default_kb = float(settings.value("kill_before", 4.0))
+        except (ValueError, TypeError):
+            default_kb = 4.0
+        self.kill_before.setValue(default_kb)
+        self.kill_after = QDoubleSpinBox()
+        self.kill_after.setRange(0.5, 30.0)
+        self.kill_after.setSingleStep(0.5)
+        self.kill_after.setSuffix(" s")
+        self.kill_after.setToolTip("Time shown after each kill (cl_demoKillAfter)")
+        try:
+            default_ka = float(settings.value("kill_after", 2.0))
+        except (ValueError, TypeError):
+            default_ka = 2.0
+        self.kill_after.setValue(default_ka)
+        kill_row = QHBoxLayout()
+        kill_row.addWidget(QLabel("Before:"))
+        kill_row.addWidget(self.kill_before)
+        kill_row.addWidget(QLabel("After:"))
+        kill_row.addWidget(self.kill_after)
+        form.addRow("Kill lead-in / out", kill_row)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -750,6 +798,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue("size", self.size.currentText().strip())
         self.settings.setValue("viewmodel", "1" if self.viewmodel.isChecked() else "0")
         self.settings.setValue("forcemodel", "1" if self.forcemodel.isChecked() else "0")
+        self.settings.setValue("kill_before", str(self.kill_before.value()))
+        self.settings.setValue("kill_after", str(self.kill_after.value()))
         super().accept()
 
 
@@ -765,8 +815,9 @@ def only_clip(demo, only="", player="", spans=None):
     "shownmultikills", "watched"), or of all of demo; spans: what that is,
     from demoonly_plan(), if known."""
     command = f"demoonly {only}" + (" " + quoted(player) if player else "") if only else "demoonly"
-    return {"demo": demo, "start": 0, "end": None, "spans": spans,
-            "commands": ["demoseek 0", "demopause 0", command, "demovideo {part}"]}
+    start = spans[0][0] if (spans and spans[0][0] > 0) else 0
+    return {"demo": demo, "start": start, "end": None, "spans": spans,
+            "commands": [f"demoseek {seconds(start)}", "demopause 0", command, "demovideo {part}"]}
 
 
 def stretches(spans, switches=()):
@@ -787,7 +838,7 @@ def stretches(spans, switches=()):
     return [tuple(span) for span in joined]
 
 
-def demoonly_plan(index, only="", player=""):
+def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
     """What demoonly <only> [player] plays in a demo, as the engine does,
     from its index: (how many kills or multi-kills, [(start, end)] in msec),
     all of the demo without only. Team kills aren't counted, and only play
@@ -807,14 +858,27 @@ def demoonly_plan(index, only="", player=""):
     else:
         # anyone's, whoever is shown
         kills, switches = [(k, 0, duration) for k in index.get("kills", [])], []
-    frags = [x for x in kills if not x[0].get("teamKill")]
+    frags = [x for x in kills if not x[0].get("teamKill") and not is_grenade(x[0])]
     count = len(frags)
     if only.endswith("multikills"):
         chains = multi_kills([k for k, _, _ in frags])
         keep = {id(k) for chain in chains for k in chain}
         frags, count = [x for x in frags if id(x[0]) in keep], len(chains)
     kills = frags + team_kills_with(kills, [k for k, _, _ in frags])
-    spans = [(max(start, k["time"] - KILL_BEFORE), min(end, duration, k["time"] + KILL_AFTER))
+    maps = index.get("maps", [])
+    map_times = [m["time"] for m in maps]
+
+    def map_start_for(t):
+        idx = bisect.bisect_right(map_times, t) - 1
+        return map_times[idx] if idx >= 0 else 0
+
+    def map_end_for(t):
+        idx = bisect.bisect_right(map_times, t)
+        return map_times[idx] if idx < len(map_times) else duration
+
+    kb = KILL_BEFORE if kill_before is None else kill_before
+    ka = KILL_AFTER if kill_after is None else kill_after
+    spans = [(max(start, map_start_for(k["time"]), k["time"] - kb), min(end, duration, map_end_for(k["time"]), k["time"] + ka))
              for k, start, end in kills]
     return count, stretches([span for span in spans if span[1] > span[0]], switches)
 
@@ -892,6 +956,33 @@ class RecordDialog(QDialog):
         self.pattern = QLineEdit(settings.value("rec/pattern", "{demo} {start}"))
         self.pattern.setToolTip("{demo}, {start}, {player} and {date} are replaced")
         form.addRow("File name", self.pattern)
+
+        self.kill_before = QDoubleSpinBox()
+        self.kill_before.setRange(0.5, 30.0)
+        self.kill_before.setSingleStep(0.5)
+        self.kill_before.setSuffix(" s")
+        self.kill_before.setToolTip("Time recorded before each kill (cl_demoKillBefore)")
+        try:
+            rec_default_kb = float(settings.value("rec/kill_before", settings.value("kill_before", 4.0)))
+        except (ValueError, TypeError):
+            rec_default_kb = 4.0
+        self.kill_before.setValue(rec_default_kb)
+        self.kill_after = QDoubleSpinBox()
+        self.kill_after.setRange(0.5, 30.0)
+        self.kill_after.setSingleStep(0.5)
+        self.kill_after.setSuffix(" s")
+        self.kill_after.setToolTip("Time recorded after each kill (cl_demoKillAfter)")
+        try:
+            rec_default_ka = float(settings.value("rec/kill_after", settings.value("kill_after", 2.0)))
+        except (ValueError, TypeError):
+            rec_default_ka = 2.0
+        self.kill_after.setValue(rec_default_ka)
+        kill_row = QHBoxLayout()
+        kill_row.addWidget(QLabel("Before:"))
+        kill_row.addWidget(self.kill_before)
+        kill_row.addWidget(QLabel("After:"))
+        kill_row.addWidget(self.kill_after)
+        form.addRow("Kill lead-in / out", kill_row)
 
         self.size = QComboBox()
         self.size.addItems(["1280x720", "1920x1080", "2560x1440", "3840x2160"])
@@ -995,6 +1086,8 @@ class RecordDialog(QDialog):
                            ("blur", "true" if self.blur.isChecked() else "false"),
                            ("viewmodel", "1" if self.viewmodel.isChecked() else "0"),
                            ("forcemodel", "1" if self.forcemodel.isChecked() else "0"),
+                           ("kill_before", str(self.kill_before.value())),
+                           ("kill_after", str(self.kill_after.value())),
                            ("crf", self.quality.value()), ("codec", self.codec.currentText()),
                            ("sound", "true" if self.sound.isChecked() else "false"),
                            ("bitrate", self.bitrate.currentText()), ("advanced", self.advanced.text().strip()),
@@ -1032,6 +1125,8 @@ class RecordDialog(QDialog):
                 "fps": str(fps), "sound": self.sound.isChecked(),
                 "viewmodel": "1" if self.viewmodel.isChecked() else "0",
                 "forcemodel": "1" if self.forcemodel.isChecked() else "0",
+                "kill_before": str(self.kill_before.value()),
+                "kill_after": str(self.kill_after.value()),
                 "ffmpeg": self.ffmpeg.text().strip() or "ffmpeg",
                 "output": os.path.join(self.folder.text(), name + ".mp4"), "status": "waiting"}
 
@@ -1072,9 +1167,12 @@ class Recorder(QObject):
         driver = "offscreen" if sys.platform.startswith("linux") else None
         viewmodel = job.get("viewmodel", settings.value("rec/viewmodel", settings.value("viewmodel", "1")))
         forcemodel = job.get("forcemodel", settings.value("rec/forcemodel", settings.value("forcemodel", "1")))
+        kill_before = job.get("kill_before", settings.value("rec/kill_before", settings.value("kill_before", "4.0")))
+        kill_after = job.get("kill_after", settings.value("rec/kill_after", settings.value("kill_after", "2.0")))
         self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
                         job["width"], job["height"], extra, driver,
-                        viewmodel=viewmodel, forcemodel=forcemodel)
+                        viewmodel=viewmodel, forcemodel=forcemodel,
+                        kill_before=kill_before, kill_after=kill_after)
 
     def start(self):
         self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
@@ -1499,6 +1597,30 @@ class Window(QMainWindow):
             self.game.send(f"set cg_forceModel {val}")
         self.statusBar().showMessage(f"Force models: {'ON' if checked else 'OFF'} (Airborne / Winter 1)", 2000)
 
+    def get_kill_times(self):
+        """Pre-kill and post-kill times in msec from settings for playback."""
+        try:
+            kb = int(float(self.settings.value("kill_before", 4.0)) * 1000)
+        except (ValueError, TypeError):
+            kb = KILL_BEFORE
+        try:
+            ka = int(float(self.settings.value("kill_after", 2.0)) * 1000)
+        except (ValueError, TypeError):
+            ka = KILL_AFTER
+        return max(500, kb), max(500, ka)
+
+    def get_rec_kill_times(self):
+        """Pre-kill and post-kill times in msec from settings for recording."""
+        try:
+            kb = int(float(self.settings.value("rec/kill_before", self.settings.value("kill_before", 4.0))) * 1000)
+        except (ValueError, TypeError):
+            kb = KILL_BEFORE
+        try:
+            ka = int(float(self.settings.value("rec/kill_after", self.settings.value("kill_after", 2.0))) * 1000)
+        except (ValueError, TypeError):
+            ka = KILL_AFTER
+        return max(500, kb), max(500, ka)
+
     def edit_settings(self):
         if SettingsDialog(self.settings, self).exec():
             self.viewmodel_action.setChecked(self.settings.value("viewmodel", "1") in ("1", "true", True))
@@ -1506,6 +1628,11 @@ class Window(QMainWindow):
             self.update_viewmodel_text()
             self.update_forcemodel_text()
             self.fill_demos()
+            self.fill_kills()
+            kb = self.settings.value("kill_before", "4.0")
+            ka = self.settings.value("kill_after", "2.0")
+            if self.game.running():
+                self.game.send(f"seta cl_demoKillBefore {kb}", f"seta cl_demoKillAfter {ka}")
             self.library.open(self.settings.value("demos", ""), self.settings.value("exe", ""))
             if self.ready() and self.game.running():
                 self.start_game()
@@ -1521,8 +1648,10 @@ class Window(QMainWindow):
             width, height = 1280, 720
         vm = self.settings.value("viewmodel", "1")
         fm = self.settings.value("forcemodel", "1")
+        kb = self.settings.value("kill_before", "4.0")
+        ka = self.settings.value("kill_after", "2.0")
         self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
-                        viewmodel=vm, forcemodel=fm)
+                        viewmodel=vm, forcemodel=fm, kill_before=kb, kill_after=ka)
         self.statusBar().showMessage("Starting the game…")
         if self.pending_demo:
             self.game.send("demo " + quoted(self.pending_demo))
@@ -1741,13 +1870,21 @@ class Window(QMainWindow):
         the clips of a kill of their killer near them, as demoonly plays."""
         player = self.player.currentData() or ""
         kills = list(self.player_kills(player).values())
-        spans = {id(kill): (max(start, kill["time"] - KILL_BEFORE), min(end, kill["time"] + KILL_AFTER))
+        kb, ka = self.get_kill_times()
+        maps = (self.index or {}).get("maps", [])
+        map_times = [m["time"] for m in maps]
+
+        def map_start_for(t):
+            idx = bisect.bisect_right(map_times, t) - 1
+            return map_times[idx] if idx >= 0 else 0
+
+        spans = {id(kill): (max(start, map_start_for(kill["time"]), kill["time"] - kb), min(end, kill["time"] + ka))
                  for kill, start, end in kills}
         switches = self.switches()
         self.kills.clear()
         self.kill_marks = []
         for kill, _, _ in kills:
-            if kill.get("teamKill"):
+            if kill.get("teamKill") or is_grenade(kill):
                 continue
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             span = spans[id(kill)]
@@ -1755,6 +1892,7 @@ class Window(QMainWindow):
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
             item.setData(0, Qt.UserRole, span[0])
             item.setData(1, Qt.UserRole, clips)
+            item.setData(2, Qt.UserRole, [kill])
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
         self.multikills.clear()
@@ -1766,6 +1904,7 @@ class Window(QMainWindow):
                               + [spans[id(k)] for k, _, _ in team_kills_with(kills, chain)], switches)
             item.setData(0, Qt.UserRole, clips[0][0])
             item.setData(1, Qt.UserRole, clips)
+            item.setData(2, Qt.UserRole, chain)
             self.multikills.addTopLevelItem(item)
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
         # Up and Down too
@@ -1846,6 +1985,7 @@ class Window(QMainWindow):
                  "recorderkills": RECORDER_KILLS, "recordermultikills": RECORDER_MULTI,
                  "shownkills": SHOWN_KILLS, "shownmultikills": SHOWN_MULTI}
         plans, labels, choices = {}, {}, []
+        rec_kb, rec_ka = self.get_rec_kill_times()
         for key in keys:
             if key == "watched":
                 plans[key] = demoonly_plan(index, key, player) if player else (0, [])
@@ -1853,11 +1993,12 @@ class Window(QMainWindow):
                 enabled = bool(plans[key][1])
             elif key in ("recorderkills", "recordermultikills"):
                 only_type = "kills" if key == "recorderkills" else "multikills"
-                plans[key] = demoonly_plan(index, only_type, recorder) if recorder else (0, [])
+                plans[key] = demoonly_plan(index, only_type, recorder, kill_before=rec_kb, kill_after=rec_ka) if recorder else (0, [])
                 labels[key] = the(plans[key][0], *texts[key])
                 enabled = plans[key][0] > 0
             else:
-                plans[key] = demoonly_plan(index, key, "" if key.startswith("shown") else player)
+                plans[key] = demoonly_plan(index, key, "" if key.startswith("shown") else player,
+                                           kill_before=rec_kb, kill_after=rec_ka)
                 labels[key] = the(plans[key][0], *texts[key]) + (SHOWN_WHO if key == "shownkills" else "")
                 enabled = plans[key][0] > 0
             choices.append((key, labels[key] + (", " + about(length(plans[key][1])) if enabled else ""), enabled))
@@ -1865,6 +2006,8 @@ class Window(QMainWindow):
         if not dialog.exec():
             return
         what = dialog.what()
+        chosen_kb = int(dialog.kill_before.value() * 1000)
+        chosen_ka = int(dialog.kill_after.value() * 1000)
         if what == "range":
             start, end = dialog.times()
             label = f"{demo}, {clock(start)} to {clock(end)}"
@@ -1874,10 +2017,14 @@ class Window(QMainWindow):
             if what in ("recorderkills", "recordermultikills"):
                 only_type = "kills" if what == "recorderkills" else "multikills"
                 player = recorder
-                clip = only_clip(demo, only_type, player, plans[what][1])
+                spans = demoonly_plan(index, only_type, player, kill_before=chosen_kb, kill_after=chosen_ka)[1]
+                clip = only_clip(demo, only_type, player, spans)
+            elif what == "watched":
+                clip = only_clip(demo, what, player, plans[what][1])
             else:
                 player = "" if what.startswith("shown") else player
-                clip = only_clip(demo, what, player, plans[what][1])
+                spans = demoonly_plan(index, what, player, kill_before=chosen_kb, kill_after=chosen_ka)[1]
+                clip = only_clip(demo, what, player, spans)
         self.add_job(dialog.job(label, [clip], demo, player))
 
     def record_selected(self, tree):
@@ -1897,6 +2044,27 @@ class Window(QMainWindow):
             return
         player = self.player.currentData() or ""
         player = "" if player == SHOWN else player
+        rec_kb = int(dialog.kill_before.value() * 1000)
+        rec_ka = int(dialog.kill_after.value() * 1000)
+        kills_dict = self.player_kills(player)
+        maps = (self.index or {}).get("maps", [])
+        map_times = [m["time"] for m in maps]
+
+        def map_start_for(t):
+            idx = bisect.bisect_right(map_times, t) - 1
+            return map_times[idx] if idx >= 0 else 0
+
+        rec_spans = {id(k): (max(st, map_start_for(k["time"]), k["time"] - rec_kb), min(en, k["time"] + rec_ka))
+                     for k, st, en in kills_dict.values()}
+        selected_spans = []
+        for item in items:
+            chain = item.data(2, Qt.UserRole)
+            if chain:
+                selected_spans.extend(rec_spans[id(k)] for k in chain if id(k) in rec_spans)
+                selected_spans.extend(rec_spans[id(k)] for k, _, _ in team_kills_with(list(kills_dict.values()), chain) if id(k) in rec_spans)
+            else:
+                selected_spans.extend(item.data(1, Qt.UserRole))
+        spans = stretches(selected_spans, self.switches())
         clips = [range_clip(demo, start, end) for start, end in spans]
         if dialog.join.isChecked() or len(clips) == 1:
             self.add_job(dialog.job(f"{demo}, {kind}", clips, demo, player))
@@ -1922,6 +2090,7 @@ class Window(QMainWindow):
         # {key: {name: (count, spans or None)}}, the demos with some
         plans = {}
         indexes = {name: self.library.index(name) for name in names}
+        rec_kb, rec_ka = self.get_rec_kill_times()
         for key in ("kills", "multikills", "recorderkills", "recordermultikills", "shownkills", "shownmultikills", "everything"):
             plans[key] = {}
             for name, index in indexes.items():
@@ -1931,10 +2100,12 @@ class Window(QMainWindow):
                     continue
                 if key in ("recorderkills", "recordermultikills"):
                     rec = (index.get("recorder") or {}).get("name", "")
-                    plan = demoonly_plan(index, "kills" if key == "recorderkills" else "multikills", rec) if rec else (0, [])
+                    plan = demoonly_plan(index, "kills" if key == "recorderkills" else "multikills", rec,
+                                         kill_before=rec_kb, kill_after=rec_ka) if rec else (0, [])
                 else:
                     plan = demoonly_plan(index, "" if key == "everything" else key,
-                                         found.get(name) or "" if key in ("kills", "multikills") else "")
+                                         found.get(name) or "" if key in ("kills", "multikills") else "",
+                                         kill_before=rec_kb, kill_after=rec_ka)
                 if plan[0] or key == "everything":
                     plans[key][name] = plan
 
@@ -1961,6 +2132,8 @@ class Window(QMainWindow):
             return
         what = dialog.what()
         chosen = list(plans[what])
+        chosen_kb = int(dialog.kill_before.value() * 1000)
+        chosen_ka = int(dialog.kill_after.value() * 1000)
         whose = player + "'s" if player else "all the"
         kind = {"kills": f"{whose} kills", "multikills": f"{whose} multi-kills",
                 "recorderkills": "recorder frags", "recordermultikills": "recorder multi-kills",
@@ -1972,9 +2145,22 @@ class Window(QMainWindow):
             found = {name: (indexes[name].get("recorder") or {}).get("name", "")
                      for name in chosen if indexes.get(name)}
             player = found.get(chosen[0], "") if len(chosen) == 1 else ""
-        clips = [only_clip(name, "kills" if what == "recorderkills" else "multikills" if what == "recordermultikills" else ("" if what == "everything" else what),
-                           found.get(name) or "", plans[what][name][1])
-                 for name in chosen]
+
+        clips = []
+        for name in chosen:
+            if what == "everything":
+                only_arg = ""
+                p = found.get(name) or ""
+                spans = plans[what][name][1]
+            elif what in ("recorderkills", "recordermultikills"):
+                only_arg = "kills" if what == "recorderkills" else "multikills"
+                p = found.get(name) or ""
+                spans = demoonly_plan(indexes[name], only_arg, p, kill_before=chosen_kb, kill_after=chosen_ka)[1]
+            else:
+                only_arg = what
+                p = found.get(name) or ""
+                spans = demoonly_plan(indexes[name], only_arg, p, kill_before=chosen_kb, kill_after=chosen_ka)[1]
+            clips.append(only_clip(name, only_arg, p, spans))
         if dialog.join.isChecked() or len(clips) == 1:
             demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
             self.add_job(dialog.job(demo + (f", {kind}" if kind else ""), clips, demo, player))

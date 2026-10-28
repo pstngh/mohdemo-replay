@@ -990,7 +990,7 @@ static void CL_IndexDemo( void ) {
 
 	kills = teamKills = rounds = 0;
 	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
-		kills += cl_demoIndex.events[i].type == DEMOEVENT_KILL && !cl_demoIndex.events[i].teamKill;
+		kills += cl_demoIndex.events[i].type == DEMOEVENT_KILL && !cl_demoIndex.events[i].teamKill && !cl_demoIndex.events[i].grenade;
 		teamKills += cl_demoIndex.events[i].type == DEMOEVENT_KILL && cl_demoIndex.events[i].teamKill;
 		rounds += cl_demoIndex.events[i].type == DEMOEVENT_ROUNDEND;
 	}
@@ -1118,6 +1118,47 @@ static int CL_DemoKillBefore( void ) {
 
 /*
 ====================
+CL_DemoKillAfter
+====================
+*/
+static int CL_DemoKillAfter( void ) {
+	return Q_max( 0, (int)( cl_demoKillAfter->value * 1000 ) );
+}
+
+/*
+====================
+CL_DemoMapTimeFor
+====================
+*/
+static int CL_DemoMapTimeFor( int eventIndex ) {
+	int j;
+
+	for ( j = eventIndex; j >= 0; j-- ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_MAP ) {
+			return cl_demoIndex.events[j].time;
+		}
+	}
+	return 0;
+}
+
+/*
+====================
+CL_DemoNextMapTimeFor
+====================
+*/
+static int CL_DemoNextMapTimeFor( int eventIndex ) {
+	int j;
+
+	for ( j = eventIndex + 1; j < cl_demoIndex.numEvents; j++ ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_MAP ) {
+			return cl_demoIndex.events[j].time;
+		}
+	}
+	return cl_demoIndex.duration;
+}
+
+/*
+====================
 CL_DemoKillShown
 
 Whether the killer of kill event i is the player shown at the time, and if
@@ -1128,6 +1169,7 @@ other times, the demo shows someone else.
 static qboolean CL_DemoKillShown( int i, int *from, int *to ) {
 	const demoEvent_t	*kill = &cl_demoIndex.events[i];
 	const demoEvent_t	*watch = NULL;
+	int					mapTime = CL_DemoMapTimeFor( i );
 	int					j;
 
 	// the last player shown from the time of the kill or before
@@ -1137,6 +1179,9 @@ static qboolean CL_DemoKillShown( int i, int *from, int *to ) {
 		}
 	}
 	for ( j = i - 1; !watch && j >= 0; j-- ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_MAP ) {
+			break;
+		}
 		if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH ) {
 			watch = &cl_demoIndex.events[j];
 		}
@@ -1150,9 +1195,13 @@ static qboolean CL_DemoKillShown( int i, int *from, int *to ) {
 		return qfalse;
 	}
 
-	*from = watch->time;
+	*from = Q_max( watch->time, mapTime );
 	*to = cl_demoIndex.duration;
 	for ( j = watch - cl_demoIndex.events + 1; j < cl_demoIndex.numEvents; j++ ) {
+		if ( cl_demoIndex.events[j].type == DEMOEVENT_MAP ) {
+			*to = cl_demoIndex.events[j].time;
+			break;
+		}
 		if ( cl_demoIndex.events[j].type == DEMOEVENT_WATCH ) {
 			*to = cl_demoIndex.events[j].time;
 			break;
@@ -1177,21 +1226,21 @@ static qboolean CL_DemoInMultiKill( int i, qboolean shown ) {
 	int					from, to;
 	int					j;
 
-	if ( !ev->name[0] ) {
+	if ( !ev->name[0] || ev->grenade ) {
 		return qfalse;
 	}
 
 	// the events go forward in time; team kills don't count
 	for ( j = i - 1; j >= 0 && ev->time - cl_demoIndex.events[j].time <= gap; j-- ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && !other->grenade && CL_DemoPlayerIs( other->name, ev->name )
 			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
 	}
 	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time - ev->time <= gap; j++ ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && !other->grenade && CL_DemoPlayerIs( other->name, ev->name )
 			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
@@ -1222,14 +1271,14 @@ static qboolean CL_DemoTeamKillPlays( int i ) {
 	// the events go forward in time
 	for ( j = i - 1; j >= 0 && ev->time - cl_demoIndex.events[j].time <= DEMO_TEAMKILL_NEAR; j-- ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && !other->grenade && CL_DemoPlayerIs( other->name, ev->name )
 			&& CL_DemoKillStretch( j, &start, &end ) ) {
 			return qtrue;
 		}
 	}
 	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time - ev->time <= DEMO_TEAMKILL_NEAR; j++ ) {
 		other = &cl_demoIndex.events[j];
-		if ( other->type == DEMOEVENT_KILL && !other->teamKill && CL_DemoPlayerIs( other->name, ev->name )
+		if ( other->type == DEMOEVENT_KILL && !other->teamKill && !other->grenade && CL_DemoPlayerIs( other->name, ev->name )
 			&& CL_DemoKillStretch( j, &start, &end ) ) {
 			return qtrue;
 		}
@@ -1251,7 +1300,7 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 	qboolean			shown = player || cl_demoOnly == DEMOONLY_SHOWNKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
 	int					from, to;
 
-	if ( ev->type != DEMOEVENT_KILL ) {
+	if ( ev->type != DEMOEVENT_KILL || ev->grenade ) {
 		return qfalse;
 	}
 	if ( ev->teamKill ) {
@@ -1262,8 +1311,8 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 		return qfalse;
 	}
 
-	*start = ev->time - CL_DemoKillBefore();
-	*end = ev->time + Q_max( 0, (int)( cl_demoKillAfter->value * 1000 ) );
+	*start = Q_max( ev->time - CL_DemoKillBefore(), CL_DemoMapTimeFor( i ) );
+	*end = Q_min( ev->time + CL_DemoKillAfter(), CL_DemoNextMapTimeFor( i ) );
 	// a player's kills, or whoever's shown, only while they're the one shown
 	if ( shown ) {
 		if ( !CL_DemoKillShown( i, &from, &to ) ) {
@@ -1493,12 +1542,12 @@ static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
 
 	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
 		ev = &cl_demoIndex.events[i];
-		// team kills aren't kills to go to
-		if ( ev->type != DEMOEVENT_KILL || ev->teamKill || ( player[0] && !CL_DemoPlayerIs( ev->name, player ) ) ) {
+		// team kills and grenade kills aren't kills to go to
+		if ( ev->type != DEMOEVENT_KILL || ev->teamKill || ev->grenade || ( player[0] && !CL_DemoPlayerIs( ev->name, player ) ) ) {
 			continue;
 		}
 
-		target = Q_max( 0, ev->time - CL_DemoKillBefore() );
+		target = Q_max( CL_DemoMapTimeFor( i ), ev->time - CL_DemoKillBefore() );
 		// a player's kills, or whoever's is shown, only while they're the one shown
 		if ( player[0] || shown ) {
 			if ( !CL_DemoKillShown( i, &from, &to ) ) {
