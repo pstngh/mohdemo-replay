@@ -479,6 +479,13 @@ class Game:
         fm = "1" if (forcemodel is None or str(forcemodel) in ("1", "true", "True")) else "0"
         kb = str(kill_before if kill_before is not None else "4.0")
         ka = str(kill_after if kill_after is not None else "2.0")
+        si = "0" if ("r_swapInterval" in extra and extra[extra.index("r_swapInterval") + 1] == "0") else "1"
+        fps = "0"
+        try:
+            with open(config, "a") as f:
+                f.write(f'\nseta r_swapInterval "{si}"\nseta com_maxfps "{fps}"\n')
+        except OSError:
+            pass
         with open(os.path.join(main, "replay.cfg"), "w") as f:
             f.writelines(f'bind {key} "{command}"\n' for key, command in BINDS.items())
             f.write('set r_uselod "0"\n')
@@ -495,6 +502,10 @@ class Game:
             f.write(f'seta cl_demoKillBefore "{kb}"\n')
             f.write(f'set cl_demoKillAfter "{ka}"\n')
             f.write(f'seta cl_demoKillAfter "{ka}"\n')
+            f.write(f'set r_swapInterval "{si}"\n')
+            f.write(f'seta r_swapInterval "{si}"\n')
+            f.write(f'set com_maxfps "{fps}"\n')
+            f.write(f'seta com_maxfps "{fps}"\n')
 
         self.args = [exe, "+set", "fs_basepath", game, "+set", "fs_homepath", self.home,
                      "+set", "com_pipefile", PIPE, "+set", "cl_demoFiles", "1",
@@ -505,7 +516,7 @@ class Game:
                      "+set", "dm_playergermanmodel", "german_winter_1",
                      "+set", "cl_demoKillBefore", kb,
                      "+set", "cl_demoKillAfter", ka,
-                     "+set", "r_swapInterval", "1", "+set", "com_maxfps", "60",
+                     "+set", "r_swapInterval", si, "+set", "com_maxfps", fps,
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
                      "+exec", "replay.cfg", *extra]

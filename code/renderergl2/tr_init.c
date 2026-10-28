@@ -1474,7 +1474,7 @@ void R_Register( void )
 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "1",
 					CVAR_ARCHIVE | CVAR_LATCH );
 #else
-	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "0",
+	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "1",
 					CVAR_ARCHIVE | CVAR_LATCH );
 #endif
 	r_gamma = ri.Cvar_Get( "r_gamma", "1", CVAR_ARCHIVE );
