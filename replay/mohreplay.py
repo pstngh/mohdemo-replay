@@ -1190,7 +1190,14 @@ class Recorder(QObject):
                         kill_before=kill_before, kill_after=kill_after)
 
     def start(self):
-        self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
+        output_dir = os.path.dirname(self.job.get("output", ""))
+        if output_dir and os.path.isdir(output_dir):
+            try:
+                self.parts_dir = tempfile.mkdtemp(prefix=".mohreplay-parts-", dir=output_dir)
+            except OSError:
+                self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
+        else:
+            self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
         self.start_game()
         self.elapsed.start()
         self.on_progress(self.job, "Starting the recorder…")
@@ -1275,18 +1282,31 @@ class Recorder(QObject):
         return text
 
     def clip_done(self):
+        log_file = self.made() + ".log"
+        log_content = ""
+        if os.path.isfile(log_file):
+            try:
+                with open(log_file, errors="replace") as f:
+                    log_content = f.read()
+            except OSError:
+                pass
+
         if self.error:
             # FFmpeg quit midway: what it wrote isn't the whole video
             self.finish("The recording stopped. " + self.error)
-        elif not os.path.isfile(self.made()):
-            self.finish("FFmpeg didn't write the video.")
+        elif not os.path.isfile(self.made()) or os.path.getsize(self.made()) == 0:
+            err = "FFmpeg didn't write the video."
+            if log_content:
+                err += "\n" + log_content[-1500:]
+            self.finish(err)
+        elif "No space left on device" in log_content:
+            self.finish("FFmpeg ran out of disk space while writing the clip.\n" + log_content[-1500:])
         else:
             if self.parts_dir:
                 part_path = os.path.join(self.parts_dir, f"part{self.clip}.mp4")
                 shutil.move(self.made(), part_path)
-                log = self.made() + ".log"
-                if os.path.isfile(log):
-                    shutil.move(log, part_path + ".log")
+                if os.path.isfile(log_file):
+                    shutil.move(log_file, part_path + ".log")
             else:
                 part_path = self.made()
             self.parts.append(part_path)
@@ -1294,19 +1314,23 @@ class Recorder(QObject):
 
     def join(self):
         self.phase = "joining"
-        if len(self.parts) == 1:
-            self.finish(video=self.parts[0])
+        valid_parts = [p for p in self.parts if os.path.isfile(p) and os.path.getsize(p) > 0]
+        if not valid_parts:
+            self.finish("No valid video clips to join.")
             return
-        self.on_progress(self.job, f"Joining {len(self.parts)} clips…")
-        folder = self.parts_dir or os.path.dirname(self.parts[0])
+        if len(valid_parts) == 1:
+            self.finish(video=valid_parts[0])
+            return
+        self.on_progress(self.job, f"Joining {len(valid_parts)} clips…")
+        folder = self.parts_dir or os.path.dirname(valid_parts[0])
         with open(os.path.join(folder, "parts.txt"), "w") as f:
-            f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in self.parts)
+            f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in valid_parts)
         self.joiner = QProcess(self)
         self.joiner.setProcessChannelMode(QProcess.MergedChannels)
         self.joiner.finished.connect(self.joined)
         self.joiner.errorOccurred.connect(
             lambda error: error == QProcess.FailedToStart and self.finish("Couldn't run FFmpeg to join the clips."))
-        self.joiner.start(self.job["ffmpeg"], ["-v", "error", "-y", "-f", "concat", "-safe", "0",
+        self.joiner.start(self.job["ffmpeg"], ["-loglevel", "warning", "-y", "-f", "concat", "-safe", "0",
                                                "-i", os.path.join(folder, "parts.txt"), "-c", "copy",
                                                "-movflags", "+faststart", os.path.join(folder, "joined.mp4")])
 
@@ -1315,7 +1339,7 @@ class Recorder(QObject):
             return
         folder = self.parts_dir or os.path.dirname(self.parts[0])
         video = os.path.join(folder, "joined.mp4")
-        if code or not os.path.isfile(video):
+        if code or not os.path.isfile(video) or os.path.getsize(video) == 0:
             text = bytes(self.joiner.readAll()).decode("utf-8", "replace")
             self.finish("FFmpeg couldn't join the clips.\n" + text[-1500:])
         else:
