@@ -117,6 +117,10 @@ void View3D::OnDeactivate(Event *ev)
 
 void View3D::DrawFPS(void)
 {
+    if (CL_VideoRecording()) {
+        return;
+    }
+
     char string[128];
 
     setFont("verdana-14");
@@ -597,7 +601,7 @@ void View3D::Draw2D(void)
         }
     }
 
-    if (fps->integer && !cls.no_menus) {
+    if (fps->integer && !cls.no_menus && !CL_VideoRecording()) {
         DrawFPS();
         DrawProf();
     }

@@ -483,7 +483,7 @@ class Game:
         fps = "0"
         try:
             with open(config, "a") as f:
-                f.write(f'\nseta r_swapInterval "{si}"\nseta com_maxfps "{fps}"\n')
+                f.write(f'\nseta r_swapInterval "{si}"\nseta com_maxfps "{fps}"\nseta fps "0"\n')
         except OSError:
             pass
         with open(os.path.join(main, "replay.cfg"), "w") as f:
@@ -506,6 +506,8 @@ class Game:
             f.write(f'seta r_swapInterval "{si}"\n')
             f.write(f'set com_maxfps "{fps}"\n')
             f.write(f'seta com_maxfps "{fps}"\n')
+            f.write('set fps "0"\n')
+            f.write('seta fps "0"\n')
 
         self.args = [exe, "+set", "fs_basepath", game, "+set", "fs_homepath", self.home,
                      "+set", "com_pipefile", PIPE, "+set", "cl_demoFiles", "1",
@@ -517,6 +519,7 @@ class Game:
                      "+set", "cl_demoKillBefore", kb,
                      "+set", "cl_demoKillAfter", ka,
                      "+set", "r_swapInterval", si, "+set", "com_maxfps", fps,
+                     "+set", "fps", "0",
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
                      "+exec", "replay.cfg", *extra]
@@ -1173,7 +1176,8 @@ class Recorder(QObject):
         extra = ["+set", "s_loopback", "1" if job["sound"] else "0", "+set", "s_khz", "44",
                  "+set", "s_volume", "1", "+set", "cl_aviFrameRate", job["fps"],
                  "+set", "cl_aviFFmpeg", job["ffmpeg"], "+set", "cl_aviPipeFormat", job["options"],
-                 "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0"]
+                 "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0",
+                 "+set", "fps", "0"]
         # offscreen where SDL can, the recorder doesn't need a window
         driver = "offscreen" if sys.platform.startswith("linux") else None
         viewmodel = job.get("viewmodel", settings.value("rec/viewmodel", settings.value("viewmodel", "1")))
