@@ -845,7 +845,11 @@ void CG_CheckValidModels()
         cg.serverAxisModelValid = cg.demoPlayback || CG_IsValidServerModel(modelpath);
     }
 
-    if (dm_playermodel->modified || dm_playergermanmodel->modified) {
+    if (cg.demoPlayback) {
+        cg.serverAlliedModelValid = qtrue;
+        cg.serverAxisModelValid = qtrue;
+        cg_forceModelAllowed = qtrue;
+    } else if (dm_playermodel->modified || dm_playergermanmodel->modified) {
         cg_forceModelAllowed = cg.serverAlliedModelValid && cg.serverAxisModelValid;
     }
 }
@@ -904,6 +908,12 @@ void CG_UpdateForceModels()
     char      szAlliesModel[256];
     char      szAxisModel[256];
     qboolean  isDirty;
+
+    if (cg.demoPlayback) {
+        cg.serverAlliedModelValid = qtrue;
+        cg.serverAxisModelValid = qtrue;
+        cg_forceModelAllowed = qtrue;
+    }
 
     isDirty = dm_playermodel->modified || dm_playergermanmodel->modified || cg_forceModel->modified;
 
@@ -977,11 +987,20 @@ Checks player models, and update force models
 void CG_ProcessPlayerModel()
 {
     static qboolean lastDemoPlayback = qfalse;
+    static int lastForceModel = -1;
+
     if (cg.demoPlayback != lastDemoPlayback) {
         lastDemoPlayback               = cg.demoPlayback;
         dm_playermodel->modified       = qtrue;
         dm_playergermanmodel->modified = qtrue;
         cg_forceModel->modified        = qtrue;
+    }
+
+    if (cg_forceModel->integer != lastForceModel) {
+        lastForceModel = cg_forceModel->integer;
+        cg_forceModel->modified = qtrue;
+        dm_playermodel->modified = qtrue;
+        dm_playergermanmodel->modified = qtrue;
     }
 
     CG_CheckValidModels();
@@ -1147,7 +1166,9 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
 
     if (s1->number != cg.snap->ps.clientNum && (s1->eType == ET_PLAYER || (s1->eFlags & EF_DEAD))) {
         if (cg_forceModel->integer && (cg_forceModelAllowed || cg.demoPlayback)) {
-            //CG_UpdateForceModels();
+            if (!cg.pAxisPlayerModel || !cg.pAlliedPlayerModel) {
+                CG_UpdateForceModels();
+            }
 
             if (s1->eFlags & EF_AXIS) {
                 model.hModel = cg.hAxisPlayerModelHandle;
@@ -1290,7 +1311,12 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     // set surfaces
     memcpy(model.surfaces, s1->surfaces, MAX_MODEL_SURFACES);
 
-    if (!(s1->renderfx & RF_ALWAYSDRAW) && s1->parent != ENTITYNUM_NONE && s1->parent == cg.snap->ps.clientNum
+    int clientNum = cg.snap ? cg.snap->ps.clientNum : ENTITYNUM_NONE;
+    if (cg.snap && (cg.snap->ps.pm_flags & PMF_CAMERA_VIEW) && cg.snap->ps.stats[STAT_INFOCLIENT] >= 0) {
+        clientNum = cg.snap->ps.stats[STAT_INFOCLIENT];
+    }
+
+    if (!(s1->renderfx & RF_ALWAYSDRAW) && s1->parent != ENTITYNUM_NONE && s1->parent == clientNum
         && ((!cg_drawviewmodel->integer && !bThirdPerson) || cg.snap->ps.stats[STAT_INZOOM])) {
         // hide all surfaces while zooming or if the viewmodel shouldn't be shown
         for (i = 0; i < MAX_MODEL_SURFACES; i++) {

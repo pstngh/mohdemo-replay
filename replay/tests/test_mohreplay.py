@@ -425,6 +425,20 @@ class TestGame(FakeGameCase):
 
 
 class TestWindow(FakeGameCase):
+    def test_viewmodel_and_forcemodel_toggles(self):
+        window = self.window()
+        self.assertEqual(window.viewmodel_action.text(), "Viewmodel: ON")
+        self.assertEqual(window.forcemodel_action.text(), "Force models: ON")
+        window.viewmodel_action.trigger()
+        self.assertEqual(window.viewmodel_action.text(), "Viewmodel: OFF")
+        self.assertEqual(self.settings.value("viewmodel"), "0")
+        window.forcemodel_action.trigger()
+        self.assertEqual(window.forcemodel_action.text(), "Force models: OFF")
+        self.assertEqual(self.settings.value("forcemodel"), "0")
+        window.viewmodel_action.trigger()
+        self.assertEqual(window.viewmodel_action.text(), "Viewmodel: ON")
+        self.assertEqual(self.settings.value("viewmodel"), "1")
+
     def test_play_fills_the_lists(self):
         window = self.window()
         self.playing(window)

@@ -1413,14 +1413,16 @@ class Window(QMainWindow):
         settings_action.triggered.connect(self.edit_settings)
         self.restart_action = self.menuBar().addAction("Restart game")
         self.restart_action.triggered.connect(self.start_game)
-        self.viewmodel_action = self.menuBar().addAction("Draw viewmodel")
+        self.viewmodel_action = self.menuBar().addAction("")
         self.viewmodel_action.setCheckable(True)
         self.viewmodel_action.setChecked(settings.value("viewmodel", "1") in ("1", "true", True))
         self.viewmodel_action.toggled.connect(self.toggle_viewmodel)
-        self.forcemodel_action = self.menuBar().addAction("Force models")
+        self.update_viewmodel_text()
+        self.forcemodel_action = self.menuBar().addAction("")
         self.forcemodel_action.setCheckable(True)
         self.forcemodel_action.setChecked(settings.value("forcemodel", "1") in ("1", "true", True))
         self.forcemodel_action.toggled.connect(self.toggle_forcemodel)
+        self.update_forcemodel_text()
         self.menuBar().addAction(self.queue_dock.toggleViewAction())
 
         self.indexing = QLabel()
@@ -1473,22 +1475,36 @@ class Window(QMainWindow):
         exe, game, demos = (self.settings.value(k, "") for k in ("exe", "game", "demos"))
         return os.path.isfile(exe) and os.path.isdir(game) and os.path.isdir(demos)
 
+    def update_viewmodel_text(self):
+        on = self.viewmodel_action.isChecked()
+        self.viewmodel_action.setText(f"Viewmodel: {'ON' if on else 'OFF'}")
+
+    def update_forcemodel_text(self):
+        on = self.forcemodel_action.isChecked()
+        self.forcemodel_action.setText(f"Force models: {'ON' if on else 'OFF'}")
+
     def toggle_viewmodel(self, checked):
         val = "1" if checked else "0"
         self.settings.setValue("viewmodel", val)
+        self.update_viewmodel_text()
         if self.game.running():
             self.game.send(f"set cg_drawviewmodel {val}")
+        self.statusBar().showMessage(f"Viewmodel: {'ON' if checked else 'OFF'}", 2000)
 
     def toggle_forcemodel(self, checked):
         val = "1" if checked else "0"
         self.settings.setValue("forcemodel", val)
+        self.update_forcemodel_text()
         if self.game.running():
             self.game.send(f"set cg_forceModel {val}")
+        self.statusBar().showMessage(f"Force models: {'ON' if checked else 'OFF'} (Airborne / Winter 1)", 2000)
 
     def edit_settings(self):
         if SettingsDialog(self.settings, self).exec():
             self.viewmodel_action.setChecked(self.settings.value("viewmodel", "1") in ("1", "true", True))
             self.forcemodel_action.setChecked(self.settings.value("forcemodel", "1") in ("1", "true", True))
+            self.update_viewmodel_text()
+            self.update_forcemodel_text()
             self.fill_demos()
             self.library.open(self.settings.value("demos", ""), self.settings.value("exe", ""))
             if self.ready() and self.game.running():
