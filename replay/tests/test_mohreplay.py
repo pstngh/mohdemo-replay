@@ -79,14 +79,28 @@ def followed_demo():
 
 
 def team_demo():
-    """DEMO with three team kills: t-'s 1.5 s after his third kill and alone
-    at 1:40, and Phil's 1.5 s after his kill at 3:20."""
+    """DEMO with three team kills: t-'s 1.5 s after their third kill and
+    alone at 1:40, and Phil's 1.5 s after their kill at 3:20."""
     demo = json.loads(json.dumps(DEMO))
 
     def team_kill(time, killer, name):
         return {"time": time, "killer": killer, "killerName": name, "victim": 4, "victimName": "Joe",
                 "text": "Joe was rifled by " + name, "teamKill": True}
     demo["kills"] += [team_kill(16000, 0, "t-"), team_kill(100000, 0, "t-"), team_kill(201500, 1, "^1Phil")]
+    demo["kills"].sort(key=lambda kill: kill["time"])
+    return demo
+
+
+def grenade_demo():
+    """DEMO with two grenade kills by t-: 2.5 s after their third kill and
+    alone at 0:50, the second as an index made before kills were marked."""
+    demo = json.loads(json.dumps(DEMO))
+    demo["kills"] += [
+        {"time": 17000, "killer": 0, "killerName": "t-", "victim": 4, "victimName": "Joe",
+         "text": "Joe tripped on t-'s grenade", "grenade": True},
+        {"time": 50000, "killer": 0, "killerName": "t-", "victim": 4, "victimName": "Joe",
+         "text": "Joe is picking t-'s shrapnel out of his teeth"},
+    ]
     demo["kills"].sort(key=lambda kill: kill["time"])
     return demo
 
@@ -264,6 +278,36 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(plan(demo, "multikills"), (1, [(6000, 18000)]))
         self.assertEqual([len(chain) for chain in mohreplay.multi_kills(demo["kills"])], [3])
         self.assertEqual(mohreplay.summarize(demo)["players"]["t-"][1:], [3, 1])
+
+    def test_grenade_kills(self):
+        plan, demo = mohreplay.demoonly_plan, grenade_demo()
+        self.assertEqual([mohreplay.is_grenade(kill) for kill in demo["kills"]][2:5], [False, True, True])
+        # not counted, not played, nor part of multi-kills
+        self.assertEqual(plan(demo, "kills", "T-"), (3, [(6000, 16500)]))
+        self.assertEqual(plan(demo, "multikills"), (1, [(6000, 16500)]))
+        self.assertEqual([len(chain) for chain in mohreplay.multi_kills(demo["kills"])], [3])
+        self.assertEqual(mohreplay.summarize(demo)["players"]["t-"][1:], [3, 1])
+
+    def test_levels(self):
+        """A kill's clip stays inside its level, and who is shown is looked
+        up on its level, which starts with a watch event."""
+        demo = json.loads(json.dumps(DEMO))
+        demo["maps"].append({"time": 256000, "map": "obj/obj_team2"})
+        demo["watched"][1:1] = [{"time": 256000, "client": 0, "name": "t-"}]
+        demo["kills"].append({"time": 257000, "killer": 0, "killerName": "t-", "victim": 2, "victimName": "Bob",
+                              "text": "Bob was rifled by t-"})
+        demo["kills"].sort(key=lambda kill: kill["time"])
+        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", "T-"), (4, [(6000, 16500), (256000, 259000)]))
+        kill = {"time": 255000}
+        self.assertEqual(mohreplay.kill_span(demo, kill, 0, 600000), (251000, 256000))
+        self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=257000), 0, 600000), (256000, 259000))
+        # and the demo's end
+        self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=599000), 0, 602000), (595000, 600000))
+
+    def test_lead_in_and_out(self):
+        plan = mohreplay.demoonly_plan
+        self.assertEqual(plan(DEMO, "kills", "T-", 1000, 400), (3, [(9000, 12400), (13500, 14900)]))
+        self.assertEqual(plan(DEMO, "kills", "T-", 10000, 5000), (3, [(0, 19500)]))
 
     def test_wording(self):
         self.assertEqual([mohreplay.the(n, "kill", "kills") for n in (0, 1, 3)], ["No kills", "The kill", "The 3 kills"])
