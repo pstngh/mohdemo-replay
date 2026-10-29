@@ -675,7 +675,9 @@ CL_PlayDemo
 */
 static void CL_PlayDemo( const char *demoName ) {
 	char		name[MAX_OSPATH];
-	char		arg[MAX_QPATH];
+	// Changed in OPM
+	//  Demos in folders of demos/ can have long paths
+	char		arg[MAX_OSPATH];
 
 	// copied as disconnecting may overwrite it
 	Q_strncpyz( arg, demoName, sizeof( arg ) );

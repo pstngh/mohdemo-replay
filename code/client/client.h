@@ -235,7 +235,9 @@ typedef struct {
 	qboolean	downloadRestart;	// if true, we need to do another FS_Restart because we downloaded a pak
 
 	// demo information
-	char		demoName[MAX_QPATH];
+	// Changed in OPM
+	//  A demo's path in demos/, which can be longer than MAX_QPATH
+	char		demoName[MAX_OSPATH];
 	qboolean	spDemoRecording;
 	qboolean	demorecording;
 	qboolean	demoplaying;
