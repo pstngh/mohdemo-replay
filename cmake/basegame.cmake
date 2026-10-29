@@ -25,6 +25,9 @@ file(GLOB_RECURSE GAME_SOURCES
 	${SOURCE_DIR}/parser/parsetree.cpp
 )
 
+# Unit tests under fgame/tests must not ship in the game module.
+list(FILTER GAME_SOURCES EXCLUDE REGEX "/fgame/tests/")
+
 # Compile lexer and grammar files
 
 if (FLEX_FOUND)
