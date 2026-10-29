@@ -830,6 +830,16 @@ def stretches(spans, switches=()):
     return [tuple(span) for span in joined]
 
 
+def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
+    """When kill plays, in msec: from before it to after it, while it can be
+    played (start to end), inside its level, as the engine clamps it."""
+    levels = [level["time"] for level in index.get("maps", [])]
+    i = bisect.bisect_right(levels, kill["time"])
+    first = levels[i - 1] if i else 0
+    last = levels[i] if i < len(levels) else index.get("duration", 0)
+    return max(start, first, kill["time"] - before), min(end, last, kill["time"] + after)
+
+
 def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
     """What demoonly <only> [player] plays in a demo, as the engine does,
     from its index: (how many kills or multi-kills, [(start, end)] in msec),
@@ -857,21 +867,9 @@ def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
         keep = {id(k) for chain in chains for k in chain}
         frags, count = [x for x in frags if id(x[0]) in keep], len(chains)
     kills = frags + team_kills_with(kills, [k for k, _, _ in frags])
-    maps = index.get("maps", [])
-    map_times = [m["time"] for m in maps]
-
-    def map_start_for(t):
-        idx = bisect.bisect_right(map_times, t) - 1
-        return map_times[idx] if idx >= 0 else 0
-
-    def map_end_for(t):
-        idx = bisect.bisect_right(map_times, t)
-        return map_times[idx] if idx < len(map_times) else duration
-
     kb = KILL_BEFORE if kill_before is None else kill_before
     ka = KILL_AFTER if kill_after is None else kill_after
-    spans = [(max(start, map_start_for(k["time"]), k["time"] - kb), min(end, duration, map_end_for(k["time"]), k["time"] + ka))
-             for k, start, end in kills]
+    spans = [kill_span(index, k, start, end, kb, ka) for k, start, end in kills]
     return count, stretches([span for span in spans if span[1] > span[0]], switches)
 
 
@@ -1877,15 +1875,7 @@ class Window(QMainWindow):
         player = self.player.currentData() or ""
         kills = list(self.player_kills(player).values())
         kb, ka = self.get_kill_times()
-        maps = (self.index or {}).get("maps", [])
-        map_times = [m["time"] for m in maps]
-
-        def map_start_for(t):
-            idx = bisect.bisect_right(map_times, t) - 1
-            return map_times[idx] if idx >= 0 else 0
-
-        spans = {id(kill): (max(start, map_start_for(kill["time"]), kill["time"] - kb), min(end, kill["time"] + ka))
-                 for kill, start, end in kills}
+        spans = {id(kill): kill_span(self.index or {}, kill, start, end, kb, ka) for kill, start, end in kills}
         switches = self.switches()
         # items keep their kills by place in the index: Qt gives copies back
         place = {id(kill): i for i, kill in enumerate((self.index or {}).get("kills", []))}
@@ -2057,15 +2047,7 @@ class Window(QMainWindow):
         kills_dict = self.player_kills(player)
         player = "" if player == SHOWN else player
         all_kills = (self.index or {}).get("kills", [])
-        maps = (self.index or {}).get("maps", [])
-        map_times = [m["time"] for m in maps]
-
-        def map_start_for(t):
-            idx = bisect.bisect_right(map_times, t) - 1
-            return map_times[idx] if idx >= 0 else 0
-
-        rec_spans = {id(k): (max(st, map_start_for(k["time"]), k["time"] - rec_kb), min(en, k["time"] + rec_ka))
-                     for k, st, en in kills_dict.values()}
+        rec_spans = {id(k): kill_span(self.index or {}, k, st, en, rec_kb, rec_ka) for k, st, en in kills_dict.values()}
         selected_spans = []
         for item in items:
             chain = [all_kills[i] for i in item.data(2, Qt.UserRole)]
