@@ -744,65 +744,225 @@ class Timeline(QSlider):
         return super().event(event)
 
 
-class SettingsDialog(QDialog):
+def is_on(value):
+    return value in ("1", "true", True)
+
+
+def parse_size(text):
+    """(width, height) from "1920x1080", None if it isn't a size."""
+    try:
+        width, height = (int(v) for v in str(text).lower().replace("×", "x").split("x"))
+    except ValueError:
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def seconds_box(settings, key, default, tip, fallback=None):
+    """A box for a time in seconds, as kept in key, else in fallback."""
+    box = QDoubleSpinBox()
+    box.setRange(0.5, 30.0)
+    box.setSingleStep(0.5)
+    box.setSuffix(" s")
+    box.setToolTip(tip)
+    try:
+        box.setValue(float(settings.value(key, settings.value(fallback, default) if fallback else default)))
+    except (ValueError, TypeError):
+        box.setValue(default)
+    return box
+
+
+def lead_row(before, after, text):
+    """Before and after boxes in a row: "4.00 s before, 2.00 s after"."""
+    row = QHBoxLayout()
+    row.addWidget(before)
+    row.addWidget(QLabel("before,"))
+    row.addWidget(after)
+    row.addWidget(QLabel("after " + text))
+    row.addStretch(1)
+    return row
+
+
+def browse_row(edit, browse):
+    row = QHBoxLayout()
+    row.addWidget(edit, 1)
+    button = QPushButton("Browse…")
+    button.clicked.connect(browse)
+    row.addWidget(button)
+    return row
+
+
+def video_settings(settings):
+    """How videos are recorded, from the settings: a job's FFmpeg options,
+    size, frames per second the game draws, sound, viewmodel, models forced
+    and FFmpeg."""
+    try:
+        crf = int(settings.value("rec/crf", 20))
+    except (ValueError, TypeError):
+        crf = 20
+    codec = settings.value("rec/codec", "H.264")
+    sound = settings.value("rec/sound", "true") == "true"
+    options = settings.value("rec/advanced", "").strip() or " ".join([
+        CODECS.get(codec, CODECS["H.264"]).format(crf=crf, quality=max(1, min(100, 120 - 3 * crf))),
+        f"-c:a aac -b:a {settings.value('rec/bitrate', '192k')}" if sound else "-an",
+        "-movflags +faststart"])
+    fps = int(settings.value("rec/fps", "60"))
+    if settings.value("rec/blur", "false") == "true":
+        # the game draws several frames for each of the video, which FFmpeg blends
+        frames = max(2, BLUR_RATE // fps)
+        options = with_filters(options, f"tmix=frames={frames},framestep={frames}")
+        fps *= frames
+    width, height = parse_size(settings.value("rec/size", "1920x1080")) or (1920, 1080)
+    return {"options": options, "width": width, "height": height, "fps": str(fps), "sound": sound,
+            "viewmodel": "1" if is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))) else "0",
+            "forcemodel": "1" if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))) else "0",
+            "ffmpeg": settings.value("rec/ffmpeg", "").strip() or find_ffmpeg()}
+
+
+def video_summary(settings):
+    """The video settings in a line: "1920x1080, 60 fps, H.264 (CRF 20),
+    sound 192k"."""
+    parts = [settings.value("rec/size", "1920x1080"), settings.value("rec/fps", "60") + " fps"
+             + (" with motion blur" if settings.value("rec/blur", "false") == "true" else "")]
+    if settings.value("rec/advanced", "").strip():
+        parts.append("FFmpeg options of your own")
+    else:
+        parts.append(f"{settings.value('rec/codec', 'H.264')} (CRF {settings.value('rec/crf', 20)})")
+        parts.append(f"sound {settings.value('rec/bitrate', '192k')}" if settings.value("rec/sound", "true") == "true"
+                     else "no sound")
+    if not is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))):
+        parts.append("no viewmodel")
+    if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))):
+        parts.append("models forced")
+    return ", ".join(parts)
+
+
+class VideoSettings(QWidget):
+    """How videos are recorded, kept as rec/*: Settings' Videos tab, and
+    the Record dialog's Change…."""
+
     def __init__(self, settings, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Settings")
         self.settings = settings
         form = QFormLayout(self)
+        self.size = QComboBox()
+        self.size.addItems(["1280x720", "1920x1080", "2560x1440", "3840x2160"])
+        self.size.setEditable(True)
+        self.size.setCurrentText(settings.value("rec/size", "1920x1080"))
+        form.addRow("Size", self.size)
+        self.fps = QComboBox()
+        self.fps.addItems(["30", "60", "120"])
+        self.fps.setCurrentText(settings.value("rec/fps", "60"))
+        self.blur = QCheckBox("Motion blur")
+        self.blur.setToolTip(f"Each frame blends the {BLUR_RATE} frames a second the game draws in its time: "
+                             "smoother motion, slower recording")
+        self.blur.setChecked(settings.value("rec/blur", "false") == "true")
+        row = QHBoxLayout()
+        row.addWidget(self.fps)
+        row.addWidget(self.blur)
+        row.addStretch(1)
+        form.addRow("Frames per second", row)
+        self.quality = QSlider(Qt.Horizontal)
+        self.quality.setRange(14, 32)
+        self.quality.setInvertedAppearance(True)
+        self.quality.setValue(int(settings.value("rec/crf", 20)))
+        quality_label = QLabel()
+        self.quality.valueChanged.connect(lambda v: quality_label.setText(f"CRF {v}"))
+        self.quality.valueChanged.emit(self.quality.value())
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Smaller"))
+        row.addWidget(self.quality, 1)
+        row.addWidget(QLabel("Better"))
+        row.addWidget(quality_label)
+        form.addRow("Quality", row)
+        self.codec = QComboBox()
+        self.codec.addItems(list(CODECS))
+        self.codec.setCurrentText(settings.value("rec/codec", "H.264"))
+        form.addRow("Codec", self.codec)
+        self.sound = QCheckBox("Sound")
+        self.sound.setChecked(settings.value("rec/sound", "true") == "true")
+        self.bitrate = QComboBox()
+        self.bitrate.addItems(["128k", "192k", "256k", "320k"])
+        self.bitrate.setCurrentText(settings.value("rec/bitrate", "192k"))
+        self.sound.toggled.connect(self.bitrate.setEnabled)
+        self.bitrate.setEnabled(self.sound.isChecked())
+        row = QHBoxLayout()
+        row.addWidget(self.sound)
+        row.addWidget(self.bitrate)
+        row.addStretch(1)
+        form.addRow("Audio", row)
+        self.viewmodel = QCheckBox("The gun in the player's hands (viewmodel)")
+        self.viewmodel.setChecked(is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))))
+        self.forcemodel = QCheckBox("Everyone as an airborne soldier or a winter German")
+        self.forcemodel.setChecked(is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))))
+        shown = QVBoxLayout()
+        shown.addWidget(self.viewmodel)
+        shown.addWidget(self.forcemodel)
+        form.addRow("Show", shown)
+        self.advanced = QLineEdit(settings.value("rec/advanced", ""))
+        self.advanced.setPlaceholderText("FFmpeg output options, instead of the ones above")
+        form.addRow("Advanced", self.advanced)
+        self.ffmpeg = QLineEdit(settings.value("rec/ffmpeg", "") or find_ffmpeg())
+        form.addRow("FFmpeg", self.ffmpeg)
+
+    def error(self):
+        """What's wrong with what's entered, None if nothing."""
+        if not parse_size(self.size.currentText()):
+            return "The video size should be like 1920x1080."
+        return None
+
+    def save(self):
+        width, height = parse_size(self.size.currentText())
+        for key, value in (("size", f"{width}x{height}"), ("fps", self.fps.currentText()),
+                           ("blur", "true" if self.blur.isChecked() else "false"),
+                           ("crf", self.quality.value()), ("codec", self.codec.currentText()),
+                           ("sound", "true" if self.sound.isChecked() else "false"),
+                           ("bitrate", self.bitrate.currentText()),
+                           ("viewmodel", "1" if self.viewmodel.isChecked() else "0"),
+                           ("forcemodel", "1" if self.forcemodel.isChecked() else "0"),
+                           ("advanced", self.advanced.text().strip()), ("ffmpeg", self.ffmpeg.text().strip())):
+            self.settings.setValue("rec/" + key, value)
+
+
+class SettingsDialog(QDialog):
+    """The game, its files and demos, and how videos are recorded, in tabs
+    ("game" and "videos")."""
+
+    def __init__(self, settings, parent=None, tab="game"):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(760)
+        self.settings = settings
+        self.tabs = QTabWidget()
+        game = QWidget()
+        form = QFormLayout(game)
         self.fields = {}
-        for key, label, folder in (("exe", "Game program (openmohaa)", False),
+        for key, label, folder in (("exe", "Game program", False),
                                    ("game", "Game files folder", True),
                                    ("demos", "Demos folder", True)):
             edit = QLineEdit(settings.value(key, ""))
-            browse = QPushButton("Browse…")
-            browse.clicked.connect(lambda _=False, e=edit, d=folder: self.browse(e, d))
-            row = QHBoxLayout()
-            row.addWidget(edit)
-            row.addWidget(browse)
-            form.addRow(label, row)
+            edit.setToolTip({"exe": "OpenMoHAA built from this repository",
+                             "game": "The folder with main/Pak0.pk3",
+                             "demos": "The folders in it too"}[key])
+            form.addRow(label, browse_row(edit, lambda _=False, e=edit, d=folder: self.browse(e, d)))
             self.fields[key] = edit
         self.size = QComboBox()
         self.size.addItems(["1280x720", "1600x900", "1920x1080", "2560x1440"])
         self.size.setEditable(True)
         self.size.setCurrentText(settings.value("size", "1280x720"))
         form.addRow("Game window size", self.size)
-        self.viewmodel = QCheckBox("Draw weapon viewmodel (cg_drawviewmodel)")
-        self.viewmodel.setChecked(settings.value("viewmodel", "1") in ("1", "true", True))
-        form.addRow("Viewmodel", self.viewmodel)
-        self.forcemodel = QCheckBox("Force models: airborne (Allies) / winter 1 (Axis)")
-        self.forcemodel.setChecked(settings.value("forcemodel", "1") in ("1", "true", True))
-        form.addRow("Force models", self.forcemodel)
-        self.kill_before = QDoubleSpinBox()
-        self.kill_before.setRange(0.5, 30.0)
-        self.kill_before.setSingleStep(0.5)
-        self.kill_before.setSuffix(" s")
-        self.kill_before.setToolTip("Time shown before each kill (cl_demoKillBefore)")
-        try:
-            default_kb = float(settings.value("kill_before", 4.0))
-        except (ValueError, TypeError):
-            default_kb = 4.0
-        self.kill_before.setValue(default_kb)
-        self.kill_after = QDoubleSpinBox()
-        self.kill_after.setRange(0.5, 30.0)
-        self.kill_after.setSingleStep(0.5)
-        self.kill_after.setSuffix(" s")
-        self.kill_after.setToolTip("Time shown after each kill (cl_demoKillAfter)")
-        try:
-            default_ka = float(settings.value("kill_after", 2.0))
-        except (ValueError, TypeError):
-            default_ka = 2.0
-        self.kill_after.setValue(default_ka)
-        kill_row = QHBoxLayout()
-        kill_row.addWidget(QLabel("Before:"))
-        kill_row.addWidget(self.kill_before)
-        kill_row.addWidget(QLabel("After:"))
-        kill_row.addWidget(self.kill_after)
-        form.addRow("Kill lead-in / out", kill_row)
+        self.kill_before = seconds_box(settings, "kill_before", 4.0, "Time shown before each kill (cl_demoKillBefore)")
+        self.kill_after = seconds_box(settings, "kill_after", 2.0, "Time shown after each kill (cl_demoKillAfter)")
+        form.addRow("Each kill plays", lead_row(self.kill_before, self.kill_after, "it"))
+        self.tabs.addTab(game, "Game")
+        self.videos = VideoSettings(settings)
+        self.tabs.addTab(self.videos, "Videos")
+        self.tabs.setCurrentIndex(1 if tab == "videos" else 0)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
+        box = QVBoxLayout(self)
+        box.addWidget(self.tabs)
+        box.addWidget(buttons)
 
     def browse(self, edit, folder):
         if folder:
@@ -813,14 +973,41 @@ class SettingsDialog(QDialog):
             edit.setText(path)
 
     def accept(self):
+        error = self.videos.error()
+        if error:
+            self.tabs.setCurrentWidget(self.videos)
+            QMessageBox.warning(self, "Settings", error)
+            return
         for key, edit in self.fields.items():
             value = edit.text().strip()
             self.settings.setValue(key, game_program(value) if key == "exe" else value)
         self.settings.setValue("size", self.size.currentText().strip())
-        self.settings.setValue("viewmodel", "1" if self.viewmodel.isChecked() else "0")
-        self.settings.setValue("forcemodel", "1" if self.forcemodel.isChecked() else "0")
         self.settings.setValue("kill_before", str(self.kill_before.value()))
         self.settings.setValue("kill_after", str(self.kill_after.value()))
+        self.videos.save()
+        super().accept()
+
+
+class VideoSettingsDialog(QDialog):
+    """The Videos tab of Settings on its own."""
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Video settings")
+        self.videos = VideoSettings(settings)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        box = QVBoxLayout(self)
+        box.addWidget(self.videos)
+        box.addWidget(buttons)
+
+    def accept(self):
+        error = self.videos.error()
+        if error:
+            QMessageBox.warning(self, "Video settings", error)
+            return
+        self.videos.save()
         super().accept()
 
 
@@ -967,43 +1154,11 @@ class RecordDialog(QDialog):
         else:
             self.join.hide()
 
-        self.folder = QLineEdit(settings.value("rec/folder", os.path.expanduser("~/Videos")))
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self.browse)
-        row = QHBoxLayout()
-        row.addWidget(self.folder)
-        row.addWidget(browse)
-        form.addRow("Folder", row)
-        self.pattern = QLineEdit(settings.value("rec/pattern", "{demo} {start}"))
-        self.pattern.setToolTip("{demo}, {start}, {player} and {date} are replaced")
-        form.addRow("File name", self.pattern)
-
-        self.kill_before = QDoubleSpinBox()
-        self.kill_before.setRange(0.5, 30.0)
-        self.kill_before.setSingleStep(0.5)
-        self.kill_before.setSuffix(" s")
-        self.kill_before.setToolTip("Time recorded before each kill (cl_demoKillBefore)")
-        try:
-            rec_default_kb = float(settings.value("rec/kill_before", settings.value("kill_before", 4.0)))
-        except (ValueError, TypeError):
-            rec_default_kb = 4.0
-        self.kill_before.setValue(rec_default_kb)
-        self.kill_after = QDoubleSpinBox()
-        self.kill_after.setRange(0.5, 30.0)
-        self.kill_after.setSingleStep(0.5)
-        self.kill_after.setSuffix(" s")
-        self.kill_after.setToolTip("Time recorded after each kill (cl_demoKillAfter)")
-        try:
-            rec_default_ka = float(settings.value("rec/kill_after", settings.value("kill_after", 2.0)))
-        except (ValueError, TypeError):
-            rec_default_ka = 2.0
-        self.kill_after.setValue(rec_default_ka)
-        kill_row = QHBoxLayout()
-        kill_row.addWidget(QLabel("Before:"))
-        kill_row.addWidget(self.kill_before)
-        kill_row.addWidget(QLabel("After:"))
-        kill_row.addWidget(self.kill_after)
-        form.addRow("Kill lead-in / out", kill_row)
+        self.kill_before = seconds_box(settings, "rec/kill_before", 4.0,
+                                       "Time recorded before each kill (cl_demoKillBefore)", "kill_before")
+        self.kill_after = seconds_box(settings, "rec/kill_after", 2.0,
+                                      "Time recorded after each kill (cl_demoKillAfter)", "kill_after")
+        form.addRow("Each kill", lead_row(self.kill_before, self.kill_after, "it"))
         if relabel:
             # once they stop changing, as a choice of many demos takes a while
             timer = QTimer(self, singleShot=True, interval=150)
@@ -1011,67 +1166,20 @@ class RecordDialog(QDialog):
             self.kill_before.valueChanged.connect(lambda _: timer.start())
             self.kill_after.valueChanged.connect(lambda _: timer.start())
 
-        self.size = QComboBox()
-        self.size.addItems(["1280x720", "1920x1080", "2560x1440", "3840x2160"])
-        self.size.setEditable(True)
-        self.size.setCurrentText(settings.value("rec/size", "1920x1080"))
-        self.viewmodel = QCheckBox("Draw viewmodel")
-        self.viewmodel.setToolTip("Draw weapon viewmodel (cg_drawviewmodel 1 or 0)")
-        self.viewmodel.setChecked(settings.value("rec/viewmodel", settings.value("viewmodel", "1")) in ("1", "true", True))
+        self.pattern = QLineEdit(settings.value("rec/pattern", "{demo} {start}"))
+        self.pattern.setToolTip("{demo} (the demo's file name), {start}, {player} and {date} are replaced")
+        form.addRow("File name", self.pattern)
+        self.folder = QLineEdit(settings.value("rec/folder", os.path.expanduser("~/Videos")))
+        form.addRow("Folder", browse_row(self.folder, self.browse))
+        self.summary = QLabel(video_summary(settings))
+        self.summary.setWordWrap(True)
+        change = QPushButton("Change…")
+        change.setToolTip("The video settings, also in Settings")
+        change.clicked.connect(self.change_video)
         row = QHBoxLayout()
-        row.addWidget(self.size, 1)
-        row.addWidget(self.viewmodel)
-        form.addRow("Size", row)
-        self.fps = QComboBox()
-        self.fps.addItems(["30", "60", "120"])
-        self.fps.setCurrentText(settings.value("rec/fps", "60"))
-        self.blur = QCheckBox("Motion blur")
-        self.blur.setToolTip(f"Each frame blends the {BLUR_RATE} frames a second the game draws in its time: "
-                             "smoother motion, slower recording")
-        self.blur.setChecked(settings.value("rec/blur", "false") == "true")
-        row = QHBoxLayout()
-        row.addWidget(self.fps, 1)
-        row.addWidget(self.blur)
-        form.addRow("Frames per second", row)
-        self.quality = QSlider(Qt.Horizontal)
-        self.quality.setRange(14, 32)
-        self.quality.setInvertedAppearance(True)
-        self.quality.setValue(int(settings.value("rec/crf", 20)))
-        quality_label = QLabel()
-        self.quality.valueChanged.connect(lambda v: quality_label.setText(f"CRF {v}"))
-        self.quality.valueChanged.emit(self.quality.value())
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Smaller"))
-        row.addWidget(self.quality, 1)
-        row.addWidget(QLabel("Better"))
-        row.addWidget(quality_label)
-        form.addRow("Quality", row)
-        self.codec = QComboBox()
-        self.codec.addItems(list(CODECS))
-        self.codec.setCurrentText(settings.value("rec/codec", "H.264"))
-        self.forcemodel = QCheckBox("Force models")
-        self.forcemodel.setToolTip("Force airborne for Allies and german winter 1 for Axis (cg_forceModel 1 or 0)")
-        self.forcemodel.setChecked(settings.value("rec/forcemodel", settings.value("forcemodel", "1")) in ("1", "true", True))
-        row = QHBoxLayout()
-        row.addWidget(self.codec, 1)
-        row.addWidget(self.forcemodel)
-        form.addRow("Codec", row)
-        self.sound = QCheckBox("Sound")
-        self.sound.setChecked(settings.value("rec/sound", "true") == "true")
-        self.bitrate = QComboBox()
-        self.bitrate.addItems(["128k", "192k", "256k", "320k"])
-        self.bitrate.setCurrentText(settings.value("rec/bitrate", "192k"))
-        self.sound.toggled.connect(self.bitrate.setEnabled)
-        self.bitrate.setEnabled(self.sound.isChecked())
-        row = QHBoxLayout()
-        row.addWidget(self.sound)
-        row.addWidget(self.bitrate, 1)
-        form.addRow("Audio", row)
-        self.advanced = QLineEdit(settings.value("rec/advanced", ""))
-        self.advanced.setPlaceholderText("FFmpeg output options, instead of the ones above")
-        form.addRow("Advanced", self.advanced)
-        self.ffmpeg = QLineEdit(settings.value("rec/ffmpeg", "") or find_ffmpeg())
-        form.addRow("FFmpeg", self.ffmpeg)
+        row.addWidget(self.summary, 1)
+        row.addWidget(change)
+        form.addRow("Video", row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
         buttons.addButton("Record", QDialogButtonBox.AcceptRole)
@@ -1083,6 +1191,10 @@ class RecordDialog(QDialog):
         path = QFileDialog.getExistingDirectory(self, "Choose a folder", self.folder.text())
         if path:
             self.folder.setText(path)
+
+    def change_video(self):
+        if VideoSettingsDialog(self.settings, self).exec():
+            self.summary.setText(video_summary(self.settings))
 
     def kill_times(self):
         """The lead-in and out chosen, in msec."""
@@ -1112,22 +1224,9 @@ class RecordDialog(QDialog):
             if start is None or end is None or end <= start:
                 QMessageBox.warning(self, "Record a video", "The start and end times aren't right.")
                 return
-        try:
-            width, height = (int(v) for v in self.size.currentText().lower().split("x"))
-        except ValueError:
-            QMessageBox.warning(self, "Record a video", "The size should be like 1920x1080.")
-            return
         for key, value in (("folder", self.folder.text()), ("pattern", self.pattern.text()),
-                           ("size", f"{width}x{height}"), ("fps", self.fps.currentText()),
-                           ("blur", "true" if self.blur.isChecked() else "false"),
-                           ("viewmodel", "1" if self.viewmodel.isChecked() else "0"),
-                           ("forcemodel", "1" if self.forcemodel.isChecked() else "0"),
                            ("kill_before", str(self.kill_before.value())),
-                           ("kill_after", str(self.kill_after.value())),
-                           ("crf", self.quality.value()), ("codec", self.codec.currentText()),
-                           ("sound", "true" if self.sound.isChecked() else "false"),
-                           ("bitrate", self.bitrate.currentText()), ("advanced", self.advanced.text().strip()),
-                           ("ffmpeg", self.ffmpeg.text().strip())):
+                           ("kill_after", str(self.kill_after.value()))):
             self.settings.setValue("rec/" + key, value)
         if self.offers_join:
             self.settings.setValue("rec/join", "true" if self.join.isChecked() else "false")
@@ -1138,18 +1237,6 @@ class RecordDialog(QDialog):
     def job(self, label, clips, demo, player=""):
         """A video of clips for the recorder, with the settings chosen; demo
         and player name it."""
-        crf = self.quality.value()
-        options = self.advanced.text().strip() or " ".join([
-            CODECS[self.codec.currentText()].format(crf=crf, quality=max(1, min(100, 120 - 3 * crf))),
-            f"-c:a aac -b:a {self.bitrate.currentText()}" if self.sound.isChecked() else "-an",
-            "-movflags +faststart"])
-        fps = int(self.fps.currentText())
-        if self.blur.isChecked():
-            # the game draws several frames for each of the video, which FFmpeg blends
-            frames = max(2, BLUR_RATE // fps)
-            options = with_filters(options, f"tmix=frames={frames},framestep={frames}")
-            fps *= frames
-        width, height = (int(v) for v in self.size.currentText().lower().split("x"))
         # a demo's file name, without its folders
         demo = demo.rsplit("/", 1)[-1]
         try:
@@ -1159,13 +1246,9 @@ class RecordDialog(QDialog):
         except (KeyError, ValueError, IndexError):
             name = demo
         name = "".join(c for c in name if c not in '/\\:*?"<>|').strip() or demo
-        return {"label": label, "clips": clips, "options": options, "width": width, "height": height,
-                "fps": str(fps), "sound": self.sound.isChecked(),
-                "viewmodel": "1" if self.viewmodel.isChecked() else "0",
-                "forcemodel": "1" if self.forcemodel.isChecked() else "0",
+        return {"label": label, "clips": clips, **video_settings(self.settings),
                 "kill_before": str(self.kill_before.value()),
                 "kill_after": str(self.kill_after.value()),
-                "ffmpeg": self.ffmpeg.text().strip() or "ffmpeg",
                 "output": os.path.join(self.folder.text(), name + ".mp4"), "status": "waiting"}
 
 
@@ -1560,7 +1643,7 @@ class Window(QMainWindow):
         self.queue_dock.hide()
 
         settings_action = self.menuBar().addAction("Settings…")
-        settings_action.triggered.connect(self.edit_settings)
+        settings_action.triggered.connect(lambda: self.edit_settings())
         self.restart_action = self.menuBar().addAction("Restart game")
         self.restart_action.triggered.connect(self.start_game)
         self.viewmodel_action = self.menuBar().addAction("")
@@ -1673,12 +1756,8 @@ class Window(QMainWindow):
             ka = KILL_AFTER
         return max(500, kb), max(500, ka)
 
-    def edit_settings(self):
-        if SettingsDialog(self.settings, self).exec():
-            self.viewmodel_action.setChecked(self.settings.value("viewmodel", "1") in ("1", "true", True))
-            self.forcemodel_action.setChecked(self.settings.value("forcemodel", "1") in ("1", "true", True))
-            self.update_viewmodel_text()
-            self.update_forcemodel_text()
+    def edit_settings(self, tab="game"):
+        if SettingsDialog(self.settings, self, tab).exec():
             self.fill_demos()
             self.fill_kills()
             kb = self.settings.value("kill_before", "4.0")

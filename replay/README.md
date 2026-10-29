@@ -51,11 +51,13 @@ clips of a video without encoding them again. The Videos panel lists them,
 with how far the one recording is and how long it has left
 (Cancel, Open folder, double-click to watch one), and each lands in the
 folder chosen, named from a pattern (`{demo}`, the demo's file name,
-`{start}`, `{player}`, `{date}`). How long each kill plays before and after it, the size, the
-viewmodel, frames per second, quality, codec (H.264, H.265 or the graphics
-card's H.264 encoder: VAAPI on Linux, VideoToolbox on macOS), the models
-forced, sound and its bitrate are settings, and the Advanced box takes
-FFmpeg output options instead. Motion blur makes each frame of the video a
+`{start}`, `{player}`, `{date}`), with each kill played from how long before
+it to how long after. The size, frames per second, quality, codec (H.264,
+H.265 or the graphics card's H.264 encoder: VAAPI on Linux, VideoToolbox on
+macOS), sound and its bitrate, the viewmodel and the models forced are in
+the Videos tab of Settings, which the Record dialog sums up in a line, with
+Change… to set them there, and the Advanced box takes FFmpeg output options
+instead. Motion blur makes each frame of the video a
 blend of the frames the game draws in its time, 240 a second (4 at 60 frames
 per second): motion looks smoother, short flashes dimmer, a cut between two
 kills shows both for a frame, and recording takes about 2.5 times as long,

@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 try:
     from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
     from PySide6.QtGui import QMouseEvent
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 except ImportError:
     if __name__ == "__main__":
         print("Skipped: PySide6 isn't installed")
@@ -693,6 +693,44 @@ class TestWindow(FakeGameCase):
         self.playing(window)
 
 
+class TestSettings(FakeGameCase):
+    def test_tabs(self):
+        dialog = mohreplay.SettingsDialog(self.settings, tab="videos")
+        self.assertEqual(dialog.tabs.tabText(dialog.tabs.currentIndex()), "Videos")
+        dialog.fields["demos"].setText(os.path.join(self.tmp, "other demos"))
+        dialog.kill_before.setValue(6)
+        dialog.videos.size.setCurrentText("big")
+        dialog.videos.blur.setChecked(True)
+        dialog.accept()
+        # a size that isn't one: nothing kept
+        self.assertEqual(self.messages.shown, [("Settings", "The video size should be like 1920x1080.")])
+        self.assertIsNone(self.settings.value("rec/size"))
+        self.assertEqual(self.settings.value("demos"), self.demos)
+        dialog.videos.size.setCurrentText("1280×720")
+        dialog.accept()
+        self.assertEqual(dialog.result(), QDialog.Accepted)
+        self.assertEqual(self.settings.value("demos"), os.path.join(self.tmp, "other demos"))
+        self.assertEqual(self.settings.value("kill_before"), "6.0")
+        self.assertEqual((self.settings.value("rec/size"), self.settings.value("rec/blur")), ("1280x720", "true"))
+        self.assertEqual(mohreplay.video_summary(self.settings),
+                         "1280x720, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced")
+        again = mohreplay.SettingsDialog(self.settings)
+        self.assertEqual(again.tabs.currentIndex(), 0)
+        self.assertTrue(again.videos.blur.isChecked())
+
+    def test_video_settings(self):
+        video = mohreplay.video_settings(self.settings)
+        self.assertEqual((video["width"], video["height"], video["fps"], video["sound"]), (1920, 1080, "60", True))
+        self.assertEqual(video["options"], "-c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p "
+                                           "-c:a aac -b:a 192k -movflags +faststart")
+        # watching without the gun: videos too, unless they're told otherwise
+        self.settings.setValue("viewmodel", "0")
+        self.assertEqual(mohreplay.video_settings(self.settings)["viewmodel"], "0")
+        self.assertIn("no viewmodel", mohreplay.video_summary(self.settings))
+        self.settings.setValue("rec/viewmodel", "1")
+        self.assertEqual(mohreplay.video_settings(self.settings)["viewmodel"], "1")
+
+
 class TestLibrary(FakeGameCase):
     def setUp(self):
         super().setUp()
@@ -962,13 +1000,25 @@ class TestRecording(FakeGameCase):
         video = self.video("first 1-00.mp4")
         self.assertEqual((video["start"], video["end"]), (60000, 70000))
 
+    def change_video(self, dialog, change):
+        """Changes the video settings with the Record dialog's Change…"""
+        def exec_dialog(videos):
+            change(videos.videos)
+            videos.accept()
+            return videos.result()
+        with mock.patch.object(mohreplay.VideoSettingsDialog, "exec", exec_dialog):
+            dialog.change_video()
+
     def test_motion_blur(self):
         window = self.window()
         self.playing(window)
 
         def setup(dialog):
-            self.assertFalse(dialog.blur.isChecked())
-            dialog.blur.setChecked(True)
+            self.assertEqual(dialog.summary.text(), "1920x1080, 60 fps, H.264 (CRF 20), sound 192k, models forced")
+            self.change_video(dialog, lambda videos: (self.assertFalse(videos.blur.isChecked()),
+                                                      videos.blur.setChecked(True)))
+            self.assertEqual(dialog.summary.text(),
+                             "1920x1080, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced")
             dialog.pattern.setText("blur")
         self.record(window, setup)
         self.done(window)
@@ -976,10 +1026,12 @@ class TestRecording(FakeGameCase):
         self.assertEqual(cvars["cl_aviFrameRate"], "240")
         self.assertTrue(cvars["cl_aviPipeFormat"].startswith("-vf tmix=frames=4,framestep=4 -c:v libx264 "))
 
+        # kept, and the same in Settings
+        self.settings.setValue("rec/fps", "30")
+        self.settings.setValue("rec/advanced", "-vf scale=640:-2 -c:v libx264")
+
         def advanced(dialog):
-            self.assertTrue(dialog.blur.isChecked())
-            dialog.fps.setCurrentText("30")
-            dialog.advanced.setText("-vf scale=640:-2 -c:v libx264")
+            self.assertIn("with motion blur, FFmpeg options of your own", dialog.summary.text())
             dialog.pattern.setText("advanced")
         self.record(window, advanced)
         self.done(window, 2)
@@ -992,9 +1044,10 @@ class TestRecording(FakeGameCase):
         self.playing(window)
         window.player.setCurrentIndex(window.player.findData("t-"))
 
+        self.settings.setValue("rec/sound", "false")
+
         def setup(dialog):
             dialog.choices["kills"].setChecked(True)
-            dialog.sound.setChecked(False)
             dialog.pattern.setText("{player} frags")
         dialog = self.record(window, setup)
         self.assertEqual(dialog.choices["kills"].text(), "The 3 kills by t-, under a minute")
@@ -1528,10 +1581,11 @@ class TestRealGame(FakeGameCase):
         self.assertTrue(wait_until(lambda: 120000 <= window.state.get("time", 0) < 125000
                                    and not window.state.get("seeking"), 30))
 
+        self.settings.setValue("rec/size", "640x360")
+
         def setup(dialog):
             dialog.start.setText("2:00")
             dialog.end.setText("2:03")
-            dialog.size.setCurrentText("640x360")
             dialog.pattern.setText("real")
         with mock.patch.object(mohreplay.RecordDialog, "exec", lambda d: (setup(d), d.accept(), d.result())[-1]):
             window.record()
@@ -1553,12 +1607,12 @@ class TestRealGame(FakeGameCase):
         window.play_demo(self.demo)
         self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
 
+        for key, value in (("size", "640x360"), ("fps", "60"), ("blur", "true")):
+            self.settings.setValue("rec/" + key, value)
+
         def setup(dialog):
             dialog.start.setText("2:00")
             dialog.end.setText("2:03")
-            dialog.size.setCurrentText("640x360")
-            dialog.fps.setCurrentText("60")
-            dialog.blur.setChecked(True)
             dialog.pattern.setText("blur")
         with mock.patch.object(mohreplay.RecordDialog, "exec", lambda d: (setup(d), d.accept(), d.result())[-1]):
             window.record()
