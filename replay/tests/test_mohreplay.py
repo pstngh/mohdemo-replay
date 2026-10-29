@@ -238,14 +238,6 @@ class TestFunctions(unittest.TestCase):
     def test_quoted(self):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 
-    def test_with_filters(self):
-        with_filters = mohreplay.with_filters
-        self.assertEqual(with_filters("-c:v libx264 -an", "tmix=frames=4"), "-vf tmix=frames=4 -c:v libx264 -an")
-        self.assertEqual(with_filters("-vf format=nv12,hwupload -c:v h264_vaapi", "tmix=frames=4"),
-                         "-vf tmix=frames=4,format=nv12,hwupload -c:v h264_vaapi")
-        self.assertEqual(with_filters("-an -vf scale=640:-2 -c:v libx264", "a,b"),
-                         "-an -vf a,b,scale=640:-2 -c:v libx264")
-
     def test_demoonly_plan(self):
         plan = mohreplay.demoonly_plan
         self.assertEqual(plan(DEMO), (0, [(0, 600000)]))
@@ -1004,7 +996,7 @@ class TestRecording(FakeGameCase):
         self.assertEqual(cvars["cl_aviFrameRate"], "60")
         self.assertEqual((cvars["r_customwidth"], cvars["r_customheight"]), ("1920", "1080"))
         self.assertIn("-crf 20", cvars["cl_aviPipeFormat"])
-        self.assertNotIn("tmix", cvars["cl_aviPipeFormat"])
+        self.assertNotIn("r_motionBlur", cvars)
         self.assertIn("Recorded", window.statusBar().currentMessage())
         self.assertIsNone(window.recorder)
 
@@ -1049,8 +1041,11 @@ class TestRecording(FakeGameCase):
         self.record(window, setup)
         self.done(window)
         cvars = self.video("blur.mp4")["cvars"]
-        self.assertEqual(cvars["cl_aviFrameRate"], "240")
-        self.assertTrue(cvars["cl_aviPipeFormat"].startswith("-vf tmix=frames=4,framestep=4 -c:v libx264 "))
+        # the renderer's, over all of each frame's time, the colors unchanged
+        self.assertEqual([cvars[name] for name in ("r_temporal", "r_motionBlur", "r_motionBlurShutter",
+                                                   "r_motionBlurFps", "r_saturation")], ["1", "1", "1", "0", "1"])
+        self.assertEqual(cvars["cl_aviFrameRate"], "60")
+        self.assertTrue(cvars["cl_aviPipeFormat"].startswith("-c:v libx264 "))
 
         # kept, and the same in Settings
         self.settings.setValue("rec/fps", "30")
@@ -1062,8 +1057,8 @@ class TestRecording(FakeGameCase):
         self.record(window, advanced)
         self.done(window, 2)
         cvars = self.video("advanced.mp4")["cvars"]
-        self.assertEqual(cvars["cl_aviFrameRate"], "240")
-        self.assertEqual(cvars["cl_aviPipeFormat"], "-vf tmix=frames=8,framestep=8,scale=640:-2 -c:v libx264")
+        self.assertEqual((cvars["r_motionBlur"], cvars["cl_aviFrameRate"]), ("1", "30"))
+        self.assertEqual(cvars["cl_aviPipeFormat"], "-vf scale=640:-2 -c:v libx264")
 
     def test_record_kills_of_a_player_without_sound(self):
         window = self.window()
@@ -1599,8 +1594,8 @@ class TestRealGame(FakeGameCase):
         self.assertTrue(any(s["codec_type"] == "audio" for s in streams))
 
     def test_record_with_motion_blur(self):
-        """The game draws 240 frames a second, and the video has 60, each
-        blending four."""
+        """The renderer blurs, the game drawing the video's 60 frames a
+        second."""
         window = self.window()
         window.play_demo(self.demo)
         self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))

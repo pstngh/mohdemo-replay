@@ -81,16 +81,11 @@ CODECS = {
     "Hardware H.264": ("-c:v h264_videotoolbox -q:v {quality}" if MACOS else
                        "-vaapi_device /dev/dri/renderD128 -vf format=nv12,hwupload -c:v h264_vaapi -qp {crf}"),
 }
-# with motion blur, the frames a second the game renders, blended into the video's
-BLUR_RATE = 240
-
-
-def with_filters(options, filters):
-    """FFmpeg output options with video filters run before their own, as a
-    second -vf would replace the first."""
-    if " -vf " not in f" {options}":
-        return f"-vf {filters} {options}"
-    return f" {options}".replace(" -vf ", f" -vf {filters},", 1)[1:]
+# with motion blur, the renderer's: what moves blurs over all of a frame's
+# time, at any frame rate, and the colors are as without it (r_temporal
+# would make them stronger)
+BLUR_CVARS = ["+set", "r_temporal", "1", "+set", "r_motionBlur", "1", "+set", "r_motionBlurShutter", "1",
+              "+set", "r_motionBlurFps", "0", "+set", "r_saturation", "1"]
 
 
 def clock(msec):
@@ -841,7 +836,7 @@ def browse_row(edit, browse):
 
 def video_settings(settings):
     """How videos are recorded, from the settings: a job's FFmpeg options,
-    size, frames per second the game draws, sound, viewmodel, models forced
+    size, frames per second, sound, motion blur, viewmodel, models forced
     and FFmpeg."""
     try:
         crf = int(settings.value("rec/crf", 20))
@@ -853,14 +848,9 @@ def video_settings(settings):
         CODECS.get(codec, CODECS["H.264"]).format(crf=crf, quality=max(1, min(100, 120 - 3 * crf))),
         f"-c:a aac -b:a {settings.value('rec/bitrate', '192k')}" if sound else "-an",
         "-movflags +faststart"])
-    fps = int(settings.value("rec/fps", "60"))
-    if settings.value("rec/blur", "false") == "true":
-        # the game draws several frames for each of the video, which FFmpeg blends
-        frames = max(2, BLUR_RATE // fps)
-        options = with_filters(options, f"tmix=frames={frames},framestep={frames}")
-        fps *= frames
     width, height = parse_size(settings.value("rec/size", "1920x1080")) or (1920, 1080)
-    return {"options": options, "width": width, "height": height, "fps": str(fps), "sound": sound,
+    return {"options": options, "width": width, "height": height, "fps": str(int(settings.value("rec/fps", "60"))),
+            "sound": sound, "blur": settings.value("rec/blur", "false") == "true",
             "viewmodel": "1" if is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))) else "0",
             "forcemodel": "1" if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))) else "0",
             "ffmpeg": settings.value("rec/ffmpeg", "").strip() or find_ffmpeg()}
@@ -901,7 +891,7 @@ class VideoSettings(QWidget):
         self.fps.addItems(["30", "60", "120"])
         self.fps.setCurrentText(settings.value("rec/fps", "60"))
         self.blur = QCheckBox("Motion blur")
-        self.blur.setToolTip(f"Each frame blends the {BLUR_RATE} frames a second the game draws in its time: "
+        self.blur.setToolTip("What moves blurs over each frame's time, as with a camera: "
                              "smoother motion, slower recording")
         self.blur.setChecked(settings.value("rec/blur", "false") == "true")
         row = QHBoxLayout()
@@ -1333,7 +1323,8 @@ class Recorder(QObject):
         extra = ["+set", "s_loopback", "1" if job["sound"] else "0", "+set", "s_khz", "44",
                  "+set", "s_volume", "1", "+set", "cl_aviFrameRate", job["fps"],
                  "+set", "cl_aviFFmpeg", job["ffmpeg"], "+set", "cl_aviPipeFormat", job["options"],
-                 "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0"]
+                 "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0",
+                 *(BLUR_CVARS if job.get("blur") else [])]
         # offscreen where SDL can, the recorder doesn't need a window
         driver = "offscreen" if sys.platform.startswith("linux") else None
         viewmodel = job.get("viewmodel", settings.value("rec/viewmodel", settings.value("viewmodel", "1")))

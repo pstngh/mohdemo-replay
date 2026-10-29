@@ -58,11 +58,11 @@ it to how long after. The size, frames per second, quality, codec (H.264,
 H.265 or the graphics card's H.264 encoder, with VAAPI), sound and its bitrate, the viewmodel and the models forced are in
 the Videos tab of Settings, which the Record dialog sums up in a line, with
 Change… to set them there, and the Advanced box takes FFmpeg output options
-instead. Motion blur makes each frame of the video a
-blend of the frames the game draws in its time, 240 a second (4 at 60 frames
-per second): motion looks smoother, short flashes dimmer, a cut between two
-kills shows both for a frame, and recording takes about 2.5 times as long,
-nearly 4 with the graphics card's encoder. The clips are written in a hidden
+instead. Motion blur is the renderer's: what moves blurs
+over all of a frame's time, as with a camera, along each pixel's motion.
+Motion looks smoother, a cut between two kills stays clean, and recording
+takes about 1.7 times as long with the graphics card's encoder, 1.1 times
+with H.264 (at 1920x1080, 60 frames a second). The clips are written in a hidden
 `.mohreplay-parts` folder next to the video, not in memory. It needs FFmpeg.
 
 The game built here, on MoHAA Reloaded's Vulkan port, runs on Linux only:
