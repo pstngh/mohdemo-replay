@@ -1311,17 +1311,17 @@ class Recorder(QObject):
 
     def join(self):
         self.phase = "joining"
-        valid_parts = [p for p in self.parts if os.path.isfile(p) and os.path.getsize(p) > 0]
-        if not valid_parts:
-            self.finish("No valid video clips to join.")
+        # each clip was checked when it was done: all of them go in
+        if not self.parts:
+            self.finish("There was nothing to record.")
             return
-        if len(valid_parts) == 1:
-            self.finish(video=valid_parts[0])
+        if len(self.parts) == 1:
+            self.finish(video=self.parts[0])
             return
-        self.on_progress(self.job, f"Joining {len(valid_parts)} clips…")
+        self.on_progress(self.job, f"Joining {len(self.parts)} clips…")
         folder = self.parts_dir
         with open(os.path.join(folder, "parts.txt"), "w") as f:
-            f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in valid_parts)
+            f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in self.parts)
         self.joiner = QProcess(self)
         self.joiner.setProcessChannelMode(QProcess.MergedChannels)
         self.joiner.finished.connect(self.joined)
