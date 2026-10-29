@@ -133,9 +133,10 @@ everyone plays on one team) aren't kills: they aren't listed, counted, part
 of multi-kills or gone to by the next and previous kill, and they only play,
 and are only recorded, with a kill by the same player at most 2 seconds
 before or after them: a teammate hit while shooting at an enemy. Grenade
-kills (the messages about a grenade or shrapnel) aren't kills either. A
-kill plays only inside its level: its clip starts no earlier than the level
-and ends with it.
+kills (the messages about a grenade or shrapnel) aren't kills either, nor
+is the death of the player shown at the time: the recorder killed while
+playing, or the player they follow. A kill plays only inside its level: its
+clip starts no earlier than the level and ends with it.
 
 While the recorder follows a player, most servers with the 1.12 Reborn patch
 put the camera in that player's head, where their own arms and gun are in

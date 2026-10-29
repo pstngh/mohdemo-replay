@@ -168,31 +168,57 @@ def is_grenade(kill):
     return bool(kill.get("grenade")) or "grenade" in kill.get("text", "").lower() or "shrapnel" in kill.get("text", "").lower()
 
 
+def watching(index):
+    """The player shown at a time, in its level, as the engine looks them up
+    (CL_DemoWatchFor): a function of msec giving (watched entry, from, to),
+    None when no one is."""
+    watched = index.get("watched", [])
+    times = [w["time"] for w in watched]
+    map_times = [m["time"] for m in index.get("maps", [])]
+
+    def at(time):
+        i = bisect.bisect_right(times, time) - 1
+        mi = bisect.bisect_right(map_times, time) - 1
+        map_start = map_times[mi] if mi >= 0 else 0
+        if i < 0 or watched[i]["time"] < map_start:
+            return None
+        end = watched[i + 1]["time"] if i + 1 < len(watched) else index.get("duration", 0)
+        if mi + 1 < len(map_times):
+            end = min(end, map_times[mi + 1])
+        return watched[i], max(watched[i]["time"], map_start), end
+    return at
+
+
+def is_shown(watch, client, name):
+    """Whether a player, by client number or name, is the one watched: one
+    who changed names since is still the same client."""
+    return (watch["client"] >= 0 and watch["client"] == client) or bool(name) and same_player(watch["name"], name)
+
+
 def shown_kills(index):
     """The kills made while their killer is the player shown, as demoonly
     plays a player's kills (at other times the demo shows someone else):
     [(kill, from, to)], with when they're shown around it."""
-    watched = index.get("watched", [])
-    times = [w["time"] for w in watched]
-    maps = index.get("maps", [])
-    map_times = [m["time"] for m in maps]
+    at = watching(index)
     shown = []
     for kill in index.get("kills", []):
-        i = bisect.bisect_right(times, kill["time"]) - 1
-        if i < 0 or not kill["killerName"]:
-            continue
-        w = watched[i]
-        mi = bisect.bisect_right(map_times, kill["time"]) - 1
-        map_start = map_times[mi] if mi >= 0 else 0
-        if w["time"] < map_start:
-            continue
-        # a player who changed names since is still the same client
-        if (w["client"] >= 0 and w["client"] == kill["killer"]) or same_player(w["name"], kill["killerName"]):
-            end = watched[i + 1]["time"] if i + 1 < len(watched) else index.get("duration", 0)
-            if mi + 1 < len(map_times):
-                end = min(end, map_times[mi + 1])
-            shown.append((kill, max(w["time"], map_start), end))
+        watch = at(kill["time"]) if kill["killerName"] else None
+        if watch and is_shown(watch[0], kill["killer"], kill["killerName"]):
+            shown.append((kill, watch[1], watch[2]))
     return shown
+
+
+def deaths_shown(index):
+    """The ids of the kills whose victim is the player shown at the time:
+    the recorder's deaths, or the followed player's, which aren't kills
+    (CL_DemoDeathShown)."""
+    at = watching(index)
+    deaths = set()
+    for kill in index.get("kills", []):
+        watch = at(kill["time"])
+        if watch and is_shown(watch[0], kill.get("victim", -1), kill.get("victimName", "")):
+            deaths.add(id(kill))
+    return deaths
 
 
 def team_kills_with(kills, frags):
@@ -255,7 +281,9 @@ def summarize(index):
     for kill in index.get("kills", []):
         add(kill["killerName"])
         add(kill["victimName"])
-    shown = [kill for kill, _, _ in shown_kills(index) if not kill.get("teamKill") and not is_grenade(kill)]
+    deaths = deaths_shown(index)
+    shown = [kill for kill, _, _ in shown_kills(index)
+             if not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths]
     for kill in shown:
         add(kill["killerName"], 1)
     # "realism" or "default" when its levels tell one, "both", or ""
@@ -1079,8 +1107,8 @@ def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
 def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
     """What demoonly <only> [player] plays in a demo, as the engine does,
     from its index: (how many kills, [(start, end)] in msec), all of the demo
-    without only. Team kills aren't counted, and only play
-    with a kill of their killer near them."""
+    without only. Team kills aren't counted, and only play with a kill of
+    their killer near them; the deaths of the player shown aren't kills."""
     duration = index.get("duration", 0)
     watched = index.get("watched", [])
     switches = [w["time"] for w in watched]
@@ -1096,7 +1124,8 @@ def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
     else:
         # anyone's, whoever is shown
         kills, switches = [(k, 0, duration) for k in index.get("kills", [])], []
-    frags = [x for x in kills if not x[0].get("teamKill") and not is_grenade(x[0])]
+    deaths = deaths_shown(index)
+    frags = [x for x in kills if not x[0].get("teamKill") and not is_grenade(x[0]) and id(x[0]) not in deaths]
     count = len(frags)
     kills = frags + team_kills_with(kills, [k for k, _, _ in frags])
     kb = KILL_BEFORE if kill_before is None else kill_before
@@ -2139,7 +2168,8 @@ class Window(QMainWindow):
     def fill_kills(self):
         """The kills listed, each item with when it starts and its clips: the
         stretches demoonly plays. Team kills aren't kills: they're only in
-        the clips of a kill of their killer near them, as demoonly plays."""
+        the clips of a kill of their killer near them, as demoonly plays.
+        Nor are the deaths of the player shown."""
         player = self.player.currentData() or ""
         kills = list(self.player_kills(player).values())
         kb, ka = self.get_kill_times()
@@ -2147,10 +2177,11 @@ class Window(QMainWindow):
         switches = self.switches()
         # items keep their kills by place in the index: Qt gives copies back
         place = {id(kill): i for i, kill in enumerate((self.index or {}).get("kills", []))}
+        deaths = deaths_shown(self.index or {})
         self.kills.clear()
         self.kill_marks = []
         for kill, _, _ in kills:
-            if kill.get("teamKill") or is_grenade(kill):
+            if kill.get("teamKill") or is_grenade(kill) or id(kill) in deaths:
                 continue
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             span = spans[id(kill)]

@@ -249,17 +249,35 @@ class TestFunctions(unittest.TestCase):
     def test_demoonly_plan(self):
         plan = mohreplay.demoonly_plan
         self.assertEqual(plan(DEMO), (0, [(0, 600000)]))
-        # anyone's kills, wherever the recorder looks
-        self.assertEqual(plan(DEMO, "kills"), (6, [(6000, 16500), (196000, 202000), (246000, 252000), (396000, 402000)]))
+        # anyone's kills, wherever the recorder looks, but the deaths of the
+        # player shown: t-'s at 3:20, Phil's at 6:40
+        self.assertEqual(plan(DEMO, "kills"), (4, [(6000, 16500), (246000, 252000)]))
         # a player's while shown, whoever's is shown
         self.assertEqual(plan(DEMO, "kills", "T-"), (3, [(6000, 16500)]))
         self.assertEqual(plan(followed_demo(), "shownkills"), (5, [(6000, 16500), (300000, 305500)]))
         self.assertEqual(plan(DEMO, "watched", "^1Phil"), (0, [(300000, 600000)]))
 
+    def test_deaths_shown(self):
+        # t- killed at 3:20 while shown, Phil at 6:40 while followed
+        deaths = mohreplay.deaths_shown(DEMO)
+        self.assertEqual([kill["time"] for kill in DEMO["kills"] if id(kill) in deaths], [200000, 400000])
+        # the client tells, whatever the name
+        demo = json.loads(json.dumps(DEMO))
+        demo["kills"][3]["victimName"] = "t- (renamed)"
+        self.assertEqual(len(mohreplay.deaths_shown(demo)), 2)
+        demo["kills"][3]["victim"] = -1
+        self.assertEqual(len(mohreplay.deaths_shown(demo)), 1)
+        # a player killing themselves while shown made no frag
+        demo = json.loads(json.dumps(DEMO))
+        demo["kills"][1].update(victim=0, victimName="t-", text="t- blew himself up")
+        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", "t-")[0], 2)
+        self.assertEqual(mohreplay.summarize(demo)["players"]["t-"], ["t-", 2])
+
     def test_team_kills(self):
         plan, demo = mohreplay.demoonly_plan, team_demo()
-        # not counted, and only played with a kill of their killer at most 2 s away
-        self.assertEqual(plan(demo, "kills"), (6, [(6000, 18000), (196000, 203500), (246000, 252000), (396000, 402000)]))
+        # not counted, and only played with a kill of their killer at most 2 s
+        # away: not Phil's 1.5 s after killing t-, who's shown, at 3:20
+        self.assertEqual(plan(demo, "kills"), (4, [(6000, 18000), (246000, 252000)]))
         self.assertEqual(plan(demo, "kills", "T-"), (3, [(6000, 18000)]))
         self.assertEqual(mohreplay.summarize(demo)["players"]["t-"], ["t-", 3])
 
@@ -494,14 +512,16 @@ class TestWindow(FakeGameCase):
     def test_play_fills_the_lists(self):
         window = self.window()
         self.playing(window)
-        self.assertEqual(window.kills.topLevelItemCount(), 6)
+        # not t-'s death at 3:20 while shown, nor Phil's at 6:40 while followed
+        self.assertEqual([window.kills.topLevelItem(i).text(0) for i in range(window.kills.topLevelItemCount())],
+                         ["0:10", "0:12", "0:14", "4:10"])
         self.assertEqual(window.rounds.topLevelItemCount(), 3)
         self.assertEqual(window.rounds.topLevelItem(0).text(2), "Axis win!")
         self.assertEqual(window.slider.maximum(), 600000)
         self.assertEqual(window.title.text(), "first")
         self.assertIn("obj/obj_team1", window.info.text())
         self.assertIn("recorded by t-", window.info.text())
-        self.assertEqual([window.tabs.tabText(i) for i in range(window.tabs.count())], ["Kills (6)", "Rounds (3)"])
+        self.assertEqual([window.tabs.tabText(i) for i in range(window.tabs.count())], ["Kills (4)", "Rounds (3)"])
         # how in the tooltip, as the game told it
         self.assertEqual(window.kills.columnCount(), 3)
         self.assertIn("was", window.kills.topLevelItem(0).toolTip(2))
@@ -511,7 +531,7 @@ class TestWindow(FakeGameCase):
     def test_player_filters_kills(self):
         window = self.window()
         self.playing(window)
-        self.assertEqual(len(window.slider.kills), 6)
+        self.assertEqual(len(window.slider.kills), 4)
         self.assertEqual(window.slider.rounds, [(195000, "Round 2"), (420000, "Round 3")])
         # only the kills made while the player is shown: Phil's at 3:20 is
         # while t- is, t-'s at 6:40 while Phil is
@@ -1253,7 +1273,7 @@ class TestRecording(FakeGameCase):
         window = self.window()
         self.playing(window)
         # two close together, and one later
-        for row in (0, 1, 5):
+        for row in (0, 1, 3):
             window.kills.topLevelItem(row).setSelected(True)
 
         def setup(dialog):
@@ -1265,7 +1285,7 @@ class TestRecording(FakeGameCase):
         job, = self.done(window)
         self.assertEqual(job["status"], "done", job["item"].toolTip(2))
         parts = self.video("selected.mp4")["joined"]
-        self.assertEqual([(p["start"], p["end"]) for p in parts], [(6000, 14000), (396000, 402000)])
+        self.assertEqual([(p["start"], p["end"]) for p in parts], [(6000, 14000), (246000, 252000)])
 
     def test_team_kills_arent_kills(self):
         self.add_demo("first", team_demo())
@@ -1273,8 +1293,8 @@ class TestRecording(FakeGameCase):
         self.playing(window)
         # neither listed nor marked
         rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
-        self.assertEqual([row.text(0) for row in rows], ["0:10", "0:12", "0:14", "3:20", "4:10", "6:40"])
-        self.assertEqual([mark[0] for mark in window.slider.kills], [10000, 12000, 14500, 200000, 250000, 400000])
+        self.assertEqual([row.text(0) for row in rows], ["0:10", "0:12", "0:14", "4:10"])
+        self.assertEqual([mark[0] for mark in window.slider.kills], [10000, 12000, 14500, 250000])
         # but the one 1.5 s after t-'s kill at 0:14 is in its video
 
         def setup(dialog):
@@ -1289,7 +1309,7 @@ class TestRecording(FakeGameCase):
     def test_selected_kills_one_video_each(self):
         window = self.window()
         self.playing(window)
-        for row in (0, 5):
+        for row in (0, 3):
             window.kills.topLevelItem(row).setSelected(True)
 
         def setup(dialog):
@@ -1297,7 +1317,7 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("kill {start}")
         self.record(window, setup, lambda: window.record_selected(window.kills))
         self.done(window, 2)
-        self.assertEqual(sorted(os.listdir(self.videos)), ["kill 0-06.mp4", "kill 6-36.mp4"])
+        self.assertEqual(sorted(os.listdir(self.videos)), ["kill 0-06.mp4", "kill 4-06.mp4"])
         self.assertEqual(self.settings.value("rec/join"), "false")
 
     def test_selected_kills_cut_where_the_player_shown_changes(self):
@@ -1328,7 +1348,7 @@ class TestRecording(FakeGameCase):
     def test_join_failing(self):
         window = self.window()
         self.playing(window)
-        for row in (0, 5):
+        for row in (0, 3):
             window.kills.topLevelItem(row).setSelected(True)
         with mock.patch.dict(os.environ, {"FAKEGAME_FFMPEG_FAIL": "join"}):
             self.record(window, lambda d: d.join.setChecked(True), lambda: window.record_selected(window.kills))
@@ -1453,7 +1473,7 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("{demo}")
         dialog = self.record(window, setup, window.record_demos)
         self.assertEqual(dialog.choices["everything"].text(), "All of the demo, under a minute")
-        self.assertEqual(dialog.choices["kills"].text(), "The 6 kills, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 4 kills, under a minute")
         job, = self.done(window)
         self.assertEqual(job["item"].text(1), "second")
         video = self.video("second.mp4")
