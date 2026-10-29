@@ -1087,9 +1087,21 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("multi")
         dialog = self.record(window, setup)
         self.assertEqual(dialog.choices["multikills"].text(), "The multi-kill, under a minute")
+        # what can't be recorded isn't offered
         self.assertFalse(dialog.choices["watched"].isEnabled())
+        self.assertTrue(dialog.choices["watched"].isHidden())
+        self.assertFalse(dialog.choices["multikills"].isHidden())
+        self.assertTrue(dialog.nothing.isHidden())
         self.done(window)
         self.assertEqual(self.video("multi.mp4")["only"], "multikills")
+
+    def test_nothing_to_record(self):
+        dialog = mohreplay.RecordDialog(self.settings, [("kills", "No kills", False), ("watched", "While watched", False)])
+        self.assertFalse(dialog.nothing.isHidden())
+        self.assertTrue(all(button.isHidden() for button in dialog.choices.values()))
+        dialog.accept()
+        self.assertEqual(self.messages.shown, [("Record a video", "There's nothing to record.")])
+        self.assertNotEqual(dialog.result(), QDialog.Accepted)
 
     def test_record_recorder_frags(self):
         window = self.window()

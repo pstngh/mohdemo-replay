@@ -1135,9 +1135,12 @@ class RecordDialog(QDialog):
         self.choices = {}
         for key, label, enabled in choices:
             button = self.choices[key] = QRadioButton(label)
-            button.setEnabled(enabled)
             group.addButton(button)
             what.addWidget(button)
+        # only what there is to record
+        self.nothing = QLabel("Nothing to record")
+        what.addWidget(self.nothing)
+        self.relabel(choices)
         # the last choice, if it's offered
         last = self.range if settings.value("rec/what") == "range" else self.choices.get(settings.value("rec/what"))
         first = self.range or next((b for b in self.choices.values() if b.isEnabled()), None)
@@ -1204,6 +1207,8 @@ class RecordDialog(QDialog):
         for key, label, enabled in choices:
             self.choices[key].setText(label)
             self.choices[key].setEnabled(enabled)
+            self.choices[key].setHidden(not enabled)
+        self.nothing.setHidden(bool(self.range) or any(enabled for _, _, enabled in choices))
 
     def what(self):
         """"range" or the key of the choice made."""

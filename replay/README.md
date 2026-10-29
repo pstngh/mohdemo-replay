@@ -42,7 +42,7 @@ the other, or only while a player is watched. A
 right-click on kills or multi-kills selected records those, and on demos
 selected, all of them, the kills or multi-kills of the player the filter
 found, each demo with its own spelling of the name, the recorder's, or the
-frags or multi-kills shown: in one video, or one each. Each choice tells how many
+frags or multi-kills shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
 kills it holds and how long the video will be, and the last one is chosen
 again next time. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
