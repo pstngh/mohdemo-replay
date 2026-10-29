@@ -933,7 +933,8 @@ class TestRecording(FakeGameCase):
         job, = self.done(window)
         self.assertEqual(job["item"].text(1), "first, the 3 recorder frags")
         video = self.video("first t- recfrags.mp4")
-        self.assertEqual((video["start"], video["only"], video["player"]), (0, "kills", "t-"))
+        # from just before the first kill
+        self.assertEqual((video["start"], video["only"], video["player"]), (6000, "kills", "t-"))
 
     def test_record_frags_shown(self):
         window = self.window()
@@ -951,7 +952,8 @@ class TestRecording(FakeGameCase):
         job, = self.done(window)
         self.assertEqual(job["item"].text(1), "first, the 3 frags shown: the recorder's and the players they follow")
         video = self.video("first frags.mp4")
-        self.assertEqual((video["start"], video["only"], video["player"]), (0, "shownkills", ""))
+        # from just before the first kill
+        self.assertEqual((video["start"], video["only"], video["player"]), (6000, "shownkills", ""))
 
         # whoever is shown in the Player menu: their kills are the frags shown
         window.player.setCurrentIndex(window.player.findData(mohreplay.SHOWN))
@@ -1348,8 +1350,9 @@ class TestRealGame(FakeGameCase):
         # quiet: the recorder's own volume comes after
         start = mohreplay.Game.start
 
-        def quiet(game, exe, game_dir, demos, width, height, extra=(), driver=None):
-            return start(game, exe, game_dir, demos, width, height, ("+set", "s_volume", "0", *extra), driver)
+        def quiet(game, exe, game_dir, demos, width, height, extra=(), driver=None, **kwargs):
+            return start(game, exe, game_dir, demos, width, height, ("+set", "s_volume", "0", *extra), driver,
+                         **kwargs)
         patch = mock.patch.object(mohreplay.Game, "start", quiet)
         patch.start()
         self.addCleanup(patch.stop)
@@ -1361,7 +1364,8 @@ class TestRealGame(FakeGameCase):
         self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
         window.player.setCurrentIndex(window.player.findData(mohreplay.SHOWN))
         self.assertEqual(window.kills.topLevelItemCount(),
-                         len([k for k, _, _ in mohreplay.shown_kills(window.index) if not k.get("teamKill")]))
+                         len([k for k, _, _ in mohreplay.shown_kills(window.index)
+                              if not k.get("teamKill") and not mohreplay.is_grenade(k)]))
         rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
         clips = mohreplay.stretches([span for row in rows for span in row.data(1, Qt.UserRole)],
                                     [w["time"] for w in window.index["watched"]])
