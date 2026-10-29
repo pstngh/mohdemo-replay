@@ -458,13 +458,16 @@ class Game:
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
     def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None,
-              kill_before=None, kill_after=None):
+              kill_before=None, kill_after=None, videos=None):
+        """videos: the folder its videos go to, instead of its home."""
         self.cleanup()
         self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
         main = os.path.join(self.home, "main")
         os.makedirs(main)
         os.symlink(os.path.abspath(demos), os.path.join(main, "demos"))
+        if videos:
+            os.symlink(os.path.abspath(videos), os.path.join(main, "videos"))
         config = os.path.join(self.home, GAME_CONFIG)
         os.makedirs(os.path.dirname(config))
         game_cfg = os.path.join(game, GAME_CONFIG)
@@ -647,9 +650,10 @@ class Game:
     def cleanup(self):
         if self.home:
             self.save_config()
-            demos = os.path.join(self.home, "main", "demos")
-            if os.path.islink(demos):
-                os.unlink(demos)
+            for name in ("demos", "videos"):
+                link = os.path.join(self.home, "main", name)
+                if os.path.islink(link):
+                    os.unlink(link)
             shutil.rmtree(self.home, ignore_errors=True)
             self.home = None
 
@@ -1187,16 +1191,16 @@ class Recorder(QObject):
         self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
                         job["width"], job["height"], extra, driver,
                         viewmodel=viewmodel, forcemodel=forcemodel,
-                        kill_before=kill_before, kill_after=kill_after)
+                        kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir)
 
     def start(self):
-        output_dir = os.path.dirname(self.job.get("output", ""))
-        if output_dir and os.path.isdir(output_dir):
-            try:
-                self.parts_dir = tempfile.mkdtemp(prefix=".mohreplay-parts-", dir=output_dir)
-            except OSError:
-                self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
-        else:
+        # the clips are written next to the video, as the game's home may be
+        # in memory (/tmp), and the video then only moves
+        try:
+            folder = os.path.dirname(self.job["output"]) or "."
+            os.makedirs(folder, exist_ok=True)
+            self.parts_dir = tempfile.mkdtemp(prefix=".mohreplay-parts-", dir=folder)
+        except OSError:
             self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
         self.start_game()
         self.elapsed.start()
@@ -1214,7 +1218,7 @@ class Recorder(QObject):
 
     def made(self):
         """The video the recorder writes."""
-        return os.path.join(self.game.home or "", "main", "videos", self.part() + ".mp4")
+        return os.path.join(self.parts_dir, self.part() + ".mp4")
 
     def next_clip(self):
         self.clip += 1
@@ -1302,14 +1306,7 @@ class Recorder(QObject):
         elif "No space left on device" in log_content:
             self.finish("FFmpeg ran out of disk space while writing the clip.\n" + log_content[-1500:])
         else:
-            if self.parts_dir:
-                part_path = os.path.join(self.parts_dir, f"part{self.clip}.mp4")
-                shutil.move(self.made(), part_path)
-                if os.path.isfile(log_file):
-                    shutil.move(log_file, part_path + ".log")
-            else:
-                part_path = self.made()
-            self.parts.append(part_path)
+            self.parts.append(self.made())
             self.next_clip()
 
     def join(self):
@@ -1322,7 +1319,7 @@ class Recorder(QObject):
             self.finish(video=valid_parts[0])
             return
         self.on_progress(self.job, f"Joining {len(valid_parts)} clips…")
-        folder = self.parts_dir or os.path.dirname(valid_parts[0])
+        folder = self.parts_dir
         with open(os.path.join(folder, "parts.txt"), "w") as f:
             f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in valid_parts)
         self.joiner = QProcess(self)
@@ -1337,8 +1334,7 @@ class Recorder(QObject):
     def joined(self, code=0, status=None):
         if self.phase != "joining":
             return
-        folder = self.parts_dir or os.path.dirname(self.parts[0])
-        video = os.path.join(folder, "joined.mp4")
+        video = os.path.join(self.parts_dir, "joined.mp4")
         if code or not os.path.isfile(video) or os.path.getsize(video) == 0:
             text = bytes(self.joiner.readAll()).decode("utf-8", "replace")
             self.finish("FFmpeg couldn't join the clips.\n" + text[-1500:])
@@ -1368,9 +1364,8 @@ class Recorder(QObject):
             except OSError as e:
                 error, video = f"Couldn't move the video to {output}: {e}", None
         self.game.stop()
-        if getattr(self, "parts_dir", None) and os.path.isdir(self.parts_dir):
+        if self.parts_dir:
             shutil.rmtree(self.parts_dir, ignore_errors=True)
-            self.parts_dir = None
         self.on_done(self.job, error.strip(), output if video else None)
 
     def cancel(self):
@@ -1381,9 +1376,8 @@ class Recorder(QObject):
                 self.joiner.kill()
                 self.joiner.waitForFinished(1000)
             self.game.stop()
-            if getattr(self, "parts_dir", None) and os.path.isdir(self.parts_dir):
+            if self.parts_dir:
                 shutil.rmtree(self.parts_dir, ignore_errors=True)
-                self.parts_dir = None
             self.on_done(self.job, "canceled", None)
 
     def exited(self):
