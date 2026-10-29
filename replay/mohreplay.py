@@ -1920,6 +1920,8 @@ class Window(QMainWindow):
         spans = {id(kill): (max(start, map_start_for(kill["time"]), kill["time"] - kb), min(end, kill["time"] + ka))
                  for kill, start, end in kills}
         switches = self.switches()
+        # items keep their kills by place in the index: Qt gives copies back
+        place = {id(kill): i for i, kill in enumerate((self.index or {}).get("kills", []))}
         self.kills.clear()
         self.kill_marks = []
         for kill, _, _ in kills:
@@ -1931,7 +1933,7 @@ class Window(QMainWindow):
             item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
             item.setData(0, Qt.UserRole, span[0])
             item.setData(1, Qt.UserRole, clips)
-            item.setData(2, Qt.UserRole, [kill])
+            item.setData(2, Qt.UserRole, [place[id(kill)]])
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
         self.multikills.clear()
@@ -1943,7 +1945,7 @@ class Window(QMainWindow):
                               + [spans[id(k)] for k, _, _ in team_kills_with(kills, chain)], switches)
             item.setData(0, Qt.UserRole, clips[0][0])
             item.setData(1, Qt.UserRole, clips)
-            item.setData(2, Qt.UserRole, chain)
+            item.setData(2, Qt.UserRole, [place[id(kill)] for kill in chain])
             self.multikills.addTopLevelItem(item)
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
         # Up and Down too
@@ -2082,10 +2084,12 @@ class Window(QMainWindow):
         if not dialog.exec():
             return
         player = self.player.currentData() or ""
-        player = "" if player == SHOWN else player
         rec_kb = int(dialog.kill_before.value() * 1000)
         rec_ka = int(dialog.kill_after.value() * 1000)
+        # whoever is shown too: their kills only while they're shown
         kills_dict = self.player_kills(player)
+        player = "" if player == SHOWN else player
+        all_kills = (self.index or {}).get("kills", [])
         maps = (self.index or {}).get("maps", [])
         map_times = [m["time"] for m in maps]
 
@@ -2097,12 +2101,9 @@ class Window(QMainWindow):
                      for k, st, en in kills_dict.values()}
         selected_spans = []
         for item in items:
-            chain = item.data(2, Qt.UserRole)
-            if chain:
-                selected_spans.extend(rec_spans[id(k)] for k in chain if id(k) in rec_spans)
-                selected_spans.extend(rec_spans[id(k)] for k, _, _ in team_kills_with(list(kills_dict.values()), chain) if id(k) in rec_spans)
-            else:
-                selected_spans.extend(item.data(1, Qt.UserRole))
+            chain = [all_kills[i] for i in item.data(2, Qt.UserRole)]
+            selected_spans.extend(rec_spans[id(k)] for k in chain if id(k) in rec_spans)
+            selected_spans.extend(rec_spans[id(k)] for k, _, _ in team_kills_with(list(kills_dict.values()), chain))
         spans = stretches(selected_spans, self.switches())
         clips = [range_clip(demo, start, end) for start, end in spans]
         if dialog.join.isChecked() or len(clips) == 1:
