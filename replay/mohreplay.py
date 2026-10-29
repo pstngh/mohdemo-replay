@@ -27,12 +27,12 @@ from PySide6.QtCore import (
     QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment,
     QSettings, QStandardPaths, Qt, QTimer, QUrl,
 )
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QPainter, QPen
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSlider, QSplitter, QStyle,
-    QStyleOptionSlider, QTabWidget, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
+    QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider, QSplitter, QStyle,
+    QStyleOptionSlider, QTabWidget, QToolBar, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -659,6 +659,32 @@ class Game:
                     os.unlink(link)
             shutil.rmtree(self.home, ignore_errors=True)
             self.home = None
+
+
+def theme_icon(name, fallback=None):
+    """The desktop's icon of that name, else fallback (a QStyle standard
+    pixmap or a QIcon), else none."""
+    if isinstance(fallback, QStyle.StandardPixmap):
+        fallback = QApplication.style().standardIcon(fallback)
+    return QIcon.fromTheme(name, fallback or QIcon())
+
+
+def record_icon():
+    """A red dot."""
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("#da4453"))
+    painter.drawEllipse(5, 5, 22, 22)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def plain_tip(text):
+    """A tooltip showing text as it is: names like <KoS>Bob aren't HTML."""
+    return "<p style='white-space:pre'>" + html.escape(text) + "</p>"
 
 
 class ClickStyle(QProxyStyle):
@@ -1504,13 +1530,14 @@ class Window(QMainWindow):
         self.recorder = None
         self.jobs = []
         self.last_jump = (None, 0)
+        self.play_mode_asked = -1
         self.round_marks = self.kill_marks = self.multi_marks = []
         self.library = Library(self.library_changed, self)
         self.demo_items = {}  # name: item
         self.wanted_player = None  # to choose once the demo plays
 
         self.setWindowTitle("MoH Demo Replay")
-        self.resize(1000, 640)
+        self.resize(1200, 720)
         style = self.style()
 
         # demos
@@ -1538,27 +1565,47 @@ class Window(QMainWindow):
         box.addLayout(row)
         box.addWidget(self.demos)
 
-        # what's in the demo
-        self.info = QLabel("No demo")
+        # what's in the demo: its name, what it is and what plays
+        self.title = QLabel("No demo")
+        font = self.title.font()
+        font.setPointSizeF(font.pointSizeF() * 1.3)
+        font.setBold(True)
+        self.title.setFont(font)
+        self.title.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.info = QLabel("Double-click a demo to play it")
         self.info.setWordWrap(True)
+        palette = self.info.palette()
+        palette.setColor(QPalette.WindowText, palette.color(QPalette.PlaceholderText))
+        self.info.setPalette(palette)
         self.player = QComboBox()
+        self.player.setToolTip("Whose kills are listed, played and recorded")
         self.player.currentIndexChanged.connect(self.fill_kills)
-        self.only_kills_button = only_kills = QPushButton("Only these kills")
-        only_kills.setToolTip("Play only the kills listed, from the one selected or the first")
-        only_kills.clicked.connect(self.only_kills)
-        follow = QPushButton("Only while watched")
-        follow.setToolTip("Play only while this player is shown, from the first time")
-        follow.clicked.connect(self.only_watched)
-        everything = QPushButton("Play everything")
-        everything.clicked.connect(lambda: self.game.send("demoonly"))
+        # what plays: one of three, as the game tells
+        self.play_modes = QButtonGroup(self)
+        self.everything_button = QPushButton("Everything")
+        self.only_kills_button = QPushButton("These kills")
+        self.watched_button = QPushButton("While watched")
+        modes = QHBoxLayout()
+        modes.setSpacing(0)
+        for button, text, action in (
+                (self.everything_button, "Play all of the demo", lambda: self.game.send("demoonly") or True),
+                (self.only_kills_button, "Play only the kills listed, from the one selected or the first",
+                 self.only_kills),
+                (self.watched_button, "Play only while this player is shown, from the first time", self.only_watched)):
+            button.setCheckable(True)
+            button.setToolTip(text)
+            button.clicked.connect(lambda _=False, a=action: self.play_mode_clicked(a))
+            self.play_modes.addButton(button)
+            modes.addWidget(button)
+        self.everything_button.setChecked(True)
         players = QHBoxLayout()
         players.addWidget(QLabel("Player"))
         players.addWidget(self.player, 1)
-        players.addWidget(only_kills)
-        players.addWidget(follow)
-        players.addWidget(everything)
+        players.addSpacing(12)
+        players.addWidget(QLabel("Play"))
+        players.addLayout(modes)
 
-        self.kills = self.make_list(["Time", "Killer", "Victim", "How"])
+        self.kills = self.make_list(["Time", "Killer", "Victim"])
         self.multikills = self.make_list(["Time", "Player", "Kills", "Victims"])
         self.rounds = self.make_list(["Time", "Round", "Result"])
         # a click jumps, so does Enter
@@ -1575,7 +1622,9 @@ class Window(QMainWindow):
         right = QWidget()
         box = QVBoxLayout(right)
         box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(self.title)
         box.addWidget(self.info)
+        box.addSpacing(4)
         box.addLayout(players)
         box.addWidget(tabs)
 
@@ -1583,7 +1632,7 @@ class Window(QMainWindow):
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([560, 440])
+        splitter.setSizes([560, 640])
 
         # playback
         self.slider = Timeline()
@@ -1598,6 +1647,7 @@ class Window(QMainWindow):
         self.speed.setToolTip("Playback speed")
         self.speed.currentTextChanged.connect(lambda s: self.game.send("timescale " + s.rstrip("×")))
         controls = QHBoxLayout()
+        controls.setSpacing(2)
         # the kill buttons go to the kills listed
         for icon, tip, command in ((QStyle.SP_MediaSkipBackward, "Previous round (PgDn)", "demoprevround"),
                                    (QStyle.SP_MediaSeekBackward, "Previous kill listed (Down)",
@@ -1611,10 +1661,14 @@ class Window(QMainWindow):
                                    (QStyle.SP_MediaSkipForward, "Next round (PgUp)", "demonextround")):
             controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
                 c() if callable(c) else c), "+10 s"))
+        controls.addSpacing(8)
         controls.addWidget(self.slider, 1)
+        controls.addSpacing(8)
         controls.addWidget(self.time)
+        controls.addSpacing(8)
         controls.addWidget(self.speed)
-        record = QPushButton("Record…")
+        controls.addSpacing(8)
+        record = QPushButton(theme_icon("media-record", record_icon()), "Record…")
         record.setToolTip("Record a video of this demo")
         record.clicked.connect(self.record)
         controls.addWidget(record)
@@ -1647,24 +1701,41 @@ class Window(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, self.queue_dock)
         self.queue_dock.hide()
 
-        settings_action = self.menuBar().addAction("Settings…")
-        settings_action.triggered.connect(lambda: self.edit_settings())
-        self.restart_action = self.menuBar().addAction("Restart game")
+        toolbar = QToolBar("Toolbar")
+        toolbar.setObjectName("toolbar")
+        toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.addToolBar(toolbar)
+        self.folder_action = toolbar.addAction(theme_icon("folder-open", QStyle.SP_DirOpenIcon), "")
+        self.folder_action.triggered.connect(self.choose_folder)
+        self.restart_action = toolbar.addAction(theme_icon("view-refresh", QStyle.SP_BrowserReload), "Restart game")
+        self.restart_action.setToolTip("Start the game again, with the demo playing")
         self.restart_action.triggered.connect(self.start_game)
-        self.viewmodel_action = self.menuBar().addAction("")
+        toolbar.addSeparator()
+        self.viewmodel_action = toolbar.addAction("Viewmodel")
+        self.viewmodel_action.setToolTip("The gun in the player's hands")
         self.viewmodel_action.setCheckable(True)
-        self.viewmodel_action.setChecked(settings.value("viewmodel", "1") in ("1", "true", True))
+        self.viewmodel_action.setChecked(is_on(settings.value("viewmodel", "1")))
         self.viewmodel_action.toggled.connect(self.toggle_viewmodel)
-        self.update_viewmodel_text()
-        self.forcemodel_action = self.menuBar().addAction("")
+        self.forcemodel_action = toolbar.addAction("Force models")
+        self.forcemodel_action.setToolTip("Everyone as an airborne soldier or a winter German")
         self.forcemodel_action.setCheckable(True)
-        self.forcemodel_action.setChecked(settings.value("forcemodel", "1") in ("1", "true", True))
+        self.forcemodel_action.setChecked(is_on(settings.value("forcemodel", "1")))
         self.forcemodel_action.toggled.connect(self.toggle_forcemodel)
-        self.update_forcemodel_text()
-        self.menuBar().addAction(self.queue_dock.toggleViewAction())
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+        videos_action = self.queue_dock.toggleViewAction()
+        videos_action.setIcon(theme_icon("video-x-generic", QStyle.SP_FileDialogContentsView))
+        toolbar.addAction(videos_action)
+        settings_action = toolbar.addAction(theme_icon("configure", QStyle.SP_FileDialogDetailedView), "Settings…")
+        settings_action.triggered.connect(lambda: self.edit_settings())
+        self.show_folder()
 
         self.indexing = QLabel()
         self.statusBar().addPermanentWidget(self.indexing)
+
+        self.filter.setFocus()
 
         self.poller = QTimer(interval=100, timeout=self.poll)
         self.poller.start()
@@ -1713,18 +1784,26 @@ class Window(QMainWindow):
         exe, game, demos = (self.settings.value(k, "") for k in ("exe", "game", "demos"))
         return os.path.isfile(exe) and os.path.isdir(game) and os.path.isdir(demos)
 
-    def update_viewmodel_text(self):
-        on = self.viewmodel_action.isChecked()
-        self.viewmodel_action.setText(f"Viewmodel: {'ON' if on else 'OFF'}")
+    def show_folder(self):
+        folder = self.settings.value("demos", "")
+        self.folder_action.setText(os.path.basename(folder.rstrip("/\\")) or "Choose the demos folder")
+        self.folder_action.setToolTip((folder + "\n" if folder else "") + "Choose another folder of demos")
 
-    def update_forcemodel_text(self):
-        on = self.forcemodel_action.isChecked()
-        self.forcemodel_action.setText(f"Force models: {'ON' if on else 'OFF'}")
+    def choose_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Choose the demos folder", self.settings.value("demos", ""))
+        if not folder or folder == self.settings.value("demos", ""):
+            return
+        self.settings.setValue("demos", folder)
+        self.show_folder()
+        self.fill_demos()
+        self.library.open(folder, self.settings.value("exe", ""))
+        # the game has the folder it started with
+        if self.ready() and self.game.running():
+            self.start_game()
 
     def toggle_viewmodel(self, checked):
         val = "1" if checked else "0"
         self.settings.setValue("viewmodel", val)
-        self.update_viewmodel_text()
         if self.game.running():
             self.game.send(f"set cg_drawviewmodel {val}")
         self.statusBar().showMessage(f"Viewmodel: {'ON' if checked else 'OFF'}", 2000)
@@ -1732,7 +1811,6 @@ class Window(QMainWindow):
     def toggle_forcemodel(self, checked):
         val = "1" if checked else "0"
         self.settings.setValue("forcemodel", val)
-        self.update_forcemodel_text()
         if self.game.running():
             self.game.send(f"set cg_forceModel {val}")
         self.statusBar().showMessage(f"Force models: {'ON' if checked else 'OFF'} (Airborne / Winter 1)", 2000)
@@ -1763,6 +1841,7 @@ class Window(QMainWindow):
 
     def edit_settings(self, tab="game"):
         if SettingsDialog(self.settings, self, tab).exec():
+            self.show_folder()
             self.fill_demos()
             self.fill_kills()
             kb = self.settings.value("kill_before", "4.0")
@@ -1927,21 +2006,42 @@ class Window(QMainWindow):
             mode = "only while " + self.state.get("player", "") + " is watched"
         else:
             mode = ""
+        self.show_play_mode()
         if not demo:
-            self.info.setText("No demo")
+            self.title.setText("No demo")
+            self.info.setText("Double-click a demo to play it")
             if not self.pending_demo:
                 self.index = None
                 self.fill_index()
         elif self.index:
+            # its file name, and the folders it's in with the rest
+            folder, _, name = demo.rpartition("/")
+            self.title.setText(name)
             maps = ", ".join(m["map"] + (f" ({m['rules']})" if m.get("rules") in ("realism", "default") else "")
                              for m in self.index["maps"])
-            text = f"<b>{html.escape(demo)}</b> — {html.escape(maps)}, {clock(duration)}"
             recorder = self.index["recorder"]["name"]
-            text += f", recorded by {html.escape(recorder)}" if recorder else ""
-            text += " (truncated)" if self.index.get("truncated") else ""
+            parts = [folder.replace("/", " › ")] if folder else []
+            parts += [maps, clock(duration)] + ([f"recorded by {recorder}"] if recorder else [])
+            text = html.escape(" · ".join(parts)) + (" (truncated)" if self.index.get("truncated") else "")
             text += f"<br>Playing {html.escape(mode)}" if mode else ""
             text += " — paused" if paused else ""
             self.info.setText(text)
+
+    def play_mode_clicked(self, action):
+        if action():
+            # checked until the game tells it plays that
+            self.play_mode_asked = monotonic()
+        else:
+            self.show_play_mode(True)
+
+    def show_play_mode(self, now=False):
+        """The Play button of what the game plays, but for a second after
+        one is clicked."""
+        if not now and monotonic() - self.play_mode_asked < 1:
+            return
+        only = self.state.get("only") or ""
+        (self.watched_button if only == "watched" else self.only_kills_button if only
+         else self.everything_button).setChecked(True)
 
     def fill_index(self):
         index = self.index or {}
@@ -2019,7 +2119,9 @@ class Window(QMainWindow):
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             span = spans[id(kill)]
             clips = stretches([span] + [spans[id(k)] for k, _, _ in team_kills_with(kills, [kill])], switches)
-            item = QTreeWidgetItem([clock(kill["time"]), killer, victim, how])
+            item = QTreeWidgetItem([clock(kill["time"]), killer, victim])
+            for column in range(3):
+                item.setToolTip(column, plain_tip(how))
             item.setData(0, Qt.UserRole, span[0])
             item.setData(1, Qt.UserRole, clips)
             item.setData(2, Qt.UserRole, [place[id(kill)]])
@@ -2037,6 +2139,9 @@ class Window(QMainWindow):
             item.setData(2, Qt.UserRole, [place[id(kill)] for kill in chain])
             self.multikills.addTopLevelItem(item)
             self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
+        self.tabs.setTabText(0, f"Kills ({self.kills.topLevelItemCount()})")
+        self.tabs.setTabText(1, f"Multi-kills ({self.multikills.topLevelItemCount()})")
+        self.tabs.setTabText(2, f"Rounds ({self.rounds.topLevelItemCount()})")
         # Up and Down too
         next_kill, prev_kill = self.kill_commands()
         self.game.send("bind UPARROW " + next_kill, "bind DOWNARROW " + prev_kill)
@@ -2046,7 +2151,7 @@ class Window(QMainWindow):
         """The slider marks the kills of the tab, and the button plays them."""
         multi = self.tabs.currentWidget() is self.multikills
         self.slider.set_marks(self.multi_marks if multi else self.kill_marks, self.round_marks)
-        self.only_kills_button.setText("Only these multi-kills" if multi else "Only these kills")
+        self.only_kills_button.setText("These multi-kills" if multi else "These kills")
 
     # actions
 
@@ -2063,33 +2168,36 @@ class Window(QMainWindow):
 
     def only_kills(self):
         """Plays the kills or multi-kills listed, from the one selected or the
-        first."""
+        first; False if there are none."""
         multi = self.tabs.currentWidget() is self.multikills
         tree = self.multikills if multi else self.kills
         item = tree.currentItem() or tree.topLevelItem(0)
         if not item:
-            QMessageBox.information(self, self.only_kills_button.text(),
+            QMessageBox.information(self, "Only these multi-kills" if multi else "Only these kills",
                                     f"There are no {'multi-kills' if multi else 'kills'} to play.")
-            return
+            return False
         player = self.player.currentData() or ""
         if player == SHOWN:
             only = f"demoonly shown{'multikills' if multi else 'kills'}"
         else:
             only = f"demoonly {'multikills' if multi else 'kills'}" + (" " + quoted(player) if player else "")
         self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)), only)
+        return True
 
     def only_watched(self):
-        """Plays while the player is watched, from the first time."""
+        """Plays while the player is watched, from the first time; False if
+        they aren't."""
         player = self.player.currentData()
         if not player or player == SHOWN:
             QMessageBox.information(self, "Only while watched", "Choose a player first.")
-            return
+            return False
         watched = (self.index or {}).get("watched", [])
         start = next((w["time"] for w in watched if same_player(w["name"], player)), None)
         if start is None:
             QMessageBox.information(self, "Only while watched", player + " isn't watched in this demo.")
-            return
+            return False
         self.game.send("demoseek " + seconds(start), "demoonly watched " + quoted(player))
+        return True
 
     # recording
 

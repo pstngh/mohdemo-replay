@@ -483,17 +483,31 @@ class TestGame(FakeGameCase):
 class TestWindow(FakeGameCase):
     def test_viewmodel_and_forcemodel_toggles(self):
         window = self.window()
-        self.assertEqual(window.viewmodel_action.text(), "Viewmodel: ON")
-        self.assertEqual(window.forcemodel_action.text(), "Force models: ON")
+        self.assertTrue(window.viewmodel_action.isChecked())
+        self.assertTrue(window.forcemodel_action.isChecked())
         window.viewmodel_action.trigger()
-        self.assertEqual(window.viewmodel_action.text(), "Viewmodel: OFF")
+        self.assertFalse(window.viewmodel_action.isChecked())
         self.assertEqual(self.settings.value("viewmodel"), "0")
         window.forcemodel_action.trigger()
-        self.assertEqual(window.forcemodel_action.text(), "Force models: OFF")
+        self.assertFalse(window.forcemodel_action.isChecked())
         self.assertEqual(self.settings.value("forcemodel"), "0")
         window.viewmodel_action.trigger()
-        self.assertEqual(window.viewmodel_action.text(), "Viewmodel: ON")
+        self.assertTrue(window.viewmodel_action.isChecked())
         self.assertEqual(self.settings.value("viewmodel"), "1")
+        # kept
+        self.assertFalse(self.window().forcemodel_action.isChecked())
+
+    def test_choose_folder(self):
+        window = self.window()
+        self.assertEqual(window.folder_action.text(), "demos")
+        other = os.path.join(self.tmp, "more demos")
+        os.makedirs(other)
+        shutil.copyfile(os.path.join(self.demos, "first.dm3"), os.path.join(other, "again.dm3"))
+        with mock.patch.object(mohreplay.QFileDialog, "getExistingDirectory", lambda *args: other):
+            window.choose_folder()
+        self.assertEqual(self.settings.value("demos"), other)
+        self.assertEqual(window.folder_action.text(), "more demos")
+        self.assertTrue(wait_until(lambda: list(window.demo_items) == ["again"]))
 
     def test_play_fills_the_lists(self):
         window = self.window()
@@ -502,8 +516,13 @@ class TestWindow(FakeGameCase):
         self.assertEqual(window.rounds.topLevelItemCount(), 3)
         self.assertEqual(window.rounds.topLevelItem(0).text(2), "Axis win!")
         self.assertEqual(window.slider.maximum(), 600000)
+        self.assertEqual(window.title.text(), "first")
         self.assertIn("obj/obj_team1", window.info.text())
         self.assertIn("recorded by t-", window.info.text())
+        self.assertEqual([window.tabs.tabText(i) for i in range(3)], ["Kills (6)", "Multi-kills (1)", "Rounds (3)"])
+        # how in the tooltip, as the game told it
+        self.assertEqual(window.kills.columnCount(), 3)
+        self.assertIn("was", window.kills.topLevelItem(0).toolTip(2))
         players = [window.player.itemText(i) for i in range(window.player.count())]
         self.assertEqual(players, ["All players", "Whoever is shown", "^1Phil", "Al", "Bob", "t-"])
 
@@ -609,10 +628,16 @@ class TestWindow(FakeGameCase):
         window = self.window()
         self.playing(window)
         window.player.setCurrentIndex(window.player.findData("t-"))
-        window.only_kills()
+        self.assertTrue(window.everything_button.isChecked())
+        window.only_kills_button.click()
+        self.assertTrue(window.only_kills_button.isChecked())
         self.assertTrue(wait_until(lambda: window.state.get("only") == "kills"))
         self.assertEqual(self.commands(window.game)[-2:], ["demoseek 6.000", 'demoonly kills "t-"'])
         self.assertIn("only the kills by t-", window.info.text())
+        self.assertTrue(wait_until(lambda: window.only_kills_button.isChecked(), 2))
+        window.everything_button.click()
+        self.assertTrue(wait_until(lambda: window.state.get("only") == ""))
+        self.assertTrue(wait_until(lambda: window.everything_button.isChecked(), 2))
 
     def test_multi_kills_tab(self):
         window = self.window()
@@ -621,7 +646,7 @@ class TestWindow(FakeGameCase):
         item = window.multikills.topLevelItem(0)
         self.assertEqual([item.text(i) for i in range(4)], ["0:10", "t-", "3", "^1Phil, Bob, Al"])
         window.tabs.setCurrentWidget(window.multikills)
-        self.assertEqual(window.only_kills_button.text(), "Only these multi-kills")
+        self.assertEqual(window.only_kills_button.text(), "These multi-kills")
         self.assertEqual([m[0] for m in window.slider.kills], [10000, 12000, 14500])
         window.only_kills()
         self.assertTrue(wait_until(lambda: window.state.get("only") == "multikills"))
@@ -632,14 +657,16 @@ class TestWindow(FakeGameCase):
         window.only_kills()
         self.assertEqual(self.messages.shown[-1], ("Only these multi-kills", "There are no multi-kills to play."))
         window.tabs.setCurrentWidget(window.kills)
-        self.assertEqual(window.only_kills_button.text(), "Only these kills")
+        self.assertEqual(window.only_kills_button.text(), "These kills")
         self.assertEqual(len(window.slider.kills), 0)  # his kill is while t- is shown
 
     def test_only_watched(self):
         window = self.window()
         self.playing(window)
-        window.only_watched()
+        window.watched_button.click()
         self.assertEqual(self.messages.shown[-1][0], "Only while watched")
+        # nothing plays otherwise
+        self.assertTrue(window.everything_button.isChecked())
         window.player.setCurrentIndex(window.player.findData("^1Phil"))
         window.only_watched()
         self.assertTrue(wait_until(lambda: self.commands(window.game)[-1:] == ['demoonly watched "^1Phil"']))

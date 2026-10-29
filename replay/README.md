@@ -18,19 +18,21 @@ demos, and the filter finds demos by name, level or player: for a player, it sho
 chooses them. For that, `mohdemoindex`, built next to the game, indexes the
 demos in the background the first time (about two minutes for 700), and the
 indexes are kept in `~/.cache/mohdemo-replay` (`~/Library/Caches` on macOS). Double-click a demo to
-play it (the game starts then, or with Restart game), click a kill, a
-multi-kill or a round to jump to it. "Only these
-kills" plays the kills listed (by the player chosen), from the one selected
-or the first, and on the Multi-kills tab, the multi-kills: two kills or
-more by a player, each at most 3 seconds after the one before. A player's
+play it (the game starts then, or with Restart game in the toolbar, where
+the folder's button chooses another), click a kill, a multi-kill or a round
+to jump to it; hovering a kill tells how it was made. Play chooses what
+plays: Everything, These kills, the kills listed (by the player chosen),
+from the one selected or the first, and on the Multi-kills tab, the
+multi-kills: two kills or more by a player, each at most 3 seconds after
+the one before, or While watched, while the player chosen is shown. A player's
 kills are only those made while the demo shows them (the recorder playing,
 or the player the recorder follows), and only while they're shown, so a
 video of them never shows someone else. "Whoever is shown", in the Player
 menu, lists the frags shown: the recorder's while they play and those of
 the players they follow, while they follow them. Settings also sets how long
 each kill plays before and after it (4 and 2 seconds), and Viewmodel and
-Force models, in the menu bar too, show the gun in the player's hands and
-show everyone as an airborne soldier or a winter German, whatever they wore.
+Force models, in the toolbar, show the gun in the player's hands and show
+everyone as an airborne soldier or a winter German, whatever they wore.
 The time slider marks the kills listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
