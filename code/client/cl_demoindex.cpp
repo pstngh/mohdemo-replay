@@ -559,6 +559,8 @@ static qboolean DI_ParseGamestate(diParser_t *p, msg_t *msg)
     memset(&p->gameState, 0, sizeof(p->gameState));
     memset(p->baselines, 0, sizeof(p->baselines));
     memset(p->teams, 0, sizeof(p->teams));
+    // a level starts with who is shown, as kills are only looked up in theirs
+    p->watched = -2;
     p->snap.valid = qfalse;
 
     p->serverCommandSequence = MSG_ReadLong(msg);

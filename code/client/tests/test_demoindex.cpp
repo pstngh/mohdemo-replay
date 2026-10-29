@@ -91,7 +91,9 @@ static bool TestDemo(const char *demo, bool json)
     int         realism = 0, defaults = 0;
     const char *rules;
     int         lastTime = 0;
-    int         i;
+    bool        shown    = false; // a watch event on the level so far
+    bool        later;
+    int         i, j;
 
     f = fopen(demo, "rb");
     if (!Check(demo, f != NULL, "can't open it")) {
@@ -117,10 +119,12 @@ static bool TestDemo(const char *demo, bool json)
             realism += !strcmp(rules, "realism");
             defaults += !strcmp(rules, "default");
             maps++;
+            shown = false;
             break;
         case DEMOEVENT_WATCH:
             ok &= Check(demo, ev->client < MAX_CLIENTS, "a watched player is out of range");
             watched++;
+            shown = true;
             break;
         case DEMOEVENT_KILL:
             ok &= Check(demo, ev->text[0] != 0, "a kill has no message");
@@ -128,6 +132,12 @@ static bool TestDemo(const char *demo, bool json)
                         "a kill message doesn't start with the victim");
             ok &= Check(demo, !ev->name[0] || strstr(ev->text + strlen(ev->otherName), ev->name),
                         "a kill message doesn't have the killer");
+            // whose kill is shown is looked up on its level, at its time at the latest
+            later = false;
+            for (j = i + 1; !shown && !later && j < index.numEvents && index.events[j].time == ev->time; j++) {
+                later = index.events[j].type == DEMOEVENT_WATCH;
+            }
+            ok &= Check(demo, shown || later, "a kill is on a level before a watch event");
             kills++;
             break;
         case DEMOEVENT_ROUNDSTART:
