@@ -124,8 +124,8 @@ commands and their settings, and recording.
   changes.
 - A second copy of the game records, without a window on Linux. It steps
   exactly one frame time per frame and pipes the frames to FFmpeg, and
-  OpenAL Soft renders the sound for each frame, so the video stays smooth
-  and in sync however fast it's made.
+  the sound mixer renders the sound of each frame, so the video stays
+  smooth and in sync however fast it's made.
 
 [PLAN.md](PLAN.md) has the decisions behind it and how it was built.
 

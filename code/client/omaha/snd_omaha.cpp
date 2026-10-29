@@ -150,6 +150,8 @@ static cvar_t *s_show_cpu;
 static cvar_t *s_show_num_active_sounds;
 cvar_t *s_show_sounds;
 static cvar_t *s_speaker_type;
+// Added in OPM
+static cvar_t *s_loopback;
 static cvar_t *s_snddevice;
 
 static const char *S_OMAHA_DeviceName(void)
@@ -419,15 +421,22 @@ qboolean S_OMAHA_Init()
         return true;
     }
 
+    // Added in OPM
+    //  Render the sound for video recording instead of playing it
+    s_loopback = Cvar_Get("s_loopback", "0", CVAR_SOUND_LATCH | CVAR_PROTECTED);
+
     memset(&cfg, 0, sizeof(cfg));
     S_OMAHA_ApplyFrequency();
-    if (s_speaker_type->integer == 1) {
+    // Added in OPM
+    //  Videos get stereo
+    cfg.loopback = s_loopback->integer;
+    if (s_speaker_type->integer == 1 && !cfg.loopback) {
         /* Changed: headphones mix at the HRTF set's 48 kHz; resampled to 44.1 (s_khz's default) its baked filters fail their check */
         al_frequency = 48000;
     }
     cfg.sampleRate  = (int)al_frequency;
     cfg.deviceName  = S_OMAHA_DeviceName();
-    cfg.speakerType = s_speaker_type->integer;
+    cfg.speakerType = cfg.loopback ? 0 : s_speaker_type->integer;
 
     if (!S_Renderer_Init(&cfg)) {
         return qfalse;
@@ -3293,6 +3302,29 @@ void S_OMAHA_SetReverb(int iType, float fLevel)
 
 /*
 ==============
+S_OMAHA_DiscardLoopback
+
+Added in OPM
+Renders the sound of the frame when it isn't recorded, so the sounds
+end and free their channels
+==============
+*/
+static void S_OMAHA_DiscardLoopback()
+{
+    static short buffer[48000 / 10 * 2];
+    int          rate, samples;
+
+    rate = S_Omaha_LoopbackRate();
+    if (!rate || CL_VideoRecording()) {
+        return;
+    }
+
+    samples = Q_min((int)(cls.frametime * rate / 1000), (int)ARRAY_LEN(buffer) / 2);
+    S_Omaha_RenderLoopback(buffer, samples);
+}
+
+/*
+==============
 S_OMAHA_Update
 ==============
 */
@@ -3305,6 +3337,9 @@ void S_OMAHA_Update()
     if (g_sndRenderer) {
         g_sndRenderer->Update();
     }
+
+    // Added in OPM
+    S_OMAHA_DiscardLoopback();
 
     if (cl.snap.ps.stats[STAT_CINEMATIC]) {
         S_SetGlobalAmbientVolumeLevel(0.5f);
@@ -6388,13 +6423,12 @@ unsigned int omaha_channel_two_d_stream::getBitsPerSample() const
 S_LoopbackRate
 
 Added in OPM
-The sample rate of the sound rendered for videos, 0 if it's played: not
-done with the Omaha mixer yet, videos have no sound
+The sample rate of the sound rendered for videos, 0 if it's played
 ==============
 */
 int S_LoopbackRate()
 {
-    return 0;
+    return S_Omaha_LoopbackRate();
 }
 
 /*
@@ -6407,7 +6441,7 @@ Renders the next samples of 16-bit stereo sound, if it isn't played
 */
 qboolean S_RenderLoopback(short *buffer, int samples)
 {
-    return qfalse;
+    return S_Omaha_RenderLoopback(buffer, samples);
 }
 
 const sndHost_t s_sndHostOmaha = {

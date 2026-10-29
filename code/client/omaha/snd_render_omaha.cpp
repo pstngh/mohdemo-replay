@@ -392,6 +392,8 @@ static char                  s_cfgDevice[256];
 static int                   s_lastReopen;
 
 static int      s_sampleRate = 44100;
+/* Added in OPM: no device; the game renders the mix for videos (S_Omaha_RenderLoopback) */
+static qboolean s_loopbackOn;
 static int      s_outCh      = 2;
 static qboolean s_hrtfOn;
 static int      s_layout; /* 0 stereo, 1 hrtf, 2 5.1, 3 quad */
@@ -3438,6 +3440,16 @@ static qboolean Om_Init(const sndDeviceConfig_t *cfg)
 	s_masterPrimed  = qfalse;
 	s_deviceLost    = false;
 	s_lastReopen = 0;
+	/* Added in OPM: nothing plays, Om_Update applies the commands */
+	s_loopbackOn = cfg && cfg->loopback ? qtrue : qfalse;
+	if (s_loopbackOn) {
+		Com_Printf(
+			"Sound/omaha: loopback, the sound is rendered for videos and not played (%d Hz, %d ch)\n",
+			s_sampleRate,
+			s_outCh
+		);
+		return qtrue;
+	}
 	if (!Om_OpenDevice(&s_cfg, qfalse)) {
 		Com_Printf("Sound/omaha: no playback device, using a null device (snd_restart tries again).\n");
 		if (!Om_OpenDevice(&s_cfg, qtrue)) {
@@ -3453,6 +3465,7 @@ static qboolean Om_Init(const sndDeviceConfig_t *cfg)
 
 static void Om_Shutdown(void)
 {
+	s_loopbackOn = qfalse;
 	Om_CloseDevice();
 	Om_ResetState();
 	OmHrtf_Unload();
@@ -3908,4 +3921,37 @@ extern "C" float S_Omaha_HfDuckSidechainDb(void)
 extern "C" float S_Omaha_HfDuckThreshDb(void)
 {
 	return s_hf_duck_thresh ? s_hf_duck_thresh->value : OM_HF_DUCK_THRESH_DEFAULT;
+}
+
+/* Added in OPM: the sample rate of the mix rendered for videos, 0 if it's played. */
+extern "C" int S_Omaha_LoopbackRate(void)
+{
+	return s_loopbackOn ? s_sampleRate : 0;
+}
+
+/*
+ * Added in OPM: game thread, with the loopback. Mixes the next frames, as the
+ * device callback would, into 16-bit stereo. No callback runs, so the gate is free.
+ */
+extern "C" qboolean S_Omaha_RenderLoopback(short *buffer, int frames)
+{
+	static float mix[OM_LINE * OM_OUT_MAX];
+	int          i, n;
+
+	if (!s_loopbackOn || frames <= 0 || s_mixGate.test_and_set(std::memory_order_acquire)) {
+		return qfalse;
+	}
+	while (frames > 0) {
+		n = frames < OM_LINE ? frames : OM_LINE;
+		Om_MixGated(mix, n, s_outCh);
+		for (i = 0; i < n * 2; i++) {
+			const float v = Om_Clamp(mix[(i / 2) * s_outCh + i % 2], -1.f, 1.f);
+			buffer[i]     = (short)lrintf(v * 32767.f);
+		}
+		buffer += n * 2;
+		frames -= n;
+	}
+	s_mixGate.clear(std::memory_order_release);
+	Om_Reclaim();
+	return qtrue;
 }

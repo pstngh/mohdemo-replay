@@ -781,15 +781,35 @@ void CL_WriteAVIAudioFrame( const byte *pcmBuffer, int size )
 
 /*
 ===============
+CL_TakeVideoSound
+
+Added in OPM
+Renders the sound of a video frame, the samples adding up to the exact
+time. The renderer takes a frame once it's drawn, after the time moved on,
+and its sound is rendered once its sounds started, with the next frame: the
+sound rendered before the first frame (frame -1) is dropped.
+===============
+*/
+static void CL_TakeVideoSound( int frame )
+{
+  static short  pcm[ 48000 * 2 ];
+  int           n = Q_max( frame, 0 );
+  int           samples;
+
+  samples = (int)( (long long)( n + 1 ) * afd.a.rate / afd.frameRate )
+      - (int)( (long long)n * afd.a.rate / afd.frameRate );
+  samples = Q_min( samples, (int)ARRAY_LEN( pcm ) / 2 );
+  if( S_RenderLoopback( pcm, samples ) && frame >= 0 )
+    CL_WriteAVIAudioFrame( ( byte * )pcm, samples * afd.a.sampleSize );
+}
+
+/*
+===============
 CL_TakeVideoFrame
 ===============
 */
 void CL_TakeVideoFrame( void )
 {
-  // Added in OPM
-  static short  pcm[ 48000 * 2 ];
-  int           samples;
-
   // AVI file isn't open
   if( !afd.fileOpen )
     return;
@@ -803,21 +823,15 @@ void CL_TakeVideoFrame( void )
     return;
   }
 
+  // Added in OPM
+  //  The sound of the frame before
+  if( afd.audio )
+    CL_TakeVideoSound( afd.framesTaken - 1 );
+
   // Changed in OPM
   //  Restored
   re.TakeVideoFrame( afd.width, afd.height,
       afd.cBuffer, afd.eBuffer, afd.motionJpeg );
-
-  // Added in OPM
-  //  The sound of the frame, the samples adding up to the exact time
-  if( afd.audio )
-  {
-    samples = (int)( (long long)( afd.framesTaken + 1 ) * afd.a.rate / afd.frameRate )
-        - (int)( (long long)afd.framesTaken * afd.a.rate / afd.frameRate );
-    samples = Q_min( samples, (int)ARRAY_LEN( pcm ) / 2 );
-    if( S_RenderLoopback( pcm, samples ) )
-      CL_WriteAVIAudioFrame( ( byte * )pcm, samples * afd.a.sampleSize );
-  }
 
   afd.framesTaken++;
 }
@@ -870,6 +884,11 @@ qboolean CL_CloseAVI( void )
   // AVI file isn't open
   if( !afd.fileOpen )
     return qfalse;
+
+  // Added in OPM
+  //  The sound of the last frame
+  if( afd.audio && afd.framesTaken > 0 && !afd.failed )
+    CL_TakeVideoSound( afd.framesTaken - 1 );
 
   afd.fileOpen = qfalse;
 

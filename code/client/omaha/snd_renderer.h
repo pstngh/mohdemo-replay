@@ -87,6 +87,8 @@ typedef struct {
 	int         sampleRate;
 	const char *deviceName;
 	int         speakerType; /* 0 stereo, 1 headphones, 2 5.1, 3 quad */
+	/* Added in OPM: no device, the game renders the mix for videos (S_Omaha_RenderLoopback) */
+	int         loopback;
 } sndDeviceConfig_t;
 
 /* Bundled HRTF set for headphones. */
@@ -152,6 +154,10 @@ float S_Omaha_HfDuckGainDb(void);
 float S_Omaha_HfDuckMaxCutDb(void);
 float S_Omaha_HfDuckSidechainDb(void);
 float S_Omaha_HfDuckThreshDb(void);
+
+/* Added in OPM: the mix rendered for videos with the loopback, 16-bit stereo; rate 0 without it */
+int      S_Omaha_LoopbackRate(void);
+qboolean S_Omaha_RenderLoopback(short *buffer, int frames);
 
 
 #ifdef __cplusplus
