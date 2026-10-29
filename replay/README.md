@@ -17,7 +17,8 @@ demos, and the filter finds demos by name, level or player: for a player, it sho
 chooses them. For that, `mohdemoindex`, built next to the game, indexes the
 demos in the background the first time (about two minutes for 700), and the
 indexes are kept in `~/.cache/mohdemo-replay` (`~/Library/Caches` on macOS). Double-click a demo to
-play it, click a kill, a multi-kill or a round to jump to it. "Only these
+play it (the game starts then, or with Restart game), click a kill, a
+multi-kill or a round to jump to it. "Only these
 kills" plays the kills listed (by the player chosen), from the one selected
 or the first, and on the Multi-kills tab, the multi-kills: two kills or
 more by a player, each at most 3 seconds after the one before. A player's
@@ -25,18 +26,22 @@ kills are only those made while the demo shows them (the recorder playing,
 or the player the recorder follows), and only while they're shown, so a
 video of them never shows someone else. "Whoever is shown", in the Player
 menu, lists the frags shown: the recorder's while they play and those of
-the players they follow, while they follow them.
+the players they follow, while they follow them. Settings also sets how long
+each kill plays before and after it (4 and 2 seconds), and Viewmodel and
+Force models, in the menu bar too, show the gun in the player's hands and
+show everyone as an airborne soldier or a winter German, whatever they wore.
 The time slider marks the kills listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
 
 Record… makes an MP4 of the demo playing: a stretch of time, the kills or
-the multi-kills (of the player chosen above) or the frags or multi-kills
-shown, one after the other, or only while a player is watched. A
+the multi-kills (of the player chosen above), the recorder's own (when the
+player chosen is someone else) or the frags or multi-kills shown, one after
+the other, or only while a player is watched. A
 right-click on kills or multi-kills selected records those, and on demos
 selected, all of them, the kills or multi-kills of the player the filter
-found, each demo with its own spelling of the name, or the frags or
-multi-kills shown: in one video, or one each. Each choice tells how many
+found, each demo with its own spelling of the name, the recorder's, or the
+frags or multi-kills shown: in one video, or one each. Each choice tells how many
 kills it holds and how long the video will be, and the last one is chosen
 again next time. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
@@ -45,14 +50,16 @@ clips of a video without encoding them again. The Videos panel lists them,
 with how far the one recording is and how long it has left
 (Cancel, Open folder, double-click to watch one), and each lands in the
 folder chosen, named from a pattern (`{demo}`, `{start}`, `{player}`,
-`{date}`). Size, frames per second, quality, codec (H.264,
-H.265 or the graphics card's H.264 encoder: VAAPI on Linux, VideoToolbox on
-macOS), sound and its bitrate are settings, and the Advanced box takes
+`{date}`). How long each kill plays before and after it, the size, the
+viewmodel, frames per second, quality, codec (H.264, H.265 or the graphics
+card's H.264 encoder: VAAPI on Linux, VideoToolbox on macOS), the models
+forced, sound and its bitrate are settings, and the Advanced box takes
 FFmpeg output options instead. Motion blur makes each frame of the video a
 blend of the frames the game draws in its time, 240 a second (4 at 60 frames
 per second): motion looks smoother, short flashes dimmer, a cut between two
 kills shows both for a frame, and recording takes about 2.5 times as long,
-nearly 4 with the graphics card's encoder. It needs FFmpeg.
+nearly 4 with the graphics card's encoder. The clips are written in a hidden
+`.mohreplay-parts` folder next to the video, not in memory. It needs FFmpeg.
 
 On macOS, the game program can be the `openmohaa.app` bundle, and
 `mohdemoindex` is looked for next to it as well. The recorder shows a window
@@ -64,10 +71,14 @@ The app starts the game with a throwaway home folder, sends it console
 commands through its pipe (`com_pipefile`) and shows what the game reports
 in `demoindex.json` and `demostate.json` (`cl_demoFiles 1`). On Linux it
 asks for Wayland first, then XWayland. The settings changed in the game (its
-options, the console, key binds) are kept for the next games in
-`~/.config/mohdemo-replay/omconfig.cfg` (`~/Library/Preferences` on macOS),
-and videos are recorded with them; the window size and the app's keys are
-always the app's.
+options, the console, key binds) are kept for the next games in the game
+folder, as `main/configs/omconfig.cfg` and `main/omconfig.cfg`, which are
+read first, and in `~/.config/mohdemo-replay/omconfig.cfg`
+(`~/Library/Preferences` on macOS), and videos are recorded with them. Some
+are always the app's: the window size, the app's keys, a field of view of
+80, the most detailed models (`r_uselod 0`), the viewmodel and the models
+forced, and frames drawn at the screen's refresh rate (`r_swapInterval 1`,
+`com_maxfps 0`).
 
 ## Keys in the game window
 
@@ -114,7 +125,10 @@ Team kills (the killer and the victim last seen on the same team, also when
 everyone plays on one team) aren't kills: they aren't listed, counted, part
 of multi-kills or gone to by the next and previous kill, and they only play,
 and are only recorded, with a kill by the same player at most 2 seconds
-before or after them: a teammate hit while shooting at an enemy.
+before or after them: a teammate hit while shooting at an enemy. Grenade
+kills (the messages about a grenade or shrapnel) aren't kills either. A
+kill plays only inside its level: its clip starts no earlier than the level
+and ends with it.
 
 While the recorder follows a player, most servers with the 1.12 Reborn patch
 put the camera in that player's head, where their own arms and gun are in
@@ -136,7 +150,7 @@ it can. The sound is recorded when the game is started with
 `+set s_loopback 1`: it is then rendered for the video and not played.
 `cl_aviPipeFormat` holds FFmpeg's output options (H.264, CRF 20, AAC 192k by
 default) and `cl_aviFFmpeg` the FFmpeg program; FFmpeg's errors go to
-`<name>.mp4.log`.
+`<name>.mp4.log`. The fps counter (`fps 1`) isn't drawn in videos.
 
 ## Tests
 
