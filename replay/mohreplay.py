@@ -482,36 +482,11 @@ class Game:
         fm = "1" if (forcemodel is None or str(forcemodel) in ("1", "true", "True")) else "0"
         kb = str(kill_before if kill_before is not None else "4.0")
         ka = str(kill_after if kill_after is not None else "2.0")
-        si = "0" if ("r_swapInterval" in extra and extra[extra.index("r_swapInterval") + 1] == "0") else "1"
-        fps = "0"
-        try:
-            with open(config, "a") as f:
-                f.write(f'\nseta r_swapInterval "{si}"\nseta com_maxfps "{fps}"\nseta fps "0"\n')
-        except OSError:
-            pass
         with open(os.path.join(main, "replay.cfg"), "w") as f:
             f.writelines(f'bind {key} "{command}"\n' for key, command in BINDS.items())
-            f.write('set r_uselod "0"\n')
-            f.write('seta r_uselod "0"\n')
-            f.write(f'set cg_drawviewmodel "{vm}"\n')
-            f.write(f'seta cg_drawviewmodel "{vm}"\n')
-            f.write(f'set cg_forceModel "{fm}"\n')
-            f.write(f'seta cg_forceModel "{fm}"\n')
-            f.write('set dm_playermodel "allied_airborne"\n')
-            f.write('seta dm_playermodel "allied_airborne"\n')
-            f.write('set dm_playergermanmodel "german_winter_1"\n')
-            f.write('seta dm_playergermanmodel "german_winter_1"\n')
-            f.write(f'set cl_demoKillBefore "{kb}"\n')
-            f.write(f'seta cl_demoKillBefore "{kb}"\n')
-            f.write(f'set cl_demoKillAfter "{ka}"\n')
-            f.write(f'seta cl_demoKillAfter "{ka}"\n')
-            f.write(f'set r_swapInterval "{si}"\n')
-            f.write(f'seta r_swapInterval "{si}"\n')
-            f.write(f'set com_maxfps "{fps}"\n')
-            f.write(f'seta com_maxfps "{fps}"\n')
-            f.write('set fps "0"\n')
-            f.write('seta fps "0"\n')
 
+        # the settings forced: set after the ones kept are read, they win,
+        # and extra comes after, as the recorder's own
         self.args = [exe, "+set", "fs_basepath", game, "+set", "fs_homepath", self.home,
                      "+set", "com_pipefile", PIPE, "+set", "cl_demoFiles", "1",
                      "+set", "cg_drawviewmodel", vm, "+set", "cg_fov", "80",
@@ -521,8 +496,7 @@ class Game:
                      "+set", "dm_playergermanmodel", "german_winter_1",
                      "+set", "cl_demoKillBefore", kb,
                      "+set", "cl_demoKillAfter", ka,
-                     "+set", "r_swapInterval", si, "+set", "com_maxfps", fps,
-                     "+set", "fps", "0",
+                     "+set", "r_swapInterval", "1", "+set", "com_maxfps", "0",
                      "+set", "r_fullscreen", "0", "+set", "r_mode", "-1",
                      "+set", "r_customwidth", str(width), "+set", "r_customheight", str(height),
                      "+exec", "replay.cfg", *extra]
@@ -1180,8 +1154,7 @@ class Recorder(QObject):
         extra = ["+set", "s_loopback", "1" if job["sound"] else "0", "+set", "s_khz", "44",
                  "+set", "s_volume", "1", "+set", "cl_aviFrameRate", job["fps"],
                  "+set", "cl_aviFFmpeg", job["ffmpeg"], "+set", "cl_aviPipeFormat", job["options"],
-                 "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0",
-                 "+set", "fps", "0"]
+                 "+set", "com_maxfps", "0", "+set", "r_swapInterval", "0"]
         # offscreen where SDL can, the recorder doesn't need a window
         driver = "offscreen" if sys.platform.startswith("linux") else None
         viewmodel = job.get("viewmodel", settings.value("rec/viewmodel", settings.value("viewmodel", "1")))
