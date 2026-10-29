@@ -43,6 +43,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <sys/wait.h>
 #include <time.h>
 #include <sys/resource.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 qboolean stdinIsATTY;
 
@@ -85,70 +88,42 @@ static void Sys_AppendToExecBuffer( const char *text )
 /*
 ==============
 Sys_Exec
+
+Returns the program's exit code, or -1 if it couldn't be run or didn't exit
 ==============
 */
 static int Sys_Exec( void )
 {
 	pid_t pid = fork( );
+	int status;
 
 	if( pid < 0 )
 		return -1;
 
-	if( pid )
+	if( pid == 0 )
 	{
-		// Parent
-		int exitCode;
-
-		wait( &exitCode );
-
-		return WEXITSTATUS( exitCode );
-	}
-	else
-	{
-		// Child
+		// Child: nothing but exec and _exit. exit() would run the parent's
+		// atexit handlers and destructors here, and some wait forever on
+		// threads the child doesn't have (the mixer joining its device and HRTF threads)
 		execvp( execArgv[ 0 ], execArgv );
 
 		// Failed to execute
-		exit( -1 );
-
-		return -1;
+		_exit( 127 );
 	}
-}
 
-#ifdef __APPLE__
-
-/*
-==================
-Sys_DefaultHomePath
-==================
-*/
-static char *Sys_DefaultHomePath(void)
-{
-	static char homePath[ MAX_OSPATH ] = { 0 };
-	char *p;
-
-	if( !*homePath )
+	// Parent
+	while( waitpid( pid, &status, 0 ) < 0 )
 	{
-		if( ( p = getenv( "HOME" ) ) != NULL )
-		{
-			Com_sprintf( homePath, sizeof(homePath), "%s%c%s",
-				p, PATH_SEP, "Library/Application Support/" );
-
-			if( com_homepath && com_homepath->string[0] )
-				Q_strcat(homePath, sizeof(homePath), com_homepath->string);
-			else
-				Q_strcat(homePath, sizeof(homePath), HOMEPATH_NAME);
-		}
+		if( errno != EINTR )
+			return -1;
 	}
 
-	return homePath;
+	// 127 is "not found", as in shells, so that Sys_Dialog tries the next program
+	if( !WIFEXITED( status ) || WEXITSTATUS( status ) == 127 )
+		return -1;
+
+	return WEXITSTATUS( status );
 }
-
-char *Sys_DefaultHomeConfigPath(void) { return Sys_DefaultHomePath(); }
-char *Sys_DefaultHomeDataPath(void)   { return Sys_DefaultHomePath(); }
-char *Sys_DefaultHomeStatePath(void)  { return Sys_DefaultHomePath(); }
-
-#else // __APPLE__
 
 /*
 ==================
@@ -478,8 +453,6 @@ char *Sys_DefaultHomeStatePath(void)
 	return Sys_HomeStatePath( );
 }
 
-#endif
-
 /*
 ================
 Sys_SteamPath
@@ -544,6 +517,20 @@ int Sys_Milliseconds (void)
 	curtime = (tp.tv_sec - sys_timeBase)*1000 + tp.tv_usec/1000;
 
 	return curtime;
+}
+
+/*
+================
+Sys_Microseconds
+================
+*/
+int64_t Sys_Microseconds (void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
 /*
@@ -1025,7 +1012,22 @@ void Sys_ErrorDialog( const char *error )
 	close( f );
 }
 
-#ifndef __APPLE__
+/*
+==============
+Sys_AppendOptionToExecBuffer
+
+Appends option and value as one argument, without va(): the value may be
+in a va() buffer (Sys_Dialog's message), which va() would overwrite
+==============
+*/
+static void Sys_AppendOptionToExecBuffer( const char *option, const char *value )
+{
+	char text[ sizeof( execBuffer ) ];
+
+	Com_sprintf( text, sizeof( text ), "%s%s", option, value );
+	Sys_AppendToExecBuffer( text );
+}
+
 /*
 ==============
 Sys_ZenityCommand
@@ -1055,8 +1057,8 @@ static void Sys_ZenityCommand( dialogType_t type, const char *message, const cha
 			break;
 	}
 
-	Sys_AppendToExecBuffer( va( "--text=%s", message ) );
-	Sys_AppendToExecBuffer( va( "--title=%s", title ) );
+	Sys_AppendOptionToExecBuffer( "--text=", message );
+	Sys_AppendOptionToExecBuffer( "--title=", title );
 }
 
 /*
@@ -1080,7 +1082,7 @@ static void Sys_KdialogCommand( dialogType_t type, const char *message, const ch
 	}
 
 	Sys_AppendToExecBuffer( message );
-	Sys_AppendToExecBuffer( va( "--title=%s", title ) );
+	Sys_AppendOptionToExecBuffer( "--title=", title );
 }
 
 /*
@@ -1176,7 +1178,6 @@ dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *t
 	Com_DPrintf( S_COLOR_YELLOW "WARNING: failed to show a dialog\n" );
 	return DR_OK;
 }
-#endif
 
 /*
 ==============
@@ -1226,6 +1227,12 @@ void Sys_PlatformInit( void )
 	signal( SIGBUS, Sys_SigHandler );
 
 	Sys_SetFloatEnv();
+
+#ifdef __linux__
+	// the frame limiter sleeps until microsecond deadlines (Com_Frame), and
+	// the default timer slack of 50 us would make every sleep that much longer
+	prctl( PR_SET_TIMERSLACK, 1, 0, 0, 0 );
+#endif
 
 	stdinIsATTY = isatty( STDIN_FILENO ) &&
 		!( term && ( !strcmp( term, "raw" ) || !strcmp( term, "dumb" ) ) );
@@ -1293,14 +1300,6 @@ qboolean Sys_DllExtension( const char *name ) {
 		return qtrue;
 	}
 
-#ifdef __APPLE__
-	// Allow system frameworks without dylib extensions
-	// i.e., /System/Library/Frameworks/OpenAL.framework/OpenAL
-	if ( strncmp( name, "/System/Library/Frameworks/", 27 ) == 0 ) {
-		return qtrue;
-	}
-#endif
-
 	// Check for format of filename.so.1.2.3
 	p = strstr( name, DLL_EXT "." );
 
@@ -1336,11 +1335,7 @@ qboolean Sys_OpenFolderInPlatformFileManager( const char *path )
 {
 	Sys_ClearExecBuffer( );
 
-#ifdef __APPLE__
-	Sys_AppendToExecBuffer( "open" );
-#else
 	Sys_AppendToExecBuffer( "xdg-open" );
-#endif
 
 	Sys_AppendToExecBuffer( path );
 

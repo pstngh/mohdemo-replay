@@ -22,7 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 //
 // This file exists in the original source code.
-// But this driver won't be implemented, as OpenAL is a better sound system!
+// But this driver won't be implemented. The client uses the Omaha mixer.
 //
 
 #pragma once

@@ -1,0 +1,5 @@
+# perf.py views (milestone 6 performance): name map x y z pitch yaw roll [sp]
+m6l1a_forest    m6l1a         6152 -6528 5500  0 135 0   # 2763 static models, fog 1500, snow
+obj_team2_yard  obj/obj_team2 1744  2832   68  0 315 0
+mohdm3_overview dm/mohdm3     3000 -2400 1500 50   0 0
+m3l3_path       m3l3         -6800  3248   76  0 270 0

@@ -2,26 +2,19 @@ if(NOT BUILD_CLIENT)
     return()
 endif()
 
-if(EMSCRIPTEN)
-    # Emscripten provides its own self contained SDL setup
-    list(APPEND CLIENT_COMPILE_OPTIONS -sUSE_SDL=2)
-    list(APPEND CLIENT_LINK_OPTIONS -sUSE_SDL=2)
-    return()
-endif()
-
-set(INTERNAL_SDL_DIR ${SOURCE_DIR}/thirdparty/SDL2-2.32.8)
+# SDL 3 (3.2.0 or later; the game ships 3.4.18). The code includes
+# <SDL3/SDL.h> with the internal headers and with an SDL 3 package alike.
+set(INTERNAL_SDL_DIR ${SOURCE_DIR}/thirdparty/SDL3-3.4.18)
 
 include(utils/arch)
 
-if(WIN32 OR APPLE)
-    # On Windows and macOS we have internal SDL binaries we can use
+if(WIN32)
+    # On Windows we have internal SDL binaries we can use
     set(HAVE_INTERNAL_SDL true)
 endif()
 
 if(USE_INTERNAL_SDL AND HAVE_INTERNAL_SDL)
-    set(SDL2_INCLUDE_DIRS ${INTERNAL_SDL_DIR}/include)
-    list(APPEND CLIENT_DEFINITIONS USE_INTERNAL_SDL_HEADERS)
-    list(APPEND RENDERER_DEFINITIONS USE_INTERNAL_SDL_HEADERS)
+    set(SDL3_INCLUDE_DIRS ${INTERNAL_SDL_DIR}/include)
 
     if(WIN32)
         if(ARCH STREQUAL "x86_64")
@@ -32,33 +25,26 @@ if(USE_INTERNAL_SDL AND HAVE_INTERNAL_SDL)
             message(FATAL_ERROR "Unknown ARCH")
         endif()
 
+        # SDL 3 has no SDLmain library: SDL_main.h gives the client its
+        # WinMain (code/sys/sys_main.c)
         if(MINGW)
-            set(SDL2_LIBRARIES
-                ${LIB_DIR}/libSDL2main.a
-                ${LIB_DIR}/libSDL2.dll.a)
+            set(SDL3_LIBRARIES ${LIB_DIR}/libSDL3.dll.a)
         elseif(MSVC)
-            set(SDL2_LIBRARIES
-                ${LIB_DIR}/SDL2main.lib
-                ${LIB_DIR}/SDL2.lib)
+            set(SDL3_LIBRARIES ${LIB_DIR}/SDL3.lib)
         endif()
 
-        list(APPEND CLIENT_DEPLOY_LIBRARIES ${LIB_DIR}/SDL2.dll)
-    elseif(APPLE)
-        set(SDL2_LIBRARIES
-            ${SOURCE_DIR}/thirdparty/libs/macos/libSDL2main.a
-            ${SOURCE_DIR}/thirdparty/libs/macos/libSDL2-2.0.0.dylib)
-        list(APPEND CLIENT_DEPLOY_LIBRARIES
-            ${SOURCE_DIR}/thirdparty/libs/macos/libSDL2-2.0.0.dylib)
+        list(APPEND CLIENT_DEPLOY_LIBRARIES ${LIB_DIR}/SDL3.dll)
     else()
         message(FATAL_ERROR "HAVE_INTERNAL_SDL set incorrectly; file a bug")
     endif()
 else()
-    find_package(SDL2 REQUIRED)
+    # The shared library: the client and the renderer must share one SDL
+    # (the renderer's window is the client's input window)
+    find_package(SDL3 3.2.0 REQUIRED CONFIG COMPONENTS SDL3-shared)
+    set(SDL3_LIBRARIES SDL3::SDL3-shared)
 endif()
 
-list(APPEND CLIENT_LIBRARIES ${SDL2_LIBRARIES})
-list(APPEND CLIENT_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
-list(APPEND CLIENT_COMPILE_OPTIONS ${SDL2_CFLAGS_OTHER})
-list(APPEND RENDERER_LIBRARIES ${SDL2_LIBRARIES})
-list(APPEND RENDERER_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
-list(APPEND RENDERER_COMPILE_OPTIONS ${SDL2_CFLAGS_OTHER})
+list(APPEND CLIENT_LIBRARIES ${SDL3_LIBRARIES})
+list(APPEND CLIENT_INCLUDE_DIRS ${SDL3_INCLUDE_DIRS})
+list(APPEND RENDERER_LIBRARIES ${SDL3_LIBRARIES})
+list(APPEND RENDERER_INCLUDE_DIRS ${SDL3_INCLUDE_DIRS})

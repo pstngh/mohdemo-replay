@@ -1,0 +1,200 @@
+# Multiplayer view with players: the street by the river. Written by
+# soldiers.py obj/obj_team4 -880 -2064 308 315 po4 --side -90 (see its
+# docstring): 20 player models around the camera, then three muzzle
+# flash lights and a view to the side.
+spmap obj/obj_team4
+set spawn script_model model player/allied_Airborne.tik targetname s1
+set spawn script_model model player/german_Wehrmacht_Soldier.tik targetname s2
+set spawn script_model model player/american_Ranger.tik targetname s3
+set spawn script_model model player/german_Elite_Sentry.tik targetname s4
+set spawn script_model model player/allied_SAS.tik targetname s5
+set spawn script_model model player/german_Panzer_Grenadier.tik targetname s6
+set spawn script_model model player/american_Army.tik targetname s7
+set spawn script_model model player/german_Waffenss_Shutze.tik targetname s8
+set spawn script_model model player/allied_Manon.tik targetname s9
+set spawn script_model model player/german_Afrika_Private.tik targetname s10
+set spawn script_model model player/allied_Pilot.tik targetname s11
+set spawn script_model model player/german_Kradshutzen.tik targetname s12
+set spawn script_model model player/allied_Airborne.tik targetname s13
+set spawn script_model model player/german_Wehrmacht_Soldier.tik targetname s14
+set spawn script_model model player/american_Ranger.tik targetname s15
+set spawn script_model model player/german_Elite_Sentry.tik targetname s16
+set spawn script_model model player/allied_SAS.tik targetname s17
+set spawn script_model model player/german_Panzer_Grenadier.tik targetname s18
+set spawn script_model model player/american_Army.tik targetname s19
+set spawn script_model model player/german_Waffenss_Shutze.tik targetname s20
+set wait 200
+set script s1 origin "-858 -2222 348"
+set script s1 physics_on
+set script s1 droptofloor 512
+set script s1 physics_off
+set script s1 physics_velocity "0 0 -1"
+set script s2 origin "-566 -2708 348"
+set script s2 physics_on
+set script s2 droptofloor 512
+set script s2 physics_off
+set script s2 physics_velocity "0 0 -1"
+set script s3 origin "-777 -2422 348"
+set script s3 physics_on
+set script s3 droptofloor 512
+set script s3 physics_off
+set script s3 physics_velocity "0 0 -1"
+set script s4 origin "-361 -2834 348"
+set script s4 physics_on
+set script s4 droptofloor 512
+set script s4 physics_off
+set script s4 physics_velocity "0 0 -1"
+set script s5 origin "-642 -2598 348"
+set script s5 physics_on
+set script s5 droptofloor 512
+set script s5 physics_off
+set script s5 physics_velocity "0 0 -1"
+set script s6 origin "-719 -2243 348"
+set script s6 physics_on
+set script s6 droptofloor 512
+set script s6 physics_off
+set script s6 physics_velocity "0 0 -1"
+set script s7 origin "-457 -2740 348"
+set script s7 physics_on
+set script s7 droptofloor 512
+set script s7 physics_off
+set script s7 physics_velocity "0 0 -1"
+set script s8 origin "-533 -2356 348"
+set script s8 physics_on
+set script s8 droptofloor 512
+set script s8 physics_off
+set script s8 physics_velocity "0 0 -1"
+set script s9 origin "-231 -2838 348"
+set script s9 physics_on
+set script s9 droptofloor 512
+set script s9 physics_off
+set script s9 physics_velocity "0 0 -1"
+set script s10 origin "-315 -2417 348"
+set script s10 physics_on
+set script s10 droptofloor 512
+set script s10 physics_off
+set script s10 physics_velocity "0 0 -1"
+set script s11 origin "-640 -2280 348"
+set script s11 physics_on
+set script s11 droptofloor 512
+set script s11 physics_off
+set script s11 physics_velocity "0 0 -1"
+set script s12 origin "-77 -2421 348"
+set script s12 physics_on
+set script s12 droptofloor 512
+set script s12 physics_off
+set script s12 physics_velocity "0 0 -1"
+set script s13 origin "-437 -2363 348"
+set script s13 physics_on
+set script s13 droptofloor 512
+set script s13 physics_off
+set script s13 physics_velocity "0 0 -1"
+set script s14 origin "-696 -2117 348"
+set script s14 physics_on
+set script s14 droptofloor 512
+set script s14 physics_off
+set script s14 physics_velocity "0 0 -1"
+set script s15 origin "-208 -2392 348"
+set script s15 physics_on
+set script s15 droptofloor 512
+set script s15 physics_off
+set script s15 physics_velocity "0 0 -1"
+set script s16 origin "-480 -2120 348"
+set script s16 physics_on
+set script s16 droptofloor 512
+set script s16 physics_off
+set script s16 physics_velocity "0 0 -1"
+set script s17 origin "-1064 -2248 348"
+set script s17 physics_on
+set script s17 droptofloor 512
+set script s17 physics_off
+set script s17 physics_velocity "0 0 -1"
+set script s18 origin "-696 -1880 348"
+set script s18 physics_on
+set script s18 droptofloor 512
+set script s18 physics_off
+set script s18 physics_velocity "0 0 -1"
+set script s19 origin "-1215 -2282 348"
+set script s19 physics_on
+set script s19 droptofloor 512
+set script s19 physics_off
+set script s19 physics_velocity "0 0 -1"
+set script s20 origin "-662 -1729 348"
+set script s20 physics_on
+set script s20 droptofloor 512
+set script s20 physics_off
+set script s20 physics_velocity "0 0 -1"
+set wait 200
+set script s1 angle 53
+set script s1 anim smg_stand_run_fwd
+set script s1 attachmodel models/weapons/thompsonsmg.tik tag_weapon_right
+set script s2 angle 108
+set script s2 anim mp40_stand_idle
+set script s2 attachmodel models/weapons/mp40.tik tag_weapon_right
+set script s3 angle 135
+set script s3 anim rifle_crouch_idle
+set script s3 attachmodel models/weapons/m1_garand.tik tag_weapon_right
+set script s4 angle 100
+set script s4 anim rifle_stand_walk_fwd
+set script s4 attachmodel models/weapons/kar98.tik tag_weapon_right
+set script s5 angle 127
+set script s5 anim mg_stand_idle
+set script s5 attachmodel models/weapons/bar.tik tag_weapon_right
+set script s6 angle 92
+set script s6 anim mp44_stand_run_fwd
+set script s6 attachmodel models/weapons/mp44.tik tag_weapon_right
+set script s7 angle 119
+set script s7 anim rifle_stand_idle
+set script s7 attachmodel models/weapons/springfield.tik tag_weapon_right
+set script s8 angle 174
+set script s8 anim mp40_crouch_walk_fwd
+set script s8 attachmodel models/weapons/mp40.tik tag_weapon_right
+set script s9 angle 111
+set script s9 anim unarmed_stand_run_fwd
+set script s10 angle 166
+set script s10 anim pistol_stand_idle1
+set script s10 attachmodel models/weapons/colt45.tik tag_weapon_right
+set script s11 angle 103
+set script s11 anim shotgun_stand_run_fwd
+set script s11 attachmodel models/weapons/shotgun.tik tag_weapon_right
+set script s12 angle 158
+set script s12 anim bazooka_stand_idle
+set script s12 attachmodel models/weapons/bazooka.tik tag_weapon_right
+set script s13 angle 185
+set script s13 anim smg_stand_run_fwd
+set script s13 attachmodel models/weapons/thompsonsmg.tik tag_weapon_right
+set script s14 angle 150
+set script s14 anim mp40_stand_idle
+set script s14 attachmodel models/weapons/mp40.tik tag_weapon_right
+set script s15 angle 177
+set script s15 anim rifle_crouch_idle
+set script s15 attachmodel models/weapons/m1_garand.tik tag_weapon_right
+set script s16 angle 142
+set script s16 anim rifle_stand_walk_fwd
+set script s16 attachmodel models/weapons/kar98.tik tag_weapon_right
+set script s17 angle 52
+set script s17 anim mg_stand_idle
+set script s17 attachmodel models/weapons/bar.tik tag_weapon_right
+set script s18 angle 269
+set script s18 anim mp44_stand_run_fwd
+set script s18 attachmodel models/weapons/mp44.tik tag_weapon_right
+set script s19 angle 24
+set script s19 anim rifle_stand_idle
+set script s19 attachmodel models/weapons/springfield.tik tag_weapon_right
+set script s20 angle 265
+set script s20 anim mp40_crouch_walk_fwd
+set script s20 attachmodel models/weapons/mp40.tik tag_weapon_right
+set wait 27000
+shot po4_front -880 -2064 308 0 315 0
+set spawn fx/dummy.tik targetname po4l1
+set spawn fx/dummy.tik targetname po4l2
+set spawn fx/dummy.tik targetname po4l3
+set wait 200
+set script po4l1 origin "-784 -2399 358"
+set script po4l1 light 1 0.8 0.4 200
+set script po4l2 origin "-735 -2225 358"
+set script po4l2 light 1 0.7 0.3 240
+set script po4l3 origin "-551 -2341 358"
+set script po4l3 light 1 0.85 0.5 180
+shot po4_flash -880 -2064 308 0 315 0
+shot po4_side -880 -2064 308 0 225 0

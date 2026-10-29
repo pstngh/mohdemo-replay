@@ -1,0 +1,13 @@
+# m3l1a (single player, Omaha beach): the open sea (deepbluesea:
+# deformVertexes flap, nextBundle in both stages, tcMod scroll, rgbGen
+# identityLighting) under the d-day2 sky. The player rides a landing craft
+# for about two minutes (tele has no effect there), so the list waits; run
+# it with TIMEOUT=400. Not deterministic: the random artillery on the beach
+# shakes and rolls the camera (game-side earthquakes), so GL1 and Vulkan see
+# slightly different views and the numbers mean nothing; the shader is
+# compared on obj_team3 instead (obj_team3_deepbluesea).
+map m3l1a
+set wait 120000
+shot m31_sea 64 -4500 -400 10 270 0
+shot m31_sea2 0 -3000 0 20 270 0
+shot m31_sky 0 -3000 0 -30 270 0

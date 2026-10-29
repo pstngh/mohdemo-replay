@@ -53,6 +53,18 @@ snd_codec_t mp3_codec =
     NULL
 };
 
+// the dithering's random numbers (a Mersenne Twister): one sequence shared by the
+// file streams and loads, and one of its own in each memory stream
+#define MP3_DITH_N 624
+typedef struct mp3_dither_s
+{
+    unsigned long mt[MP3_DITH_N];	// the array for the state vector
+    int mti;			// mti==MP3_DITH_N+1 means mt[MP3_DITH_N] is not initialized
+} mp3_dither_t;
+
+// the most PCM bytes one frame decodes to (1152 samples, 2 channels)
+#define MP3_MAX_FRAME_PCM		(1152 * 2 * MP3_SAMPLE_WIDTH)
+
 // structure used for info purposes
 struct snd_codec_mp3_info
 {
@@ -71,7 +83,29 @@ struct snd_codec_mp3_info
     byte* dest;			// copy decoded data here.
     int destlen;			// amount of already copied data.
     int destsize;			// amount of bytes we must decode.
+
+    mp3_dither_t* dither;		// the shared sequence, or own for a memory stream
+    mp3_dither_t own;
 };
+
+/*
+=================
+S_MP3_Alloc, S_MP3_Free
+
+The streams are decoded on the sound system's threads (snd_stream_async.cpp,
+snd_stream_thread.cpp): the memory a decode grows comes from the C library,
+not the zone.
+=================
+*/
+static void* S_MP3_Alloc(snd_stream_t* stream, size_t size)
+{
+    return calloc(1, size);
+}
+
+static void S_MP3_Free(snd_stream_t* stream, void* ptr)
+{
+    free(ptr);
+}
 
 /*************** MP3 utility functions ***************/
 
@@ -97,7 +131,17 @@ int S_MP3_ReadData(snd_stream_t* stream, struct mad_stream* madstream, byte* enc
 
     // Fill the buffer right to the end
 
-    retval = FS_Read(&encbuf[leftover], encbufsize - leftover, stream->file);
+    if (stream->mem)
+    {
+        // the same blocks as from the file, so libmad decodes the same frames
+        retval = stream->length - stream->pos;
+        if (retval > encbufsize - leftover)
+            retval = encbufsize - leftover;
+        memcpy(&encbuf[leftover], stream->mem + stream->pos, retval);
+        stream->pos += retval;
+    }
+    else
+        retval = FS_Read(&encbuf[leftover], encbufsize - leftover, stream->file);
 
     if (retval <= 0)
     {
@@ -203,7 +247,10 @@ int S_MP3_Scanfile(snd_stream_t* stream)
     }
 
     // Reset the file pointer so we can do the real decoding.
-    FS_Seek(stream->file, 0, FS_SEEK_SET);
+    if (stream->mem)
+        stream->pos = 0;
+    else
+        FS_Seek(stream->file, 0, FS_SEEK_SET);
 
     return 0;
 }
@@ -220,7 +267,6 @@ int S_MP3_Scanfile(snd_stream_t* stream)
 /* matumoto@math.keio.ac.jp                                        */
 
 /* Period parameters */
-#define MP3_DITH_N 624
 #define MP3_DITH_M 397
 #define MATRIX_A 0x9908b0df   /* constant vector a */
 #define UPPER_MASK 0x80000000 /* most significant w-r bits */
@@ -234,48 +280,47 @@ int S_MP3_Scanfile(snd_stream_t* stream)
 #define TEMPERING_SHIFT_T(y)  (y << 15)
 #define TEMPERING_SHIFT_L(y)  (y >> 18)
 
-static unsigned long mt[MP3_DITH_N]; /* the array for the state vector  */
-static int mti = MP3_DITH_N + 1; /* mti==MP3_DITH_N+1 means mt[MP3_DITH_N] is not initialized */
+static mp3_dither_t mp3_dither = { { 0 }, MP3_DITH_N + 1 };
 
 /* initializing the array with a NONZERO seed */
-void sgenrand(unsigned long seed)
+static void sgenrand(mp3_dither_t* d, unsigned long seed)
 {
     /* setting initial seeds to mt[MP3_DITH_N] using         */
     /* the generator Line 25 of Table 1 in          */
     /* [KNUTH 1981, The Art of Computer Programming */
     /*    Vol. 2 (2nd Ed.), pp102]                  */
-    mt[0] = seed & 0xffffffff;
-    for (mti = 1; mti < MP3_DITH_N; mti++)
-        mt[mti] = (69069 * mt[mti - 1]) & 0xffffffff;
+    d->mt[0] = seed & 0xffffffff;
+    for (d->mti = 1; d->mti < MP3_DITH_N; d->mti++)
+        d->mt[d->mti] = (69069 * d->mt[d->mti - 1]) & 0xffffffff;
 }
 
-unsigned long genrand(void)
+static unsigned long genrand(mp3_dither_t* d)
 {
     unsigned long y;
     static unsigned long mag01[2] = { 0x0, MATRIX_A };
     /* mag01[x] = x * MATRIX_A  for x=0,1 */
 
-    if (mti >= MP3_DITH_N) { /* generate MP3_DITH_N words at one time */
+    if (d->mti >= MP3_DITH_N) { /* generate MP3_DITH_N words at one time */
         int kk;
 
-        if (mti == MP3_DITH_N + 1)   /* if sgenrand() has not been called, */
-            sgenrand(4357); /* a default initial seed is used   */
+        if (d->mti == MP3_DITH_N + 1)   /* if sgenrand() has not been called, */
+            sgenrand(d, 4357); /* a default initial seed is used   */
 
         for (kk = 0; kk < MP3_DITH_N - MP3_DITH_M; kk++) {
-            y = (mt[kk] & UPPER_MASK) | (mt[kk + 1] & LOWER_MASK);
-            mt[kk] = mt[kk + MP3_DITH_M] ^ (y >> 1) ^ mag01[y & 0x1];
+            y = (d->mt[kk] & UPPER_MASK) | (d->mt[kk + 1] & LOWER_MASK);
+            d->mt[kk] = d->mt[kk + MP3_DITH_M] ^ (y >> 1) ^ mag01[y & 0x1];
         }
         for (; kk < MP3_DITH_N - 1; kk++) {
-            y = (mt[kk] & UPPER_MASK) | (mt[kk + 1] & LOWER_MASK);
-            mt[kk] = mt[kk + (MP3_DITH_M - MP3_DITH_N)] ^ (y >> 1) ^ mag01[y & 0x1];
+            y = (d->mt[kk] & UPPER_MASK) | (d->mt[kk + 1] & LOWER_MASK);
+            d->mt[kk] = d->mt[kk + (MP3_DITH_M - MP3_DITH_N)] ^ (y >> 1) ^ mag01[y & 0x1];
         }
-        y = (mt[MP3_DITH_N - 1] & UPPER_MASK) | (mt[0] & LOWER_MASK);
-        mt[MP3_DITH_N - 1] = mt[MP3_DITH_M - 1] ^ (y >> 1) ^ mag01[y & 0x1];
+        y = (d->mt[MP3_DITH_N - 1] & UPPER_MASK) | (d->mt[0] & LOWER_MASK);
+        d->mt[MP3_DITH_N - 1] = d->mt[MP3_DITH_M - 1] ^ (y >> 1) ^ mag01[y & 0x1];
 
-        mti = 0;
+        d->mti = 0;
     }
 
-    y = mt[mti++];
+    y = d->mt[d->mti++];
     y ^= TEMPERING_SHIFT_U(y);
     y ^= TEMPERING_SHIFT_S(y) & TEMPERING_MASK_B;
     y ^= TEMPERING_SHIFT_T(y) & TEMPERING_MASK_C;
@@ -284,7 +329,7 @@ unsigned long genrand(void)
     return y;
 }
 
-long triangular_dither_noise(int nbits) {
+static long triangular_dither_noise(mp3_dither_t* d, int nbits) {
     // parameter nbits : the peak-to-peak amplitude desired (in bits)
     //  use with nbits set to    2 + nber of bits to be trimmed.
     // (because triangular is made from two uniformly distributed processes,
@@ -292,7 +337,7 @@ long triangular_dither_noise(int nbits) {
     // see The Theory of Dithered Quantization by Robert Alexander Wannamaker
     // for complete proof of why that's optimal
 
-    long v = (genrand() / 2 - genrand() / 2); // in ]-2^31, 2^31[
+    long v = (genrand(d) / 2 - genrand(d) / 2); // in ]-2^31, 2^31[
     //int signe = (v>0) ? 1 : -1;
     long P = 1 << (32 - nbits); // the power of 2
     v /= P;
@@ -320,7 +365,7 @@ Converts the signal to 16 bit LE-PCM data and does dithering.
  * Copyright (C) 2001-2002 Sam Clegg
  */
 
-signed int S_MP3_Scale(mad_fixed_t sample)
+static signed int S_MP3_Scale(mp3_dither_t* d, mad_fixed_t sample)
 {
     int n_bits_to_loose = MAD_F_FRACBITS + 1 - 16;
 #ifdef MP3_DITHERING
@@ -331,7 +376,7 @@ signed int S_MP3_Scale(mad_fixed_t sample)
     sample += (1L << (n_bits_to_loose - 1));
 
 #ifdef MP3_DITHERING
-    dither = triangular_dither_noise(n_bits_to_loose + 1);
+    dither = triangular_dither_noise(d ? d : &mp3_dither, n_bits_to_loose + 1);
     sample += dither;
 #endif
 
@@ -357,7 +402,7 @@ indicate the amount of actually written bytes in wrotecnt.
 =================
 */
 
-int S_MP3_PCMCopy(byte* buf, struct mad_pcm* pcm, int bufofs,
+static int S_MP3_PCMCopy(mp3_dither_t* d, byte* buf, struct mad_pcm* pcm, int bufofs,
     int sampleofs, int bytecount, int* wrotecnt)
 {
     int written = 0;
@@ -367,7 +412,7 @@ int S_MP3_PCMCopy(byte* buf, struct mad_pcm* pcm, int bufofs,
     // add new pcm data.
     while (written < bytecount && sampleofs < pcm->length)
     {
-        sample = S_MP3_Scale(pcm->samples[0][sampleofs]);
+        sample = S_MP3_Scale(d, pcm->samples[0][sampleofs]);
 
 #ifdef Q3_BIG_ENDIAN
         // output to 16 bit big endian PCM
@@ -381,7 +426,7 @@ int S_MP3_PCMCopy(byte* buf, struct mad_pcm* pcm, int bufofs,
 
         if (pcm->channels == 2)
         {
-            sample = S_MP3_Scale(pcm->samples[1][sampleofs]);
+            sample = S_MP3_Scale(d, pcm->samples[1][sampleofs]);
 
 #ifdef Q3_BIG_ENDIAN
             buf[bufofs++] = (sample >> 8) & 0xff;
@@ -474,14 +519,14 @@ int S_MP3_Decode(snd_stream_t* stream)
     needcount = mp3info->destsize - mp3info->destlen;
 
     // Copy exactly as many samples as required.
-    samplecount = S_MP3_PCMCopy(mp3info->dest, pcm,
+    samplecount = S_MP3_PCMCopy(mp3info->dither, mp3info->dest, pcm,
         mp3info->destlen, 0, needcount, &wrote);
     mp3info->destlen += wrote;
 
     if (samplecount < pcm->length)
     {
         // Not all samples got copied. Copy the rest into the pcm buffer.
-        samplecount = S_MP3_PCMCopy(mp3info->pcmbuf, pcm,
+        samplecount = S_MP3_PCMCopy(mp3info->dither, mp3info->pcmbuf, pcm,
             mp3info->buflen,
             samplecount,
             mp3info->pcmbufsize - mp3info->buflen,
@@ -492,18 +537,23 @@ int S_MP3_Decode(snd_stream_t* stream)
         if (samplecount < pcm->length)
         {
             // The pcm buffer was not large enough. Make it bigger.
-            byte* newbuf = Z_Malloc(cursize);
+            byte* newbuf = S_MP3_Alloc(stream, cursize);
+
+            if (!newbuf)
+            {
+                return -1;
+            }
 
             if (mp3info->pcmbuf)
             {
                 memcpy(newbuf, mp3info->pcmbuf, mp3info->buflen);
-                Z_Free(mp3info->pcmbuf);
+                S_MP3_Free(stream, mp3info->pcmbuf);
             }
 
             mp3info->pcmbuf = newbuf;
             mp3info->pcmbufsize = cursize;
 
-            samplecount = S_MP3_PCMCopy(mp3info->pcmbuf, pcm,
+            samplecount = S_MP3_PCMCopy(mp3info->dither, mp3info->pcmbuf, pcm,
                 mp3info->buflen,
                 samplecount,
                 mp3info->pcmbufsize - mp3info->buflen,
@@ -594,7 +644,7 @@ void S_MP3_CodecCloseStream(snd_stream_t* stream)
         mp3info = stream->ptr;
 
         if (mp3info->pcmbuf)
-            Z_Free(mp3info->pcmbuf);
+            S_MP3_Free(stream, mp3info->pcmbuf);
 
         mad_synth_finish(&mp3info->madsynth);
         mad_frame_finish(&mp3info->madframe);
@@ -604,6 +654,98 @@ void S_MP3_CodecCloseStream(snd_stream_t* stream)
     }
 
     S_CodecUtilClose(&stream);
+}
+
+/*
+=================
+S_MP3_OpenMemoryStream
+
+A stream of an mp3 file in memory (snd_stream_memory.cpp), decoded on any
+thread: no file system or zone calls, its own dithering sequence (the same PCM
+every time it is decoded). info: what an earlier scan of the file found, or
+NULL to scan it. Read with S_MP3_CodecReadStream, close with
+S_MP3_CloseMemoryStream.
+=================
+*/
+snd_stream_t* S_MP3_OpenMemoryStream(const byte* data, int length, const snd_info_t* info)
+{
+    snd_stream_t* stream;
+    struct snd_codec_mp3_info* mp3info;
+
+    if (!data || length <= 0)
+        return NULL;
+
+    stream = calloc(1, sizeof(*stream));
+    if (!stream)
+        return NULL;
+
+    stream->codec = &mp3_codec;
+    stream->mem = data;
+    stream->length = length;
+
+    if (info)
+    {
+        // scanned before (snd_stream_memory.cpp)
+        stream->info = *info;
+    }
+    else if (S_MP3_Scanfile(stream) < 0)
+    {
+        free(stream);
+        return NULL;
+    }
+
+    mp3info = calloc(1, sizeof(*mp3info));
+    if (!mp3info)
+    {
+        free(stream);
+        return NULL;
+    }
+
+    stream->ptr = mp3info;
+    mp3info->dither = &mp3info->own;
+    mp3info->own.mti = MP3_DITH_N + 1;
+    // never grown while decoding (no allocation on the thread)
+    mp3info->pcmbuf = calloc(1, MP3_MAX_FRAME_PCM);
+    mp3info->pcmbufsize = MP3_MAX_FRAME_PCM;
+
+    mad_stream_init(&mp3info->madstream);
+    mad_frame_init(&mp3info->madframe);
+    mad_synth_init(&mp3info->madsynth);
+
+    if (!mp3info->pcmbuf || S_MP3_ReadData(stream, &mp3info->madstream, mp3info->encbuf, sizeof(mp3info->encbuf)) <= 0)
+    {
+        S_MP3_CloseMemoryStream(stream);
+        return NULL;
+    }
+
+    return stream;
+}
+
+/*
+=================
+S_MP3_CloseMemoryStream
+=================
+*/
+void S_MP3_CloseMemoryStream(snd_stream_t* stream)
+{
+    struct snd_codec_mp3_info* mp3info;
+
+    if (!stream)
+        return;
+
+    mp3info = stream->ptr;
+    if (mp3info)
+    {
+        free(mp3info->pcmbuf);
+
+        mad_synth_finish(&mp3info->madsynth);
+        mad_frame_finish(&mp3info->madframe);
+        mad_stream_finish(&mp3info->madstream);
+
+        free(mp3info);
+    }
+
+    free(stream);
 }
 
 /*
@@ -692,7 +834,9 @@ void* S_MP3_CodecLoad(const char* filename, snd_info_t* info)
     info->dataofs = stream->info.dataofs;
 
     // allocate enough buffer for all pcm data
-    pcmbuffer = Z_Malloc(stream->info.size);
+    // (temporary hunk memory, as the other codecs: the callers free it with
+    // Hunk_FreeTempMemory, which crashed on the zone block this was)
+    pcmbuffer = Hunk_AllocateTempMemory(stream->info.size);
     if (!pcmbuffer)
     {
         S_MP3_CodecCloseStream(stream);
@@ -704,7 +848,7 @@ void* S_MP3_CodecLoad(const char* filename, snd_info_t* info)
     if (info->size <= 0)
     {
         // we didn't read anything at all. darn.
-        Z_Free(pcmbuffer);
+        Hunk_FreeTempMemory(pcmbuffer);
         pcmbuffer = NULL;
     }
 

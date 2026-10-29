@@ -44,7 +44,6 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/cl_uistd.cpp
     ${SOURCE_DIR}/client/cl_uiview3d.cpp
     ${SOURCE_DIR}/client/libmumblelink.c
-    ${SOURCE_DIR}/client/qal.c
     ${SOURCE_DIR}/client/snd_codec_mp3.c
     ${SOURCE_DIR}/client/snd_codec_ogg.c
     ${SOURCE_DIR}/client/snd_codec_opus.c
@@ -54,7 +53,16 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/snd_info.cpp
     ${SOURCE_DIR}/client/snd_mem_new.cpp
     ${SOURCE_DIR}/client/snd_miles_new.cpp
-    ${SOURCE_DIR}/client/snd_openal_new.cpp
+    ${SOURCE_DIR}/client/snd_host.cpp
+    ${SOURCE_DIR}/client/omaha/snd_adpcm_omaha.c
+    ${SOURCE_DIR}/client/omaha/snd_category.c
+    ${SOURCE_DIR}/client/omaha/snd_hrtf_omaha.cpp
+    ${SOURCE_DIR}/client/omaha/snd_omaha.cpp
+    ${SOURCE_DIR}/client/omaha/snd_omaha_overlay.cpp
+    ${SOURCE_DIR}/client/omaha/snd_render_omaha.cpp
+    ${SOURCE_DIR}/client/omaha/snd_render_select.cpp
+    ${SOURCE_DIR}/client/omaha/snd_stream_async.cpp
+    ${SOURCE_DIR}/client/snd_stream_memory.cpp
     ${SOURCE_DIR}/client/usignal.cpp
     ${SOURCE_DIR}/sdl/sdl_input.c
     ${SOURCE_DIR}/sdl/sdl_mouse.c
@@ -79,9 +87,8 @@ if(BUILD_STANDALONE)
     list(APPEND CLIENT_DEFINITIONS STANDALONE)
 endif()
 
-if(USE_RENDERER_DLOPEN)
-    list(APPEND CLIENT_DEFINITIONS USE_RENDERER_DLOPEN)
-endif()
+# the renderer is loaded at run time: renderer_<cl_renderer> (renderer_vulkan)
+list(APPEND CLIENT_DEFINITIONS USE_RENDERER_DLOPEN)
 
 if(USE_HTTP)
     list(APPEND CLIENT_DEFINITIONS USE_HTTP)
@@ -118,17 +125,25 @@ target_link_options(            ${CLIENT_BINARY} PRIVATE ${CLIENT_LINK_OPTIONS})
 
 set_output_dirs(${CLIENT_BINARY})
 
-if(NOT USE_RENDERER_DLOPEN)
-    target_sources(${CLIENT_BINARY} PRIVATE
-        # These are never simultaneously populated
-        ${RENDERER_GL1_BINARY_SOURCES}
-        ${RENDERER_GL2_BINARY_SOURCES})
+# Ship the headphone HRTF set next to the client binary (fs_basepath / main).
+# OMAHA-SOUND-LICENSES.txt is the binary-form notice required by libmysofa,
+# the Speex resampler, kdtree, and PFFFT. The SADIE Apache text goes with the data.
+add_custom_command(TARGET ${CLIENT_BINARY} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:${CLIENT_BINARY}>/main/sound/prom
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/main/sound
+        $<TARGET_FILE_DIR:${CLIENT_BINARY}>/main/sound
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_SOURCE_DIR}/code/thirdparty/OMAHA-SOUND-LICENSES.txt
+        $<TARGET_FILE_DIR:${CLIENT_BINARY}>/OMAHA-SOUND-LICENSES.txt
+    COMMENT "Copy sound assets and license notices"
+)
 
-    target_include_directories( ${CLIENT_BINARY} PRIVATE ${RENDERER_INCLUDE_DIRS})
-    target_compile_definitions( ${CLIENT_BINARY} PRIVATE ${RENDERER_DEFINITIONS})
-    target_compile_options(     ${CLIENT_BINARY} PRIVATE ${RENDERER_COMPILE_OPTIONS})
-    target_link_libraries(      ${CLIENT_BINARY} PRIVATE ${RENDERER_LIBRARIES})
-endif()
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/main/sound
+    DESTINATION ${INSTALL_BINDIR_FULL}/main)
+install(FILES ${CMAKE_SOURCE_DIR}/code/thirdparty/OMAHA-SOUND-LICENSES.txt
+    DESTINATION ${INSTALL_BINDIR_FULL})
 
 foreach(LIBRARY IN LISTS CLIENT_DEPLOY_LIBRARIES)
     add_custom_command(TARGET ${CLIENT_BINARY} POST_BUILD

@@ -102,6 +102,10 @@ This prevents some tricks such as `ghost walking` where a player rapidly switch 
 
 If enabled, a player can stand on another player's head without being pushed off. Defaults to `0`.
 
+### `g_splean`
+
+Set it to `1` to allow leaning in the Allied Assault single-player campaign, which the original game doesn't allow. It uses the Allied Assault multiplayer lean. Defaults to `0`. Spearhead and Breakthrough are not affected.
+
 ### `g_teamdamage`
 
 - `0` (the default): Friendly fire disabled.

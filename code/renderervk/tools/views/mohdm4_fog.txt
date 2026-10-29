@@ -1,0 +1,6 @@
+# dm/mohdm4: farplane fog (5500)
+map dm/mohdm4
+shot f4_a 632 3040 980 0 180 0
+shot f4_b 128 -2944 300 0 135 0
+shot f4_c 872 -1304 316 0 90 0
+shot f4_d 0 0 1500 20 90 0

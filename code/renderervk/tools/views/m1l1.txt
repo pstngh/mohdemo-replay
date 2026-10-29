@@ -1,0 +1,10 @@
+# m1l1 (single player, night): LOD terrain and cliffs under the africanight
+# sky, a parked truck, burning debris. The player rides a truck of the convoy
+# (which drives differently in every run, tele has no effect) until about
+# 90 s into the level, so the list waits; run it with TIMEOUT=300. The fire
+# particles are random.
+map m1l1
+set wait 90000
+shot m11_flag -2504 -4096 162 0 0 0
+shot m11_truck -2504 -4096 162 0 120 0
+shot m11_sky -2504 -4096 162 -40 60 0

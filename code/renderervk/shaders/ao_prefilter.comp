@@ -1,0 +1,157 @@
+/*
+===========================================================================
+Copyright (C) 2026 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+// ao_prefilter.comp -- the ambient occlusion's view distances (r_ao,
+// ao_common.glsl): level 0 the depth buffer's, per pixel, levels 1 to 4 each
+// texel a weighted average of the 2 x 2 below it (of 1 / d), as XeGTAO's prefilter
+// (Intel, MIT license): the nearer values lose weight past the radius, so
+// a coarse level keeps the surface behind a thin one instead of a depth
+// that is neither. The horizon search reads the coarse levels far from the
+// pixel (fewer cache misses). The view weapon (negative) is averaged only
+// where a texel has nothing else.
+// 8 x 8 invocations a workgroup, 2 x 2 pixels each (a gather of the depth
+// and one of the normals' class): 16 x 16 pixels, down to one texel of
+// level 4. One pixel an invocation (16 x 16) was a fifth slower; its
+// level 0 written in four 8 x 8 blocks (a warp's stores next to each
+// other), or without the normals' class, took the same time.
+
+#version 450
+#include "ao_common.glsl"
+
+layout( local_size_x = 8, local_size_y = 8 ) in;
+
+shared float	s_level[8 * 8];
+
+// XeGTAO's DepthMIPFilter, with the weapon left out of a texel that has
+// world in it
+float Filter( vec4 d ) {
+	bvec4 weapon = lessThan( d, vec4( 0.0 ) );
+	float radius = 0.75 * pc.ao.x;
+	float range = max( pc.ao.y * radius, 1e-4 );
+	float mul = -1.0 / range;
+	float add = radius * ( 1.0 - pc.ao.y ) / range + 1.0;
+	vec4 w;
+	float maxD;
+
+	if ( all( weapon ) ) {
+		d = -d;
+	}
+	else if ( any( weapon ) ) {
+		// the world only
+		d = mix( d, vec4( -1e30 ), weapon );
+	}
+	maxD = max( max( d.x, d.y ), max( d.z, d.w ) );
+	w = clamp( ( maxD - d ) * mul + add, 0.0, 1.0 );
+	w = mix( w, vec4( 0.0 ), lessThan( d, vec4( -1e29 ) ) );
+	// the weighted mean of 1 / d (linear across a plane in screen space,
+	// d isn't): a plane's texel is the plane at the texel's center, which
+	// gtao_main.comp samples it at; the mean of d bent a wall close to the
+	// eye toward it, and it occluded itself
+	float r = dot( w, vec4( 1.0 ) ) / max( dot( w, 1.0 / max( d, vec4( 1e-4 ) ) ), 1e-12 );
+
+	return all( weapon ) ? -r : r;
+}
+
+// the view distance of a pixel from its depth and its normal's class
+float Distance( float wz, float a ) {
+	int cls = int( a * 3.0 + 0.5 );		// TemporalClass
+	bool weapon = cls == TEMPORAL_CLASS_WEAPON;
+	float d = TemporalViewDistance( pc.view, wz, weapon );
+
+	if ( cls == TEMPORAL_CLASS_NONE || cls == TEMPORAL_CLASS_SKY ) {
+		return AoFar();
+	}
+	return weapon ? -max( d, 1e-4 ) : min( d, AoFar() );
+}
+
+void main() {
+	ivec2 size = textureSize( u_depth, 0 );
+	ivec2 local = ivec2( gl_LocalInvocationID.xy );
+	ivec2 t = ivec2( gl_GlobalInvocationID.xy );	// the texel of level 1
+	ivec2 p = t * 2;
+	vec4 d;
+	float m;
+	int i;
+
+	// the 2 x 2 pixels in a gather of the depth and one of the normals'
+	// class (order (0, 1), (1, 1), (1, 0), (0, 0); clamped at the edges)
+	vec2 uv = vec2( p + 1 ) / vec2( size );
+	vec4 wz = textureGather( u_depth, uv, 0 );
+	vec4 cls = textureGather( u_normal, uv, 3 );
+
+	d.x = Distance( wz.w, cls.w );
+	d.y = Distance( wz.z, cls.z );
+	d.z = Distance( wz.x, cls.x );
+	d.w = Distance( wz.y, cls.y );
+	if ( p.x < size.x && p.y < size.y ) {
+		imageStore( o_depth0, p, vec4( d.x ) );
+	}
+	if ( p.x + 1 < size.x && p.y < size.y ) {
+		imageStore( o_depth0, p + ivec2( 1, 0 ), vec4( d.y ) );
+	}
+	if ( p.x < size.x && p.y + 1 < size.y ) {
+		imageStore( o_depth0, p + ivec2( 0, 1 ), vec4( d.z ) );
+	}
+	if ( p.x + 1 < size.x && p.y + 1 < size.y ) {
+		imageStore( o_depth0, p + ivec2( 1, 1 ), vec4( d.w ) );
+	}
+
+	m = Filter( d );
+	if ( all( lessThan( t, max( size >> 1, ivec2( 1 ) ) ) ) ) {
+		imageStore( o_depth1, t, vec4( m ) );
+	}
+	s_level[local.y * 8 + local.x] = m;
+	barrier();
+
+	// levels 2 to 4: 4 x 4, 2 x 2, 1 texel of the workgroup
+	for ( i = 2; i <= AO_LEVELS - 1; i++ ) {
+		int n = 8 >> ( i - 1 );		// texels of the level in the workgroup, a side
+		int step = 1 << ( i - 2 );	// in s_level, between the level before's texels (level 1: every one)
+		bool inLevel = all( lessThan( local, ivec2( n ) ) );
+
+		if ( inLevel ) {
+			ivec2 s = local * 2 * step;
+			vec4 q = vec4( s_level[s.y * 8 + s.x], s_level[s.y * 8 + s.x + step],
+				s_level[( s.y + step ) * 8 + s.x], s_level[( s.y + step ) * 8 + s.x + step] );
+			ivec2 texel = ivec2( gl_WorkGroupID.xy ) * n + local;
+			ivec2 levelSize = max( size >> i, ivec2( 1 ) );
+
+			m = Filter( q );
+			if ( all( lessThan( texel, levelSize ) ) ) {
+				if ( i == 2 ) {
+					imageStore( o_depth2, texel, vec4( m ) );
+				} else if ( i == 3 ) {
+					imageStore( o_depth3, texel, vec4( m ) );
+				} else {
+					imageStore( o_depth4, texel, vec4( m ) );
+				}
+			}
+		}
+		barrier();
+		if ( inLevel ) {
+			ivec2 s = local * 2 * step;
+
+			s_level[s.y * 8 + s.x] = m;
+		}
+		barrier();
+	}
+}

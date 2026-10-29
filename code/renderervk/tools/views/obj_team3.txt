@@ -1,0 +1,11 @@
+# obj/obj_team3 (Omaha beach): the ocean (deepbluesea_runup: deformVertexes
+# flap, two blended stages each with nextBundle and tcMod scroll;
+# deepbluesea_shoreline), beach obstacles, bunkers, the d-day2 sky, LOD
+# terrain
+map obj/obj_team3
+shot o3_sea 0 -5200 -350 5 270 0
+shot o3_sea2 0 -4000 0 15 270 0
+shot o3_shore -1568 -5000 -380 25 270 0
+shot o3_beach -1024 -4224 -300 10 90 0
+shot o3_bunker -1224 1336 476 0 0 0
+shot o3_trench 129 -820 283 20 0 0

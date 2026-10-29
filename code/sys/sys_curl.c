@@ -33,9 +33,6 @@ cvar_t         *sys_curllib = NULL;
 #ifdef WIN32
 #    define DEFAULT_CURL_LIB   "libcurl.dll"
 #    define ALTERNATE_CURL_LIB "libcurl-3.dll"
-#elif defined(__APPLE__)
-#    define DEFAULT_CURL_LIB "libcurl.4.dylib"
-#    define ALTERNATE_CURL_LIB "libcurl.3.dylib"
 #else
 #    define DEFAULT_CURL_LIB   "libcurl.so.4"
 #    define ALTERNATE_CURL_LIB "libcurl.so.3"

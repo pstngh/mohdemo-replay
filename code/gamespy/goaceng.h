@@ -151,6 +151,11 @@ CallBackFnType - The type of the CallBackFn parameter (from the #define list abo
 instance - user-defined instance data (e.g. structure or object pointer) */
 GServerList	ServerListNew( const char *gamename, const char *enginename, const char *seckey, int maxconcupdates, void *CallBackFn, int CallBackFnType, void *instance);
 
+/* ServerListGetQueryStats
+--------------------------
+The servers of the current (or last) update that answered and that timed out */
+void ServerListGetQueryStats(GServerList serverlist, int *responsive, int *timedout);
+
 /* ServerListFree
 -----------------
 Free a GServerList and all internal sturctures and servers */

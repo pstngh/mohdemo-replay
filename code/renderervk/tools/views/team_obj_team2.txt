@@ -1,0 +1,19 @@
+# obj/obj_team2's views of obj_team2.txt in a team match (g_gametype 2 before the map, like hud.txt; the other
+# lists are single-player games): in multiplayer cgame registers at the load what the match would load later
+# (cg_precache, README Implementation notes, Registration at load), so the load registers more shaders
+# and images; the frames stay the same. The yard's tree sways with the game time, which a team match
+# can't pause: rarely a shot lands on another phase of it (mpo2_yard).
+set g_gametype 2
+set sv_maxclients 4
+set sv_floodProtect 0
+set set name Tester
+map obj/obj_team2
+set join_team allies
+set primarydmweapon rifle
+set wait 3000
+shot mpo2_lamp -528 944 -380 0 270 0
+shot mpo2_pipe1 688 300 40 -20 90 0
+shot mpo2_pipe2 0 420 0 20 150 0
+shot mpo2_yard 1744 2832 68 0 315 0
+shot mpo2_dusk 3072 2416 68 0 180 0
+shot mpo2_sun 2500 1500 68 -45 90 0

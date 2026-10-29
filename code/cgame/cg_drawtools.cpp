@@ -1291,100 +1291,70 @@ void CG_DrawSpectatorView()
     }
 }
 
+// The crosshair: four arms as boxes, laid out at a map load and on a resolution change, drawn in one draw
+static struct {
+    vec4_t color;
+    float  arms[4][4]; // x, y, width, height, in whole pixels
+} crosshairLayout;
+
+// a size in HUD pixels (1 to maximum), in whole screen pixels
+static int CG_CrosshairPixels(float value, float maximum)
+{
+    if (!(value >= 1.0f)) {
+        value = 1.0f; // NaN too
+    } else if (value > maximum) {
+        value = maximum;
+    }
+    return (int)(value * cgs.uiHiResScale[1] + 0.5f);
+}
+
+/*
+====================
+CG_UpdateCrosshair
+
+By default the stock image's shape (textures/hud/crosshair: arms one pixel thick and four long, a gap of three),
+in HUD pixels as it was drawn. The arms sit around a center square as wide as they are thick, the same whole
+number of pixels from it on every side, so the crosshair is symmetric at any size; the gap counts from the center.
+====================
+*/
+void CG_UpdateCrosshair(void)
+{
+    const char  *hex = cg_crosshair_color->string;
+    unsigned int rgb = 0xFFFFFF;
+    int          length, thickness, space, x0, y0;
+
+    length    = CG_CrosshairPixels(cg_crosshair_length->value, 128.0f);
+    thickness = CG_CrosshairPixels(cg_crosshair_thickness->value, 16.0f);
+    space     = Q_max(CG_CrosshairPixels(cg_crosshair_gap->value, 64.0f) - thickness / 2, 1);
+
+    hex += hex[0] == '#';
+    if (strlen(hex) == 6 && strspn(hex, "0123456789abcdefABCDEF") == 6) {
+        rgb = strtoul(hex, NULL, 16);
+    }
+    VectorSet4(crosshairLayout.color, (rgb >> 16) / 255.0f, ((rgb >> 8) & 0xFF) / 255.0f, (rgb & 0xFF) / 255.0f, 1.0f);
+
+    x0 = (cgs.glconfig.vidWidth - thickness) / 2;
+    y0 = (cgs.glconfig.vidHeight - thickness) / 2;
+    VectorSet4(crosshairLayout.arms[0], x0 - space - length, y0, length, thickness);
+    VectorSet4(crosshairLayout.arms[1], x0 + thickness + space, y0, length, thickness);
+    VectorSet4(crosshairLayout.arms[2], x0, y0 - space - length, thickness, length);
+    VectorSet4(crosshairLayout.arms[3], x0, y0 + thickness + space, thickness, length);
+}
+
 void CG_DrawCrosshair()
 {
-    centity_t *friendEnt;
-    qhandle_t  shader;
-    vec3_t     forward;
-    vec3_t     end;
-    vec3_t     mins, maxs;
-    trace_t    trace;
-    float      x, y;
-    float      width, height;
-
-    shader = (qhandle_t)0;
-
-    if (!cg_hud->integer || !ui_crosshair->integer) {
+    if (!cg_hud->integer || !ui_crosshair->integer || !cg.snap) {
         return;
     }
 
-    if (!cg.snap) {
+    // where the stock image was drawn, without its friend check (the teammate image is in Spearhead and
+    // Breakthrough only), leaving the 2D color white as it did
+    if ((cg.snap->ps.pm_flags & (PMF_NO_HUD | PMF_INTERMISSION)) || !cg.snap->ps.stats[STAT_CROSSHAIR]) {
         return;
     }
 
-    if ((cg.snap->ps.pm_flags & PMF_NO_HUD) || (cg.snap->ps.pm_flags & PMF_INTERMISSION)) {
-        return;
-    }
-
-    if (!cg.snap->ps.stats[STAT_CROSSHAIR]
-        && (!cg.snap->ps.stats[STAT_INZOOM] || cg.snap->ps.stats[STAT_INZOOM] > 30)) {
-        return;
-    }
-
-    // Fixed in OPM: R_RegisterShaderNoMip
-    //  Use R_RegisterShaderNoMip, as it's UI stuff
-
-    if (cgs.gametype != GT_FFA) {
-        AngleVectorsLeft(cg.refdefViewAngles, forward, NULL, NULL);
-
-        VectorMA(cg.refdef.vieworg, 8192, forward, end);
-        VectorClear(mins);
-        VectorClear(maxs);
-
-        CG_Trace(&trace, cg.refdef.vieworg, mins, maxs, end, 9999, MASK_SOLID, qfalse, qtrue, "CG_DrawCrosshair");
-
-        // ENTITYNUM_WORLD check added in OPM
-        if ((trace.entityNum != ENTITYNUM_NONE && trace.entityNum != ENTITYNUM_WORLD)
-            && trace.entityNum != cg.snap->ps.clientNum) {
-            int myFlags;
-
-            friendEnt = &cg_entities[trace.entityNum];
-            if (cgs.gametype != GT_SINGLE_PLAYER) {
-                myFlags = cg_entities[cg.snap->ps.clientNum].currentState.eFlags & EF_ANY_TEAM;
-            } else {
-                // the player will always be considered as an allied
-                // in single-player
-                myFlags = EF_ALLIES;
-            }
-
-            if (((myFlags & EF_ALLIES) && (friendEnt->currentState.eFlags & EF_ALLIES))
-                || ((myFlags & EF_AXIS) && (friendEnt->currentState.eFlags & EF_AXIS))) {
-                // friend
-                if (cg.snap->ps.stats[STAT_CROSSHAIR]) {
-                    shader = cgi.R_RegisterShaderNoMip(cg_crosshair_friend->string);
-                    if (!shader) {
-                        // Fixed in OPM
-                        //  Fallback to normal crosshair texture if it doesn't exist
-                        shader = cgi.R_RegisterShaderNoMip(cg_crosshair->string);
-                    }
-                }
-            } else {
-                // enemy
-                if (cg.snap->ps.stats[STAT_CROSSHAIR]) {
-                    shader = cgi.R_RegisterShaderNoMip(cg_crosshair->string);
-                }
-            }
-        } else {
-            if (cg.snap->ps.stats[STAT_CROSSHAIR]) {
-                shader = cgi.R_RegisterShaderNoMip(cg_crosshair->string);
-            }
-        }
-    } else {
-        // FFA
-        if (cg.snap->ps.stats[STAT_CROSSHAIR]) {
-            shader = cgi.R_RegisterShaderNoMip(cg_crosshair->string);
-        }
-    }
-
-    if (shader) {
-        width  = cgi.R_GetShaderWidth(shader) * cgs.uiHiResScale[0];
-        height = cgi.R_GetShaderHeight(shader) * cgs.uiHiResScale[1];
-        x      = (cgs.glconfig.vidWidth - width) * 0.5f;
-        y      = (cgs.glconfig.vidHeight - height) * 0.5f;
-
-        cgi.R_SetColor(NULL);
-        cgi.R_DrawStretchPic(x, y, width, height, 0, 0, 1, 1, shader);
-    }
+    cgi.R_SetColor(NULL);
+    cgi.R_DrawBoxes(crosshairLayout.arms, 4, crosshairLayout.color);
 }
 
 void CG_DrawVote()

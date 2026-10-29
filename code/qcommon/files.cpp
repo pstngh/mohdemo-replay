@@ -239,10 +239,14 @@ typedef struct {
 	fileInPack_t*	buildBuffer;				// buffer with the filenames etc.
 } pack_t;
 
+// the names in a search directory (FS_DirMayHave)
+typedef struct dirNames_s dirNames_t;
+
 typedef struct {
     char		path[MAX_OSPATH];		// c:\quake3
     char		fullpath[MAX_OSPATH];		// c:\quake3\baseq3
 	char		gamedir[MAX_OSPATH];	// baseq3
+	dirNames_t	*names;
 } directory_t;
 
 typedef struct searchpath_s {
@@ -667,6 +671,175 @@ char *FS_BaseDir_BuildOSPath( const char *base, const char *qpath ) {
 	ospath[strlen(ospath) - 1] = '\0';
 
 	return ospath;
+}
+
+#ifndef _WIN32
+struct dirNames_s {
+	qboolean		listed;
+	dev_t			dev;
+	ino_t			ino;
+	struct timespec	mtime;
+	int				numNames;
+	char			**names;			// lower case, sorted, the strings after the pointers
+};
+
+static cvar_t *fs_listDirs;
+
+#ifdef __APPLE__
+#	define FS_MTIME( st ) ( ( st ).st_mtimespec )
+#else
+#	define FS_MTIME( st ) ( ( st ).st_mtim )
+#endif
+
+static int FS_CompareNames( const void *a, const void *b ) {
+	return strcmp( *(const char **)a, *(const char **)b );
+}
+
+/*
+===================
+FS_ListDirNames
+
+The names in the directory (readdir's, "." and ".." too), lower case and sorted
+===================
+*/
+static qboolean FS_ListDirNames( dirNames_t *names, const char *ospath ) {
+	DIR				*dir;
+	struct dirent	*ent;
+	int				numNames, size, n;
+	char			*s;
+
+	if ( names->names ) {
+		Z_Free( names->names );
+		names->names = NULL;
+	}
+	names->numNames = 0;
+
+	dir = opendir( ospath );
+	if ( !dir ) {
+		return qfalse;
+	}
+
+	numNames = 0;
+	size = 0;
+	while ( ( ent = readdir( dir ) ) != NULL ) {
+		numNames++;
+		size += strlen( ent->d_name ) + 1;
+		if ( numNames > 65536 ) {
+			closedir( dir );
+			return qfalse;
+		}
+	}
+
+	names->names = (char **)Z_Malloc( numNames * sizeof( char * ) + size );
+	s = (char *)( names->names + numNames );
+	rewinddir( dir );
+	for ( n = 0; n < numNames && ( ent = readdir( dir ) ) != NULL; n++ ) {
+		int len = strlen( ent->d_name ) + 1;
+
+		if ( s + len > (char *)( names->names + numNames ) + size ) {
+			// it changed meanwhile
+			break;
+		}
+		memcpy( s, ent->d_name, len );
+		Q_strlwr( s );
+		names->names[n] = s;
+		s += len;
+	}
+	closedir( dir );
+
+	if ( n < numNames ) {
+		Z_Free( names->names );
+		names->names = NULL;
+		return qfalse;
+	}
+
+	qsort( names->names, numNames, sizeof( char * ), FS_CompareNames );
+	names->numNames = numNames;
+	return qtrue;
+}
+
+/*
+===================
+FS_DirMayHave
+
+qfalse when a lookup of the file in the search directory can't find it: the
+first name of its path isn't in the directory under any case, so neither the
+path nor what FS_CorrectCase would make of it exists. Answered from a
+listing of the directory kept while its modification time stays the same
+(one stat), instead of FS_CorrectCase's access() of every component of the
+path, its listing of the deepest directory that exists and a failed fopen:
+a file that only a pk3 has made that in every search directory before it,
+twice for an image (its .jpg is looked for first). A listing of a directory
+changed less than 2 seconds before isn't kept (a change within the
+timestamp's granularity could keep the same time).
+===================
+*/
+static qboolean FS_DirMayHave( directory_t *dir, const char *filename ) {
+	char			ospath[MAX_OSPATH];
+	char			first[MAX_QPATH];
+	const char		*key;
+	struct stat		st;
+	struct timespec	now;
+	dirNames_t		*names;
+	int				i;
+
+	if ( !fs_listDirs || !fs_listDirs->integer ) {
+		return qtrue;
+	}
+
+	for ( i = 0; filename[i] && filename[i] != '/' && filename[i] != '\\'; i++ ) {
+		if ( i == sizeof( first ) - 1 ) {
+			return qtrue;
+		}
+		first[i] = tolower( (unsigned char)filename[i] );
+	}
+	if ( !i ) {
+		return qtrue;
+	}
+	first[i] = 0;
+
+	// the directory as FS_BuildOSPath names it: when that doesn't exist,
+	// FS_CorrectCase may find it under another case
+	Com_sprintf( ospath, sizeof( ospath ), "%s/%s", dir->path, dir->gamedir );
+	FS_ReplaceSeparators( ospath );
+	if ( stat( ospath, &st ) || !S_ISDIR( st.st_mode ) ) {
+		return qtrue;
+	}
+
+	if ( !dir->names ) {
+		dir->names = (dirNames_t *)Z_Malloc( sizeof( *dir->names ) );
+	}
+	names = dir->names;
+
+	if ( !names->listed || names->dev != st.st_dev || names->ino != st.st_ino
+		|| names->mtime.tv_sec != FS_MTIME( st ).tv_sec || names->mtime.tv_nsec != FS_MTIME( st ).tv_nsec ) {
+		names->listed = qfalse;
+		clock_gettime( CLOCK_REALTIME, &now );
+		if ( now.tv_sec - FS_MTIME( st ).tv_sec < 2 || !FS_ListDirNames( names, ospath ) ) {
+			return qtrue;
+		}
+		names->listed = qtrue;
+		names->dev = st.st_dev;
+		names->ino = st.st_ino;
+		names->mtime = FS_MTIME( st );
+	}
+
+	key = first;
+	return bsearch( &key, names->names, names->numNames, sizeof( char * ), FS_CompareNames ) != NULL;
+}
+#endif
+
+static void FS_FreeDirNames( directory_t *dir ) {
+	if ( !dir->names ) {
+		return;
+	}
+#ifndef _WIN32
+	if ( dir->names->names ) {
+		Z_Free( dir->names->names );
+	}
+#endif
+	Z_Free( dir->names );
+	dir->names = NULL;
 }
 
 
@@ -1460,6 +1633,11 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 		{
 			dir = search->dir;
 
+#ifndef _WIN32
+			if(!FS_DirMayHave(dir, filename))
+				return 0;
+#endif
+
 			netpath = FS_BuildOSPath(dir->path, dir->gamedir, filename);
 			filep = Sys_FOpen(netpath, "rb");
 
@@ -1598,6 +1776,14 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 		}
 
 		dir = search->dir;
+
+#ifndef _WIN32
+		if(!FS_DirMayHave(dir, filename))
+		{
+			*file = 0;
+			return -1;
+		}
+#endif
 
 		netpath = FS_BuildOSPath(dir->path, dir->gamedir, filename);
 		filep = Sys_FOpen(netpath, "rb");
@@ -3518,6 +3704,8 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring ) {
 	return qfalse; // We have them all
 }
 
+void ( *fs_shutdownHook )( void ) = NULL;
+
 /*
 ================
 FS_Shutdown
@@ -3528,6 +3716,10 @@ Frees all resources.
 void FS_Shutdown( qboolean closemfp ) {
 	searchpath_t	*p, *next;
 	int	i;
+
+	if ( fs_shutdownHook ) {
+		fs_shutdownHook();
+	}
 
 	for(i = 0; i < MAX_FILE_HANDLES; i++) {
 		if (fsh[i].fileSize) {
@@ -3545,6 +3737,7 @@ void FS_Shutdown( qboolean closemfp ) {
 			Z_Free( p->pack );
 		}
 		if ( p->dir ) {
+			FS_FreeDirNames( p->dir );
 			Z_Free( p->dir );
 		}
 		Z_Free( p );
@@ -3679,6 +3872,9 @@ static void FS_Startup(const char* gameName)
 	Com_Printf( "----- FS_Startup -----\n" );
 
 	fs_debug = Cvar_Get( "fs_debug", "0", 0 );
+#ifndef _WIN32
+	fs_listDirs = Cvar_Get( "fs_listDirs", "1", 0 );
+#endif
 	fs_basepath = Cvar_Get("fs_basepath", Sys_DefaultInstallPath(), CVAR_INIT | CVAR_PROTECTED);
 	fs_basegame = Cvar_Get ("fs_basegame", "", CVAR_INIT );
 	fs_homeconfigpath = Cvar_Get ("fs_homeconfigpath", configPath, CVAR_INIT|CVAR_PROTECTED );

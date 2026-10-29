@@ -546,13 +546,14 @@ Returns the Z component of the surface being shadowed
 
 qboolean CG_EntityShadow(centity_t *cent, refEntity_t *model)
 {
-    int     iTagL, iTagR;
-    float   alpha;
-    float   fWidth;
-    vec3_t  end;
-    vec3_t  vMins, vMaxs;
-    vec3_t  vSize;
-    trace_t trace;
+    int            iTagL, iTagR;
+    float          alpha;
+    float          fWidth;
+    vec3_t         end;
+    vec3_t         vMins, vMaxs;
+    vec3_t         vSize;
+    trace_t        trace;
+    shadowTrace_t *shadowTrace;
 
     iTagR = -1;
 
@@ -589,11 +590,26 @@ qboolean CG_EntityShadow(centity_t *cent, refEntity_t *model)
         }
     }
 
-    // send a trace down from the player to the ground
-    VectorCopy(model->origin, end);
-    end[2] -= SHADOW_DISTANCE;
+    // send a trace down from the player to the ground; it only meets the
+    // world, so it is the same as long as the origin is
+    shadowTrace = NULL;
+    if (cent->currentState.number >= 0 && cent->currentState.number < MAX_GENTITIES) {
+        shadowTrace = &cg.shadowTraces[cent->currentState.number];
+    }
+    if (shadowTrace && shadowTrace->valid && VectorCompare(shadowTrace->origin, model->origin)) {
+        trace = shadowTrace->trace;
+    } else {
+        VectorCopy(model->origin, end);
+        end[2] -= SHADOW_DISTANCE;
 
-    cgi.CM_BoxTrace(&trace, model->origin, end, vec3_origin, vec3_origin, 0, MASK_PLAYERSOLID, qfalse);
+        cgi.CM_BoxTrace(&trace, model->origin, end, vec3_origin, vec3_origin, 0, MASK_PLAYERSOLID, qfalse);
+
+        if (shadowTrace) {
+            shadowTrace->valid = qtrue;
+            VectorCopy(model->origin, shadowTrace->origin);
+            shadowTrace->trace = trace;
+        }
+    }
 
     // no shadow if too high
     if (trace.fraction == 1.0) {

@@ -1,0 +1,4 @@
+# m2l3: fog set by the level script
+map m2l3
+shot fm2_a 300 5562 -140 0 180 0
+shot fm2_b 400 6060 -150 0 -90 0

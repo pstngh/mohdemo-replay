@@ -1,0 +1,280 @@
+/*
+===========================================================================
+Copyright (C) 2026 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+// gtao_main.comp -- ground truth ambient occlusion (r_ao, ao_common.glsl):
+// Jimenez, Wu, Pesce, Jarabo, "Practical Real-Time Strategies for Accurate
+// Indirect Occlusion" (2016), as Intel's XeGTAO (MIT license) does it.
+// For each of SLICES slices (planes through the view vector, rotated by
+// a noise that changes every pixel and every frame) the highest horizon on
+// both sides within the radius, from STEPS depth samples a side spread
+// toward the pixel (squared), coarser levels of the view distances farther
+// away; then the visible part of the hemisphere above the normal projected
+// into the slice, cosine weighted, analytically. Samples farther than the
+// radius fade to the lowest horizon (the falloff), and a thin occluder
+// compensation lets them fade sooner along the view axis.
+// The result is noisy: ao_temporal.comp blends it over frames and
+// ao_denoise.comp blurs it within the depth edges.
+
+#version 450
+#include "ao_common.glsl"
+
+layout( local_size_x = 8, local_size_y = 8 ) in;
+
+// slices and steps a side (r_aoQuality, VK_TemporalAoMainPipeline):
+// specialization constants, so the loops unroll and the depth fetches of a
+// slice go out together (from the push constants they took a fifth longer)
+layout( constant_id = 0 ) const int SLICES = 3;
+layout( constant_id = 1 ) const int STEPS = 3;
+
+const float PI = 3.1415926535897932;
+const float HALF_PI = 1.5707963267948966;
+// the samples' distribution toward the pixel: XeGTAO's power 2 (s * s)
+const float LEVEL_OFFSET = 3.3;			// log2 of the sample's distance in pixels, less this: its level
+const float PIXEL_TOO_CLOSE = 1.3;		// pixels: the first sample at least this far
+
+// acos, a few ULP off: the shader spends most of its arithmetic here
+float FastAcos( float x ) {
+	float a = abs( x );
+	float r = -0.156583 * a + HALF_PI;
+
+	r *= sqrt( max( 1.0 - a, 0.0 ) );
+	return x >= 0.0 ? r : PI - r;
+}
+
+// XeGTAO's spatio-temporal noise: the pixel's index on a 64 x 64 Hilbert
+// curve, then the R2 sequence (so neighbouring pixels' slices differ the
+// most), shifted with the frame
+uint HilbertIndex( uint x, uint y ) {
+	uint index = 0u;
+
+	for ( uint level = 32u; level > 0u; level >>= 1u ) {
+		uint rx = ( x & level ) > 0u ? 1u : 0u;
+		uint ry = ( y & level ) > 0u ? 1u : 0u;
+
+		index += level * level * ( ( 3u * rx ) ^ ry );
+		if ( ry == 0u ) {
+			if ( rx == 1u ) {
+				x = 63u - x;
+				y = 63u - y;
+			}
+			uint tmp = x;
+			x = y;
+			y = tmp;
+		}
+	}
+	return index;
+}
+
+vec2 Noise( ivec2 p ) {
+	uint index = HilbertIndex( uint( p.x ) & 63u, uint( p.y ) & 63u ) + 288u * ( uint( pc.ints.z ) & 63u );
+
+	return fract( 0.5 + float( index ) * vec2( 0.75487766624669276005, 0.5698402909980532659114 ) );
+}
+
+void main() {
+	ivec2 lo = pc.view.rect.xy;
+	ivec2 hi = pc.view.rect.xy + pc.view.rect.zw - 1;
+	ivec2 p = lo + ivec2( gl_GlobalInvocationID.xy );
+	vec2 fbSize = vec2( textureSize( u_aoDepth, 0 ) );
+	vec2 pixel = vec2( p ) + 0.5;
+	float sd, z, zl, zr, zt, zb;
+	bool weapon;
+
+	if ( any( greaterThan( p, hi ) ) ) {
+		return;
+	}
+
+	// the pixel and its 4 neighbours in 2 gathers (at the corners p and
+	// p + 1: (L, C, T, TL) and (B, BR, R, C))
+	vec4 g0 = textureGather( u_aoDepth, vec2( p ) / fbSize, 0 );
+	vec4 g1 = textureGather( u_aoDepth, vec2( p + 1 ) / fbSize, 0 );
+
+	sd = g0.y;
+	zl = g0.x;
+	zt = g0.z;
+	zr = g1.z;
+	zb = g1.x;
+
+	weapon = sd < 0.0;
+	z = abs( sd );
+	if ( AoIsFar( z ) ) {
+		imageStore( o_raw, p, vec4( 1.0 ) );
+		return;
+	}
+
+	// TemporalViewPosition as x = (pixel * mul + add) * d: the same for every
+	// sample of the pixel, without its divisions
+	vec2 posMul = vec2( 2.0 / ( float( pc.view.rect.z ) * pc.view.proj.x ), -2.0 / ( float( pc.view.rect.w ) * pc.view.proj.y ) );
+	vec2 posAdd = vec2( ( -2.0 * float( pc.view.rect.x ) / float( pc.view.rect.z ) - 1.0 - pc.view.params.x + pc.view.proj.z ) / pc.view.proj.x,
+		( 2.0 * float( pc.view.rect.y ) / float( pc.view.rect.w ) + 1.0 - pc.view.params.y + pc.view.proj.w ) / pc.view.proj.y );
+	vec3 pos = vec3( ( pixel * posMul + posAdd ) * z, -z );
+	vec3 viewVec = normalize( -pos );
+	// the normal of the depth (the horizons are searched in it): of the
+	// neighbours the nearer in depth, so the weapon's edge has its own.
+	// With r_aoNormals 1 the draw's where it is within about 25 degrees
+	// of it: models often smooth their normals across hard corners (a
+	// desk's box), which the depth doesn't have: those would occlude
+	// themselves
+	vec3 normal;
+	{
+		// TemporalDerivedNormal with the mapping above
+		float al = abs( zl ), ar = abs( zr ), at = abs( zt ), ab = abs( zb );
+		vec3 ex = abs( al - z ) < abs( ar - z ) ? pos - vec3( ( ( pixel - vec2( 1.0, 0.0 ) ) * posMul + posAdd ) * al, -al )
+			: vec3( ( ( pixel + vec2( 1.0, 0.0 ) ) * posMul + posAdd ) * ar, -ar ) - pos;
+		vec3 ey = abs( at - z ) < abs( ab - z ) ? pos - vec3( ( ( pixel - vec2( 0.0, 1.0 ) ) * posMul + posAdd ) * at, -at )
+			: vec3( ( ( pixel + vec2( 0.0, 1.0 ) ) * posMul + posAdd ) * ab, -ab ) - pos;
+		vec3 n = cross( ey, ex );
+		float len = dot( n, n );
+
+		normal = len < 1e-20 ? vec3( 0.0, 0.0, 1.0 ) : n * inversesqrt( len );
+		normal = dot( normal, pos ) > 0.0 ? -normal : normal;
+	}
+
+	if ( pc.fogParams.z != 0.0 ) {
+		vec4 nb = texelFetch( u_normal, p, 0 );
+
+		if ( ( TemporalFlags( nb ) & TEMPORAL_FLAG_NORMAL ) != 0u ) {
+			vec3 drawn = TemporalOctDecode( nb.rg );
+
+			if ( dot( drawn, normal ) > 0.9 ) {
+				normal = drawn;
+			}
+		}
+	}
+	// a normal facing away from the eye (interpolated across a silhouette)
+	// would see nothing
+	if ( dot( normal, viewVec ) < 0.0 ) {
+		normal = normalize( normal - viewVec * ( dot( normal, viewVec ) - 0.01 ) );
+	}
+
+	float radius = pc.ao.x;
+	float falloffRange = max( pc.ao.y * radius, 1e-4 );
+	float falloffMul = -1.0 / falloffRange;
+	float falloffAdd = radius * ( 1.0 - pc.ao.y ) / falloffRange + 1.0;
+	float thin = pc.ao.z;
+
+	// the radius in pixels, at the pixel's distance
+	float pixelSize = 2.0 * z / ( pc.view.proj.x * float( pc.view.rect.z ) );
+	float screenRadius = radius / pixelSize;
+	float minS = PIXEL_TOO_CLOSE / screenRadius;
+	const int slices = SLICES;
+	const int steps = STEPS;
+	vec2 noise = Noise( p );
+	float visibility = 0.0;
+
+	// less occlusion when the radius covers only a few pixels (far away):
+	// too few samples to tell
+	visibility += clamp( ( 10.0 - screenRadius ) / 100.0, 0.0, 1.0 ) * 0.5;
+
+	// the slices' angles (slice + noise) / slices * pi: the first one's
+	// cosine and sine, then a rotation by pi / slices each
+	float phi0 = noise.x / float( slices ) * PI;
+	vec2 cs = vec2( cos( phi0 ), sin( phi0 ) );
+	const vec2 rot = vec2( cos( PI / float( SLICES ) ), sin( PI / float( SLICES ) ) );
+
+	for ( int slice = 0; slice < slices; slice++ ) {
+		float cosPhi = cs.x, sinPhi = cs.y;
+
+		cs = vec2( cs.x * rot.x - cs.y * rot.y, cs.x * rot.y + cs.y * rot.x );
+		// framebuffer y goes down, view space y up
+		vec2 omega = vec2( cosPhi, -sinPhi ) * screenRadius;
+		vec3 dirVec = vec3( cosPhi, sinPhi, 0.0 );
+		vec3 orthoDir = dirVec - dot( dirVec, viewVec ) * viewVec;
+		vec3 axis = normalize( cross( orthoDir, viewVec ) );
+		vec3 projNormal = normal - axis * dot( normal, axis );
+		float projLen = length( projNormal );
+		float signN = sign( dot( orthoDir, projNormal ) );
+		float cosN = clamp( dot( projNormal, viewVec ) / max( projLen, 1e-6 ), 0.0, 1.0 );
+		float n = signN * FastAcos( cosN );
+		float sinN = signN * sqrt( max( 1.0 - cosN * cosN, 0.0 ) );	// sin( n )
+		float lowCos0 = -sinN;		// cos( n + pi / 2 )
+		float lowCos1 = sinN;		// cos( n - pi / 2 )
+		float horizonCos0 = lowCos0;
+		float horizonCos1 = lowCos1;
+
+		for ( int step = 0; step < steps; step++ ) {
+			float stepNoise = fract( noise.y + float( slice + step * steps ) * 0.6180339887498948 );
+			float s = ( float( step ) + stepNoise ) / float( steps );
+			vec2 offset;
+			float level;
+
+			s = s * s + minS;		// SAMPLE_POWER 2
+			offset = s * omega;
+			level = clamp( 0.5 * log2( dot( offset, offset ) ) - LEVEL_OFFSET, 0.0, float( AO_LEVELS - 1 ) );
+			offset = round( offset );
+			int l = int( level + 0.5 );
+
+			for ( int side = 0; side < 2; side++ ) {
+				vec2 sp = pixel + ( side == 0 ? offset : -offset );
+				float sdist, shc;
+
+				// off the view: nothing known there. Clamped to its edge the
+				// sample left the slice, and a point of the same flat wall
+				// beside the slice can be above the slice's horizon: close to
+				// a wall (the radius thousands of pixels) it went dark
+				if ( any( lessThan( sp, vec2( lo ) ) ) || any( greaterThanEqual( sp, vec2( hi + 1 ) ) ) ) {
+					continue;
+				}
+				// a texel of a coarse level is its pixels' surface at its
+				// center (ao_prefilter.comp): the sample is there. At the
+				// sample's own pixel, up to 8 pixels off, a wall at a
+				// grazing angle close to the eye occluded itself
+				ivec2 texel = min( ivec2( sp ) >> l, max( ivec2( fbSize ) >> l, ivec2( 1 ) ) - 1 );
+
+				sdist = texelFetch( u_aoDepth, texel, l ).r;
+				sp = l == 0 ? sp : ( vec2( texel ) + 0.5 ) * float( 1 << l );
+				// the weapon and the world don't occlude each other
+				if ( ( sdist < 0.0 ) != weapon ) {
+					continue;
+				}
+				float sz = abs( sdist );
+				vec3 delta = vec3( ( sp * posMul + posAdd ) * sz, -sz ) - pos;
+				// the thin occluder compensation: what is in front along
+				// the view axis fades out sooner
+				float falloffBase = length( vec3( delta.xy, delta.z * ( 1.0 + thin ) ) );
+				float weight = clamp( falloffBase * falloffMul + falloffAdd, 0.0, 1.0 );
+
+				shc = dot( delta, viewVec ) * inversesqrt( max( dot( delta, delta ), 1e-12 ) );
+				if ( side == 0 ) {
+					horizonCos0 = max( horizonCos0, mix( lowCos0, shc, weight ) );
+				} else {
+					horizonCos1 = max( horizonCos1, mix( lowCos1, shc, weight ) );
+				}
+			}
+		}
+
+		// the visible arc on both sides of the normal, cosine weighted
+		projLen = mix( projLen, 1.0, 0.05 );
+		float h0 = -FastAcos( horizonCos1 );
+		float h1 = FastAcos( horizonCos0 );
+
+		h0 = n + clamp( h0 - n, -HALF_PI, HALF_PI );
+		h1 = n + clamp( h1 - n, -HALF_PI, HALF_PI );
+		float iarc0 = ( cosN + 2.0 * h0 * sinN - cos( 2.0 * h0 - n ) ) / 4.0;
+		float iarc1 = ( cosN + 2.0 * h1 * sinN - cos( 2.0 * h1 - n ) ) / 4.0;
+
+		visibility += projLen * ( iarc0 + iarc1 );
+	}
+	visibility = clamp( visibility / float( slices ), 0.03, 1.0 );
+
+	imageStore( o_raw, p, vec4( visibility ) );
+}

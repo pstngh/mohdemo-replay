@@ -1,0 +1,9 @@
+# m5l1a (single player, village): farplane fog 3500, the m5l2 sky box, LOD
+# terrain, stone walls and trees
+map m5l1a
+shot m51_road 4968 -5056 44 0 135 0
+shot m51_wall 4968 -5056 44 0 255 0
+shot m51_gate 4968 -5056 44 0 15 0
+shot m51_sky 4968 -5056 44 -40 135 0
+shot m51_village 1504 -2664 350 20 0 0
+shot m51_village2 1504 -2664 350 20 180 0

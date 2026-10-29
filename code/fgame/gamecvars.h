@@ -355,6 +355,11 @@ extern cvar_t *g_navigation_legacy;
 
 extern cvar_t *g_door_reopen_blocked;
 
+/**
+ * @brief When enabled, players can lean in Allied Assault single-player.
+ */
+extern cvar_t *g_splean;
+
 void CVAR_Init(void);
 
 #ifdef __cplusplus

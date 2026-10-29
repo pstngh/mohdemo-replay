@@ -1,0 +1,268 @@
+/*
+===========================================================================
+Copyright (C) 2026 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+// taa_resolve.comp -- temporal anti-aliasing (r_taa, vk_temporal.c): this
+// frame's jittered scene blended with the last frame's result, which is
+// moved to where its surfaces are now.
+//  - the motion of a pixel is that of the nearest surface of the 3 x 3
+//    around it (so the edges of what moves carry its motion): the draw's
+//    motion vector where it moves, else the camera's (temporal_common.glsl)
+//  - this frame's color of the pixel is made at its center from the 3 x 3
+//    around it: each pixel's sample is off its center by the jitter (a
+//    different spot each frame), so taken as it is, the jitter shows
+//    through the blend as shimmering edges; weighted by their distance to
+//    the center (a Gaussian close to Blackman-Harris) the samples give a
+//    value that doesn't move
+//  - the history is read with a Catmull-Rom filter (5 bilinear taps) and
+//    clipped to the colors around the pixel (YCoCg, mean +- the deviation),
+//    which rejects what the history has that this frame doesn't show
+//  - where the last frame's depth pyramid is there, a surface that the last
+//    frame didn't see there (it was hidden, or the weapon was in front of it)
+//    takes no history
+//  - the blend weights are divided by 1 + luma, so a bright pixel that comes
+//    and goes doesn't flicker
+// A workgroup loads the colors and view distances of its 16 x 16 pixels and
+// the pixels around them (18 x 18) into shared memory once: fetched by
+// every pixel of the 3 x 3 the pass took a quarter longer, with 8 x 8
+// workgroups (10 x 10: more pixels loaded twice) 5 % longer.
+// The result (unsharpened: it is the next frame's history) is written to
+// u_out; temporal_composite.frag sharpens it with r_taaSharpen. When no pass
+// makes this frame's depth pyramid (the anti-aliasing is its only reader)
+// the workgroups make its level 0 from their view distances (u_level0).
+// This frame's color is weighted on the CPU (pc.weights: the jitter is the
+// same for every pixel; per pixel the weights took a tenth of the pass).
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "temporal_common.glsl"
+
+#define GROUP	16	// VK_TEMPORAL_TAA_GROUP
+#define TILE	( GROUP + 2 )	// the workgroup's pixels and one more around them
+
+layout( local_size_x = GROUP, local_size_y = GROUP ) in;
+
+shared vec4		s_tile[TILE * TILE];		// YCoCg, the view distance (negative for the view weapon): one read a pixel
+
+layout( set = 0, binding = 0 ) uniform sampler2D u_color;		// this frame's scene, jittered
+layout( set = 0, binding = 1 ) uniform sampler2D u_velocity;
+layout( set = 0, binding = 2 ) uniform sampler2D u_normal;
+layout( set = 0, binding = 3 ) uniform sampler2D u_depth;
+layout( set = 0, binding = 4 ) uniform sampler2D u_history;	// the last frame's result, bilinear
+layout( set = 0, binding = 5 ) uniform sampler2D u_prevHiz;	// the last frame's depth pyramid
+layout( set = 0, binding = 6, rgba16f ) uniform writeonly image2D u_out;
+layout( set = 0, binding = 7, rg32f ) uniform writeonly image2D u_level0;	// this frame's depth pyramid's, when pc.params.w is 1
+
+layout( push_constant ) uniform Push {
+	TemporalView	view;
+	ivec4	rect;		// the scene's views: x, y, width, height in framebuffer pixels
+	vec4	params;		// the history's weight (r_taaFeedback), 1: the history is the frame before's, 1: so is the pyramid, 1: make level 0 of this frame's
+	vec4	weights[3];	// of the 3 x 3 for this frame's color at the pixel's center (VK_TemporalConsumers: from the jitter, normalized)
+} pc;
+
+vec3 ToYCoCg( vec3 c ) {
+	return vec3( 0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b );
+}
+
+vec3 FromYCoCg( vec3 c ) {
+	return vec3( c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z );
+}
+
+float Luma( vec3 c ) {
+	return dot( c, vec3( 0.299, 0.587, 0.114 ) );
+}
+
+// the history at uv: Catmull-Rom, its 4 x 4 taps in 5 bilinear ones (the
+// corners left out)
+vec3 SampleHistory( vec2 uv, vec2 size ) {
+	vec2 pos = uv * size;
+	vec2 t1 = floor( pos - 0.5 ) + 0.5;
+	vec2 f = pos - t1;
+	vec2 w0 = f * ( -0.5 + f * ( 1.0 - 0.5 * f ) );
+	vec2 w1 = 1.0 + f * f * ( -2.5 + 1.5 * f );
+	vec2 w2 = f * ( 0.5 + f * ( 2.0 - 1.5 * f ) );
+	vec2 w3 = f * f * ( -0.5 + 0.5 * f );
+	vec2 w12 = w1 + w2;
+	vec2 p0 = ( t1 - 1.0 ) / size;
+	vec2 p3 = ( t1 + 2.0 ) / size;
+	vec2 p12 = ( t1 + w2 / w12 ) / size;
+	float wa = w12.x * w0.y, wb = w0.x * w12.y, wc = w12.x * w12.y, wd = w3.x * w12.y, we = w12.x * w3.y;
+	vec3 c = textureLod( u_history, vec2( p12.x, p0.y ), 0.0 ).rgb * wa
+		+ textureLod( u_history, vec2( p0.x, p12.y ), 0.0 ).rgb * wb
+		+ textureLod( u_history, p12, 0.0 ).rgb * wc
+		+ textureLod( u_history, vec2( p3.x, p12.y ), 0.0 ).rgb * wd
+		+ textureLod( u_history, vec2( p12.x, p3.y ), 0.0 ).rgb * we;
+
+	return max( c / ( wa + wb + wc + wd + we ), vec3( 0.0 ) );
+}
+
+// p moved toward the box's center until it is inside it
+vec3 ClipToBox( vec3 lo, vec3 hi, vec3 p ) {
+	vec3 center = 0.5 * ( hi + lo );
+	vec3 extent = 0.5 * ( hi - lo ) + 1e-5;
+	vec3 r = p - center;
+	vec3 q = abs( r ) / extent;
+	float m = max( q.x, max( q.y, q.z ) );
+
+	return m > 1.0 ? center + r / m : p;
+}
+
+void main() {
+	ivec2 lo = pc.rect.xy;
+	ivec2 hi = pc.rect.xy + pc.rect.zw - 1;
+	ivec2 base = lo + ivec2( gl_WorkGroupID.xy ) * GROUP - 1;
+	ivec2 local = ivec2( gl_LocalInvocationID.xy );
+	ivec2 p = lo + ivec2( gl_GlobalInvocationID.xy );
+	vec2 size = vec2( textureSize( u_color, 0 ) );
+	vec3 sum = vec3( 0.0 ), sum2 = vec3( 0.0 ), cmin = vec3( 1e9 ), cmax = vec3( -1e9 ), filtered = vec3( 0.0 ), cur;
+	float nearest = 1e30;
+	ivec2 nearestPixel = p;
+	bool nearestWeapon = false;
+	int i, x, y;
+
+	// the tile, clamped to the views (pixels outside them repeat the edge)
+	for ( i = int( gl_LocalInvocationIndex ); i < TILE * TILE; i += GROUP * GROUP ) {
+		ivec2 q = clamp( base + ivec2( i % TILE, i / TILE ), lo, hi );
+		bool weapon = TemporalClass( texelFetch( u_normal, q, 0 ) ) == TEMPORAL_CLASS_WEAPON;
+		float d = TemporalViewDistance( pc.view, texelFetch( u_depth, q, 0 ).r, weapon );
+
+		s_tile[i] = vec4( ToYCoCg( texelFetch( u_color, q, 0 ).rgb ), weapon ? -max( d, 1e-6 ) : d );
+	}
+	barrier();
+
+	// level 0 of this frame's pyramid as hiz_build.comp's PREPARE makes it:
+	// a texel the nearest and the farthest view distance of 2 x 2 pixels (3
+	// on the last row or column of an odd size), the weapon at the far
+	// distance (the sky is there already); 8 x 8 texels a workgroup. Only
+	// when the views cover the framebuffer: the tiles start at even pixels
+	if ( pc.params.w != 0.0 && all( lessThan( local, ivec2( GROUP / 2 ) ) ) ) {
+		ivec2 size0 = imageSize( u_level0 );
+		ivec2 t = ( base + 1 ) / 2 + local;
+
+		if ( all( lessThan( t, size0 ) ) ) {
+			ivec2 p1 = min( ivec2( t.x == size0.x - 1 ? hi.x : t.x * 2 + 1, t.y == size0.y - 1 ? hi.y : t.y * 2 + 1 ), hi );
+			vec2 range = vec2( 3.4e38, 0.0 );
+
+			for ( y = t.y * 2; y <= p1.y; y++ ) {
+				for ( x = t.x * 2; x <= p1.x; x++ ) {
+					float d = s_tile[( y - base.y ) * TILE + x - base.x].w;
+
+					d = d < 0.0 ? pc.view.depth.w : d;
+					range = vec2( min( range.x, d ), max( range.y, d ) );
+				}
+			}
+			imageStore( u_level0, t, vec4( range, 0.0, 0.0 ) );
+		}
+	}
+
+	if ( any( greaterThan( p, hi ) ) ) {
+		return;
+	}
+
+	// the colors around the pixel and its nearest surface
+	for ( y = 0; y < 3; y++ ) {
+		for ( x = 0; x < 3; x++ ) {
+			int k = ( local.y + y ) * TILE + local.x + x;
+			vec4 texel = s_tile[k];
+			vec3 ycc = texel.xyz;
+			float d = abs( texel.w );
+			int j = y * 3 + x;
+
+			filtered += ycc * pc.weights[j >> 2][j & 3];
+			sum += ycc;
+			sum2 += ycc * ycc;
+			cmin = min( cmin, ycc );
+			cmax = max( cmax, ycc );
+			if ( d < nearest ) {
+				nearest = d;
+				nearestPixel = clamp( p + ivec2( x - 1, y - 1 ), lo, hi );
+				nearestWeapon = texel.w < 0.0;
+			}
+		}
+	}
+	cur = max( FromYCoCg( filtered ), vec3( 0.0 ) );
+
+	if ( pc.params.y == 0.0 ) {
+		imageStore( u_out, p, vec4( cur, 1.0 ) );
+		return;
+	}
+
+	// where the nearest surface was in the last frame
+	vec4 n = texelFetch( u_normal, nearestPixel, 0 );
+	bool moves = ( TemporalFlags( n ) & TEMPORAL_FLAG_MOTION ) != 0u;
+	vec2 pixel = vec2( p ) + 0.5;
+	float far = pc.view.depth.w;
+	bool farSurface = nearest >= far * 0.999;
+	vec4 prevClip = vec4( 0.0, 0.0, 0.0, 1.0 );
+	vec2 motion;
+
+	if ( moves ) {
+		motion = texelFetch( u_velocity, nearestPixel, 0 ).rg;
+	} else {
+		// TemporalCameraMotion (the view has a last frame here), its last
+		// clip position kept for the depth test
+		vec2 c = vec2( nearestPixel ) + 0.5;
+
+		prevClip = pc.view.reproject * ( farSurface ? vec4( TemporalViewPosition( pc.view, c, 1.0 ), 0.0 ) : vec4( TemporalViewPosition( pc.view, c, nearest ), 1.0 ) );
+		motion = prevClip.w <= 1e-6 ? vec2( 0.0 ) : ( TemporalPixelNdc( pc.view, c ) - prevClip.xy / prevClip.w ) * vec2( 0.5, -0.5 );
+	}
+	vec2 prevPixel = pixel - motion * vec2( pc.view.rect.zw );
+
+	if ( any( lessThan( prevPixel, vec2( lo ) ) ) || any( greaterThan( prevPixel, vec2( hi + 1 ) ) ) ) {
+		imageStore( u_out, p, vec4( cur, 1.0 ) );
+		return;
+	}
+
+	// a surface that doesn't move and that the last frame's depth doesn't
+	// have around there was hidden: no history. The pyramid's level 0 holds
+	// the nearest and the farthest of 2 x 2 pixels (the weapon and the sky
+	// at the far distance); its 2 x 2 texels nearest to the point, 4 x 4
+	// pixels around it: with only the texel under it, a thin surface (a
+	// ladder's rung) was in it or not as the last frame's jitter had it,
+	// and lost its history every few frames (shimmering edges)
+	if ( pc.params.z != 0.0 && !moves && !nearestWeapon && !farSurface ) {
+		vec2 hizUv = prevPixel * 0.5 / vec2( textureSize( u_prevHiz, 0 ) );
+		vec4 mins = textureGather( u_prevHiz, hizUv, 0 );
+		vec4 maxs = textureGather( u_prevHiz, hizUv, 1 );
+		vec2 range = vec2( min( min( mins.x, mins.y ), min( mins.z, mins.w ) ), max( max( maxs.x, maxs.y ), max( maxs.z, maxs.w ) ) );
+		float tolerance = 0.03 * prevClip.w + 1.0;
+
+		if ( prevClip.w < range.x - tolerance || prevClip.w > range.y + tolerance ) {
+			imageStore( u_out, p, vec4( cur, 1.0 ) );
+			return;
+		}
+	}
+
+	// the history, clipped to what is around the pixel now
+	vec3 mean = sum / 9.0;
+	vec3 sigma = sqrt( max( sum2 / 9.0 - mean * mean, vec3( 0.0 ) ) );
+	vec3 boxLo = max( mean - sigma, cmin );
+	vec3 boxHi = min( mean + sigma, cmax );
+	vec3 history = FromYCoCg( ClipToBox( boxLo, boxHi, ToYCoCg( SampleHistory( prevPixel / size, size ) ) ) );
+
+	// less history the faster it moves: resampling it blurs
+	float speed = length( motion * vec2( pc.view.rect.zw ) );
+	float feedback = pc.params.x * ( 1.0 - clamp( speed / 64.0, 0.0, 0.25 ) );
+	float wc = ( 1.0 - feedback ) / ( 1.0 + Luma( cur ) );
+	float wh = feedback / ( 1.0 + Luma( history ) );
+
+	imageStore( u_out, p, vec4( max( ( cur * wc + history * wh ) / ( wc + wh ), vec3( 0.0 ) ), 1.0 ) );
+}

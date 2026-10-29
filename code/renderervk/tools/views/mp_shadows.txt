@@ -1,0 +1,224 @@
+# Shadows (cg_shadows, cgame) on the soldiers of mp_mohdm1.txt: the blob
+# shadows of cg_shadows 1 and the feet shadows of cg_shadows 2 (soldiers with
+# preciseshadow), seen from the eye and from above. The mark and trace caches
+# of cg_marks.c and cg_modelanim.c must give the frames of the build before.
+spmap dm/mohdm1
+set spawn script_model model player/allied_Airborne.tik targetname s1
+set spawn script_model model player/german_Wehrmacht_Soldier.tik targetname s2
+set spawn script_model model player/american_Ranger.tik targetname s3
+set spawn script_model model player/german_Elite_Sentry.tik targetname s4
+set spawn script_model model player/allied_SAS.tik targetname s5
+set spawn script_model model player/german_Panzer_Grenadier.tik targetname s6
+set spawn script_model model player/american_Army.tik targetname s7
+set spawn script_model model player/german_Waffenss_Shutze.tik targetname s8
+set spawn script_model model player/allied_Manon.tik targetname s9
+set spawn script_model model player/german_Afrika_Private.tik targetname s10
+set spawn script_model model player/allied_Pilot.tik targetname s11
+set spawn script_model model player/german_Kradshutzen.tik targetname s12
+set spawn script_model model player/allied_Airborne.tik targetname s13
+set spawn script_model model player/german_Wehrmacht_Soldier.tik targetname s14
+set spawn script_model model player/american_Ranger.tik targetname s15
+set spawn script_model model player/german_Elite_Sentry.tik targetname s16
+set spawn script_model model player/allied_SAS.tik targetname s17
+set spawn script_model model player/german_Panzer_Grenadier.tik targetname s18
+set spawn script_model model player/american_Army.tik targetname s19
+set spawn script_model model player/german_Waffenss_Shutze.tik targetname s20
+set wait 200
+set script s1 origin "720 -120 100"
+set script s1 physics_on
+set script s1 droptofloor 512
+set script s1 physics_off
+set script s1 physics_velocity "0 0 -1"
+set script s2 origin "171 17 100"
+set script s2 physics_on
+set script s2 droptofloor 512
+set script s2 physics_off
+set script s2 physics_velocity "0 0 -1"
+set script s3 origin "522 -35 100"
+set script s3 physics_on
+set script s3 droptofloor 512
+set script s3 physics_off
+set script s3 physics_velocity "0 0 -1"
+set script s4 origin "-64 -39 100"
+set script s4 physics_on
+set script s4 droptofloor 512
+set script s4 physics_off
+set script s4 physics_velocity "0 0 -1"
+set script s5 origin "302 -6 100"
+set script s5 physics_on
+set script s5 droptofloor 512
+set script s5 physics_off
+set script s5 physics_velocity "0 0 -1"
+set script s6 origin "607 -203 100"
+set script s6 physics_on
+set script s6 droptofloor 512
+set script s6 physics_off
+set script s6 physics_velocity "0 0 -1"
+set script s7 origin "71 -37 100"
+set script s7 physics_on
+set script s7 droptofloor 512
+set script s7 physics_off
+set script s7 physics_velocity "0 0 -1"
+set script s8 origin "396 -256 100"
+set script s8 physics_on
+set script s8 droptofloor 512
+set script s8 physics_off
+set script s8 physics_velocity "0 0 -1"
+set script s9 origin "-158 -128 100"
+set script s9 physics_on
+set script s9 droptofloor 512
+set script s9 physics_off
+set script s9 physics_velocity "0 0 -1"
+set script s10 origin "199 -366 100"
+set script s10 physics_on
+set script s10 droptofloor 512
+set script s10 physics_off
+set script s10 physics_velocity "0 0 -1"
+set script s11 origin "526 -233 100"
+set script s11 physics_on
+set script s11 droptofloor 512
+set script s11 physics_off
+set script s11 physics_velocity "0 0 -1"
+set script s12 origin "28 -531 100"
+set script s12 physics_on
+set script s12 droptofloor 512
+set script s12 physics_off
+set script s12 physics_velocity "0 0 -1"
+set script s13 origin "323 -318 100"
+set script s13 physics_on
+set script s13 droptofloor 512
+set script s13 physics_off
+set script s13 physics_velocity "0 0 -1"
+set script s14 origin "681 -309 100"
+set script s14 physics_on
+set script s14 droptofloor 512
+set script s14 physics_off
+set script s14 physics_velocity "0 0 -1"
+set script s15 origin "141 -459 100"
+set script s15 physics_on
+set script s15 droptofloor 512
+set script s15 physics_off
+set script s15 physics_velocity "0 0 -1"
+set script s16 origin "526 -459 100"
+set script s16 physics_on
+set script s16 droptofloor 512
+set script s16 physics_off
+set script s16 physics_velocity "0 0 -1"
+set script s17 origin "848 44 100"
+set script s17 physics_on
+set script s17 droptofloor 512
+set script s17 physics_off
+set script s17 physics_velocity "0 0 -1"
+set script s18 origin "848 -476 100"
+set script s18 physics_on
+set script s18 droptofloor 512
+set script s18 physics_off
+set script s18 physics_velocity "0 0 -1"
+set script s19 origin "931 175 100"
+set script s19 physics_on
+set script s19 droptofloor 512
+set script s19 physics_off
+set script s19 physics_velocity "0 0 -1"
+set script s20 origin "931 -607 100"
+set script s20 physics_on
+set script s20 droptofloor 512
+set script s20 physics_off
+set script s20 physics_velocity "0 0 -1"
+set wait 200
+set script s1 angle 278
+set script s1 anim smg_stand_run_fwd
+set script s1 attachmodel models/weapons/thompsonsmg.tik tag_weapon_right
+set script s2 angle 333
+set script s2 anim mp40_stand_idle
+set script s2 attachmodel models/weapons/mp40.tik tag_weapon_right
+set script s3 angle 0
+set script s3 anim rifle_crouch_idle
+set script s3 attachmodel models/weapons/m1_garand.tik tag_weapon_right
+set script s4 angle 325
+set script s4 anim rifle_stand_walk_fwd
+set script s4 attachmodel models/weapons/kar98.tik tag_weapon_right
+set script s5 angle 352
+set script s5 anim mg_stand_idle
+set script s5 attachmodel models/weapons/bar.tik tag_weapon_right
+set script s6 angle 317
+set script s6 anim mp44_stand_run_fwd
+set script s6 attachmodel models/weapons/mp44.tik tag_weapon_right
+set script s7 angle 344
+set script s7 anim rifle_stand_idle
+set script s7 attachmodel models/weapons/springfield.tik tag_weapon_right
+set script s8 angle 39
+set script s8 anim mp40_crouch_walk_fwd
+set script s8 attachmodel models/weapons/mp40.tik tag_weapon_right
+set script s9 angle 336
+set script s9 anim unarmed_stand_run_fwd
+set script s10 angle 31
+set script s10 anim pistol_stand_idle1
+set script s10 attachmodel models/weapons/colt45.tik tag_weapon_right
+set script s11 angle 328
+set script s11 anim shotgun_stand_run_fwd
+set script s11 attachmodel models/weapons/shotgun.tik tag_weapon_right
+set script s12 angle 23
+set script s12 anim bazooka_stand_idle
+set script s12 attachmodel models/weapons/bazooka.tik tag_weapon_right
+set script s13 angle 50
+set script s13 anim smg_stand_run_fwd
+set script s13 attachmodel models/weapons/thompsonsmg.tik tag_weapon_right
+set script s14 angle 15
+set script s14 anim mp40_stand_idle
+set script s14 attachmodel models/weapons/mp40.tik tag_weapon_right
+set script s15 angle 42
+set script s15 anim rifle_crouch_idle
+set script s15 attachmodel models/weapons/m1_garand.tik tag_weapon_right
+set script s16 angle 7
+set script s16 anim rifle_stand_walk_fwd
+set script s16 attachmodel models/weapons/kar98.tik tag_weapon_right
+set script s17 angle 277
+set script s17 anim mg_stand_idle
+set script s17 attachmodel models/weapons/bar.tik tag_weapon_right
+set script s18 angle 134
+set script s18 anim mp44_stand_run_fwd
+set script s18 attachmodel models/weapons/mp44.tik tag_weapon_right
+set script s19 angle 249
+set script s19 anim rifle_stand_idle
+set script s19 attachmodel models/weapons/springfield.tik tag_weapon_right
+set script s20 angle 130
+set script s20 anim mp40_crouch_walk_fwd
+set script s20 attachmodel models/weapons/mp40.tik tag_weapon_right
+set script s1 rendereffects "+shadow"
+set script s2 rendereffects "+shadow"
+set script s2 rendereffects "+preciseshadow"
+set script s3 rendereffects "+shadow"
+set script s4 rendereffects "+shadow"
+set script s4 rendereffects "+preciseshadow"
+set script s5 rendereffects "+shadow"
+set script s6 rendereffects "+shadow"
+set script s6 rendereffects "+preciseshadow"
+set script s7 rendereffects "+shadow"
+set script s8 rendereffects "+shadow"
+set script s8 rendereffects "+preciseshadow"
+set script s9 rendereffects "+shadow"
+set script s10 rendereffects "+shadow"
+set script s10 rendereffects "+preciseshadow"
+set script s11 rendereffects "+shadow"
+set script s12 rendereffects "+shadow"
+set script s12 rendereffects "+preciseshadow"
+set script s13 rendereffects "+shadow"
+set script s14 rendereffects "+shadow"
+set script s14 rendereffects "+preciseshadow"
+set script s15 rendereffects "+shadow"
+set script s16 rendereffects "+shadow"
+set script s16 rendereffects "+preciseshadow"
+set script s17 rendereffects "+shadow"
+set script s18 rendereffects "+shadow"
+set script s18 rendereffects "+preciseshadow"
+set script s19 rendereffects "+shadow"
+set script s20 rendereffects "+shadow"
+set script s20 rendereffects "+preciseshadow"
+set wait 27000
+set cg_shadows 1
+shot ps_blob 848 -216 60 0 180 0
+shot ps_blob_top 700 -216 400 60 180 0
+set cg_shadows 2
+shot ps_feet 848 -216 60 0 180 0
+shot ps_feet_top 700 -216 400 60 180 0
+set cg_shadows 0

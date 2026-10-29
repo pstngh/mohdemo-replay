@@ -1,0 +1,6 @@
+# m6l3a (single player, night): dense fog set by the level script, snowy
+# firs, huts
+map m6l3a
+shot m63_trees -6432 -6864 -418 0 150 0
+shot m63_fence -6195 -4262 -253 20 0 0
+shot m63_huts -6195 -4262 -253 20 180 0

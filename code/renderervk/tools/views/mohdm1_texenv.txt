@@ -1,0 +1,10 @@
+# dm/mohdm1 with two shaders replaced by mohdm1_texenv.shader (installed by
+# compare.sh): TEXENV_ADD from the multitexture collapse on the ground (run
+# with +set r_ext_texture_env_add 1, and 0 for the two-pass version) and from
+# nextBundle add on the walls (platestonedrktn); shaderlist shows MT(a)
+map dm/mohdm1
+set wait 4000
+set shaderlist
+shot te_a 848 -216 60 0 180 0
+shot te_b 848 -216 200 60 180 0
+shot te_c 848 -216 60 30 160 0

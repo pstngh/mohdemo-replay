@@ -1,6 +1,4 @@
-include(platforms/emscripten)
 include(platforms/linux)
-include(platforms/macos)
 include(platforms/unix)
 include(platforms/windows)
 

@@ -64,6 +64,7 @@ ctempmodel_t *ClientGameCommandManager::AllocateTempModel(void)
     p->prev                        = &m_active_tempmodels;
     m_active_tempmodels.next->prev = p;
     m_active_tempmodels.next       = p;
+    m_numActiveTempModels++;
 
     return p;
 }
@@ -87,6 +88,7 @@ void ClientGameCommandManager::FreeTempModel(ctempmodel_t *p)
     // remove from the doubly linked active list
     p->prev->next = p->next;
     p->next->prev = p->prev;
+    m_numActiveTempModels--;
 
     // the free list is only singly linked
     p->next           = m_free_tempmodels;
@@ -131,17 +133,12 @@ void ClientGameCommandManager::FreeAllTempModels(void)
 //===============
 void ClientGameCommandManager::FreeSomeTempModels(void)
 {
-    ctempmodel_t *model;
-    int           count = 0;
-    unsigned int  i;
-    unsigned int  numToFree;
+    int          count = m_numActiveTempModels;
+    unsigned int i;
+    unsigned int numToFree;
 
     if (!m_free_tempmodels) {
         return;
-    }
-
-    for (model = m_active_tempmodels.prev; model != &m_active_tempmodels; model = model->prev) {
-        count++;
     }
 
     if (cg_reserve_tempmodels->integer <= (cg_max_tempmodels->integer - count)) {
@@ -218,7 +215,8 @@ void ClientGameCommandManager::InitializeTempModels(void)
     m_active_tempmodels.next = &m_active_tempmodels;
     m_active_tempmodels.prev = &m_active_tempmodels;
 
-    m_free_tempmodels = &m_tempmodels[0];
+    m_free_tempmodels     = &m_tempmodels[0];
+    m_numActiveTempModels = 0;
 
     for (i = 0; i < numtempmodels - 1; i++) {
         m_tempmodels[i].next = &m_tempmodels[i + 1];
@@ -1073,9 +1071,7 @@ void ClientGameCommandManager::AddTempModels(void)
                 p->cgd.lightType
             );
         } else if (p->ent.reType == RT_SPRITE) {
-            vec3_t vTestAngles;
-            cgi.R_AddRefSpriteToScene(&newEnt); // Sprite
-            MatrixToEulerAngles(newEnt.axis, vTestAngles);
+            cgi.R_AddRefSpriteToScene(&newEnt);
         } else {
             cgi.R_AddRefEntityToScene(&newEnt, ENTITYNUM_NONE); // Model
         }

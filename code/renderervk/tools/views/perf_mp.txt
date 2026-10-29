@@ -1,0 +1,10 @@
+# perf.py views with players (multiplayer maps): the soldiers of the mp_*
+# view lists (20 player models, 16 of them in front of the camera), the
+# same with three scripted muzzle flash lights, and the two dm/obj views of
+# perf.txt without players for reference.
+views mp_mohdm1.txt pm1_front
+views mp_obj_team1.txt po1_front
+views mp_obj_team4.txt po4_front
+views mp_mohdm7.txt pm7_flash
+obj_team2_yard  obj/obj_team2 1744  2832   68  0 315 0
+mohdm3_overview dm/mohdm3     3000 -2400 1500 50   0 0

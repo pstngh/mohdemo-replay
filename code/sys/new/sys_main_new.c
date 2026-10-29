@@ -32,23 +32,6 @@ static void* clipboard_text = NULL;
 
 static void* game_library = NULL;
 static void* cgame_library = NULL;
-qboolean	GLimp_SpawnRenderThread(void (*function)(void))
-{
-    return qfalse;
-}
-
-void* GLimp_RendererSleep(void)
-{
-    return NULL;
-}
-
-void		GLimp_FrontEndSleep(void)
-{
-}
-
-void		GLimp_WakeRenderer(void* data)
-{
-}
 
 /*
 ==============

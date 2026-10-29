@@ -39,6 +39,10 @@ static int        cg_numTriggerEntities;
 
 // static	centity_t	*cg_triggerEntities[MAX_ENTITIES_IN_SNAPSHOT];
 
+// the last pmove result and its command (CG_PredictPlayerState)
+static playerState_t cg_lastPredicted;
+static int           cg_lastPredictedCmd = -1;
+
 /*
 ====================
 CG_BuildSolidList
@@ -402,12 +406,11 @@ static void CG_InterpolatePlayerState(qboolean grabAngles)
     CG_InterpolatePlayerStateCamera();
 
     // if we are still allowing local input, short circuit the view angles
+    // (this frame's, the commands come at cl_movefps)
     if (grabAngles) {
         usercmd_t cmd;
-        int       cmdNum;
 
-        cmdNum = cgi.GetCurrentCmdNumber();
-        cgi.GetUserCmd(cmdNum, &cmd);
+        cgi.GetViewUserCmd(&cmd);
 
         PM_UpdateViewAngles(out, &cmd);
     }
@@ -519,7 +522,9 @@ void CG_PredictPlayerState(void)
             cg_pmove.leanMax = 40.f;
         } else {
             // Don't allow lean in single-player, like in the original game
-            cg_pmove.leanMax = 0;
+            // Changed in OPM
+            //  Unless g_splean is set, as in Player::SetMoveInfo
+            cg_pmove.leanMax = cg_splean->integer ? 40.f : 0;
         }
 
         cg_pmove.leanAdd = 10.f;
@@ -622,6 +627,91 @@ void CG_PredictPlayerState(void)
 
     if (cg_showmiss->integer > 1) {
         cgi.Printf("[%i : %i] ", cg_pmove.cmd.serverTime, cg.time);
+    }
+
+    // The commands come at cl_movefps, the frames as often as they can: in the
+    // frames between commands the snapshot can have run all of them. Its
+    // playerState then lacks what isn't networked, which the pmove of the same
+    // command gave (walking: the view bob, the view model and the landing)
+    if (moved) {
+        cg_lastPredicted    = cg.predicted_player_state;
+        cg_lastPredictedCmd = current;
+    } else if (current == cg_lastPredictedCmd && !cg.thisFrameTeleport && !cg.nextFrameTeleport
+               && cg.predicted_player_state.commandTime == cg_lastPredicted.commandTime) {
+        cg.predicted_player_state.walking     = cg_lastPredicted.walking;
+        cg.predicted_player_state.groundPlane = cg_lastPredicted.groundPlane;
+        cg.predicted_player_state.groundTrace = cg_lastPredicted.groundTrace;
+    }
+
+    // The sealed commands were just replayed with stock steps. The open
+    // interval is one more stock step as long as the next command's, with
+    // the keys held now, sampled by how far server time has moved into it.
+    // The step is not sent. commandTime stays the sealed command. The next
+    // frame replays from the snapshot. cl_movefps 0 (one command per frame,
+    // stock) has no open interval.
+    if (!cg.thisFrameTeleport && !cg.nextFrameTeleport && cl_movefps->integer > 0) {
+        int            interval, elapsed, commandTime;
+        float          t, scale;
+        playerState_t  start, end;
+        usercmd_t      cmd;
+        int            i;
+
+        commandTime = cg.predicted_player_state.commandTime;
+        elapsed     = cg.time - commandTime;
+        interval    = 1000 / (int)Com_Clamp(85, 125, cl_movefps->integer);
+        if (elapsed > 0 && interval > 0) {
+            cgi.GetLiveUserCmd(&cmd);
+            // the next command's time: a shorter step with cl_movesubgrid
+            // (half of it to a shot's or a jump's command, the rest after it)
+            if (cmd.serverTime > commandTime && cmd.serverTime < commandTime + interval) {
+                interval = cmd.serverTime - commandTime;
+            }
+            if (elapsed > interval) {
+                elapsed = interval;
+            }
+
+            start = cg.predicted_player_state;
+            end   = start;
+
+            cmd.serverTime = commandTime + interval;
+            if (end.feetfalling && (cg_pmove.waterlevel < 2)) {
+                cmd.forwardmove = 0;
+                cmd.rightmove   = 0;
+            }
+
+            cg_pmove.ps  = &end;
+            cg_pmove.cmd = cmd;
+            Pmove(&cg_pmove);
+            cg_pmove.ps = &cg.predicted_player_state;
+
+            t = (float)elapsed + cgi.GetRenderTimeFraction();
+            if (t < 0.0f) {
+                t = 0.0f;
+            } else if (t > (float)interval) {
+                t = (float)interval;
+            }
+            scale = t / (float)interval;
+
+            for (i = 0; i < 3; i++) {
+                cg.predicted_player_state.origin[i] =
+                    start.origin[i] + (end.origin[i] - start.origin[i]) * scale;
+                cg.predicted_player_state.velocity[i] =
+                    start.velocity[i] + (end.velocity[i] - start.velocity[i]) * scale;
+            }
+            cg.predicted_player_state.viewheight =
+                start.viewheight + (int)((end.viewheight - start.viewheight) * scale);
+            cg.predicted_player_state.fLeanAngle =
+                start.fLeanAngle + (end.fLeanAngle - start.fLeanAngle) * scale;
+        }
+    }
+
+    // the view turns with this frame's look; the commands were predicted with
+    // the angles they were sent with
+    {
+        usercmd_t viewCmd;
+
+        cgi.GetViewUserCmd(&viewCmd);
+        PM_UpdateViewAngles(&cg.predicted_player_state, &viewCmd);
     }
 
     // interpolate the camera if necessary

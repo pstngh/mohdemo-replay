@@ -301,6 +301,11 @@ void CL_CgameError( const char *string ) {
 /*
 =====================
 CL_ConfigstringModified
+
+With cl_csAppend 1 the new text goes after the gamestate's others and the old
+one stays unused until the buffer is full, then all of them are copied again
+(compacted) as before: a round restart changes 60 to 70 configstrings in one
+frame, about 8 us each to copy the whole gamestate (53 KB) twice.
 =====================
 */
 void CL_ConfigstringModified(int index, char* s) {
@@ -318,6 +323,24 @@ void CL_ConfigstringModified(int index, char* s) {
 	old = cl.gameState.stringData + cl.gameState.stringOffsets[ index ];
 	if ( !strcmp( old, s ) ) {
 		return;		// unchanged
+	}
+
+	len = strlen( s );
+	if ( cl_csAppend->integer && len + 1 + cl.gameState.dataCount <= MAX_GAMESTATE_CHARS ) {
+		if ( !len ) {
+			// the default empty string at 0, as the copy below leaves it
+			cl.gameState.stringOffsets[ index ] = 0;
+		} else {
+			cl.gameState.stringOffsets[ index ] = cl.gameState.dataCount;
+			Com_Memcpy( cl.gameState.stringData + cl.gameState.dataCount, s, len + 1 );
+			cl.gameState.dataCount += len + 1;
+		}
+
+		if ( index == CS_SYSTEMINFO ) {
+			// parse serverId and other cvars
+			CL_SystemInfoChanged();
+		}
+		return;
 	}
 
 	// build the new gameState_t
@@ -861,6 +884,12 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->HudDrawElements			= cls.HudDrawElements;
 	cgi->anim						= &cls.anim;
 	cgi->stopWatch					= &cls.stopwatch;
+	cgi->GetViewUserCmd				= CL_GetViewUserCmd;
+	cgi->GetRenderTimeFraction		= Com_RenderTimeFraction;
+	cgi->GetLiveUserCmd				= CL_GetLiveUserCmd;
+	cgi->CM_EntityString			= CM_EntityString;
+	cgi->GetConfigString			= CL_ConfigString;
+	cgi->R_DrawBoxes				= re.DrawBoxes;
 	// FIXME
 	//cgi->pUnknownVar				= NULL;
 

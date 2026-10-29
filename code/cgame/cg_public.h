@@ -445,6 +445,27 @@ functions exported to the main executable
         clientAnim_t *anim;
         stopWatch_t  *stopWatch;
 
+        // the newest command with this frame's view angles: commands come at
+        // cl_movefps (every frame at 0), the view turns every frame
+        void (*GetViewUserCmd)(usercmd_t *ucmd);
+
+        // sub-millisecond fraction of the current server millisecond, 0..1
+        float (*GetRenderTimeFraction)(void);
+
+        // the open cl_movefps step with the keys held now, at the next
+        // command's time (at 0 the newest command, as GetViewUserCmd). Not
+        // sent.
+        void (*GetLiveUserCmd)(usercmd_t *ucmd);
+
+        // the entity lump of the map CM_LoadMap loaded
+        char *(*CM_EntityString)(void);
+
+        // one configstring of the client's gamestate
+        const char *(*GetConfigString)(int index);
+
+        // R_DrawBox for count boxes (x, y, width, height) in one draw, in the color given (the crosshair)
+        void (*R_DrawBoxes)(const float (*boxes)[4], int count, const float *color);
+
     } clientGameImport_t;
 
     /*

@@ -321,6 +321,9 @@ cvar_t *g_navigation_legacy;
 // Reopen door if blocked
 cvar_t *g_door_reopen_blocked;
 
+// Whether or not players can lean in the Allied Assault single-player campaign
+cvar_t *g_splean;
+
 void CVAR_Init(void)
 {
     int i;
@@ -725,6 +728,8 @@ void CVAR_Init(void)
     g_navigation_legacy = gi.Cvar_Get("g_navigation_legacy", "0", CVAR_LATCH);
 
     g_door_reopen_blocked = gi.Cvar_Get("g_door_reopen_blocked", "1", 0);
+
+    g_splean = gi.Cvar_Get("g_splean", "0", CVAR_ARCHIVE);
 
     cl_running = gi.Cvar_Get("cl_running", "", 0);
 }

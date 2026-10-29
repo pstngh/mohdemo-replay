@@ -20,11 +20,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
-#ifdef USE_INTERNAL_SDL_HEADERS
-#    include "SDL.h"
-#else
-#    include <SDL.h>
-#endif
+#include <SDL3/SDL.h>
 
 #include "../qcommon/qcommon.h"
 
@@ -34,13 +30,18 @@ static byte *cursor_image_data = NULL;
 static pCursorFree cursor_free = NULL;
 
 void IN_GetMousePosition(int *x, int *y) {
-    SDL_GetMouseState(x, y);
+    float fx, fy;
+
+    // whole pixels, as SDL 2's
+    SDL_GetMouseState(&fx, &fy);
+    *x = (int)fx;
+    *y = (int)fy;
 }
 
 qboolean IN_SetCursorFromImage(const byte *pic, int width, int height, pCursorFree cursorFreeFn) {
     IN_FreeCursor();
 
-    cursor_surface = SDL_CreateRGBSurfaceWithFormatFrom(pic, width, height, 32, 4 * width, SDL_PIXELFORMAT_ABGR8888);
+    cursor_surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_ABGR8888, (void *)pic, 4 * width);
     if (!cursor_surface) {
         return qfalse;
     }
@@ -52,19 +53,18 @@ qboolean IN_SetCursorFromImage(const byte *pic, int width, int height, pCursorFr
 }
 
 void IN_FreeCursor() {
+    // cleared, so that a second call (the UI's shutdown, then a new cursor)
+    // doesn't destroy them again
     if (cursor) {
-        SDL_FreeCursor(cursor);
+        SDL_DestroyCursor(cursor);
+        cursor = NULL;
     }
     if (cursor_surface) {
-        SDL_FreeSurface(cursor_surface);
+        SDL_DestroySurface(cursor_surface);
+        cursor_surface = NULL;
     }
     if (cursor_image_data) {
         cursor_free(cursor_image_data);
         cursor_image_data = NULL;
     }
-}
-
-qboolean IN_IsCursorActive()
-{
-    return SDL_GetRelativeMouseMode() == SDL_TRUE;
 }

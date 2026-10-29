@@ -1,0 +1,7 @@
+# obj/obj_team3 with the sea drawn with the stages of deepbluesea (the open
+# sea of m3l1a), see obj_team3_deepbluesea.shader: deformVertexes flap,
+# rgbGen identityLighting, nextBundle in both stages, an additive second stage
+map obj/obj_team3
+shot o3d_sea 0 -5200 -350 5 270 0
+shot o3d_sea2 0 -4000 0 15 270 0
+shot o3d_shore -1568 -5000 -380 25 270 0

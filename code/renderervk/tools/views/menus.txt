@@ -1,0 +1,22 @@
+# UI menus (2026-10-16): the main menu, the options pages, the weapon
+# selection over the main menu, then the same in a game of dm/mohdm1 over a
+# paused view: the weapon selection with a sign (hovered weapon), the main
+# menu of a game (BACK TO GAME, QUIT) and the team selection. Most of their
+# panels and buttons are in Pak6EnUk.pk3 (see README, Testing). The ceiling
+# fan of the main menu's room turns with the wall clock: masked.
+menu mn_main
+mask mn_main 508,80,76,76
+menu mn_options options_main
+menu mn_controls controls
+menu mn_video video_options
+menu mn_audio audio_options
+menu mn_advanced advancedoptions
+menu mn_mpoptions mpoptions
+menu mn_primary SelectPrimaryWeapon
+map dm/mohdm1
+shot mn_dm1 848 -216 60 0 -180 0
+set set ui_weaponsign sniperrifle_sign
+menu mn_dm1_primary SelectPrimaryWeapon
+menu mn_dm1_main main
+mask mn_dm1_main 508,80,76,76
+menu mn_dm1_team SelectTeam

@@ -1,0 +1,5 @@
+# m4l1 (single player): farplane fog (3100); the AI moves between runs
+map m4l1
+shot fm4_a -3904 -6120 -404 0 45 0
+shot fm4_b -3904 -6120 -404 0 0 0
+shot fm4_c -3000 -5000 200 15 45 0

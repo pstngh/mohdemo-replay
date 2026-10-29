@@ -1,0 +1,29 @@
+# dm/mohdm1 debug drawing: a camera path shown with `cam show` (game debug
+# lines drawn with line stipple by R_DrawDebugLines), r_showtris 1 and 2
+# (triangle edges in polygon line mode; only with developer 1),
+# r_shownormals and sv_showbboxes. spmap: `cam` needs a single player game.
+spmap dm/mohdm1
+set developer 1
+set wait 3000
+set tele 700 -216 60
+set cam new
+set cam add
+set tele 600 -330 100
+set cam add
+set tele 500 -150 160
+set cam add
+set tele 380 -300 60
+set cam add
+set cam show
+shot dbg_cam 848 -216 60 10 180 0
+set cam hide
+set r_showtris 1
+shot dbg_tris1 848 -216 60 0 180 0
+set r_showtris 2
+shot dbg_tris2 848 -216 60 0 180 0
+set r_showtris 0
+set r_shownormals 1
+shot dbg_normals 848 -216 60 30 160 0
+set r_shownormals 0
+set sv_showbboxes 1
+shot dbg_bboxes 848 -216 60 0 180 0

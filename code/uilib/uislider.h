@@ -36,7 +36,6 @@ class UISlider : public UIWidget
     int               m_maxx;
     int               m_arrow_width;
     float             m_value;
-    float             m_oldvalue;
     float             m_sliderwidth; // Note: this is actually the width of only the thumb, not the whole slider
     UIRect2D          m_sliderregion;
     UIRect2D          m_prev_arrow_region;

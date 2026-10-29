@@ -71,6 +71,7 @@ void     UI_ShowMenu(const char *name, qboolean bForce);
 void     UI_HideMenu(const char *name, qboolean bForce);
 void     UI_ForceMenuOff(bool force);
 void     UI_PushMenu(const char *name);
+void     UI_PopMenu(qboolean restore_cvars);
 void     UI_ForceMenu(const char *name);
 qboolean UI_BindActive(void);
 void     UI_SetReturnMenuToCurrent(void);

@@ -24,7 +24,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../qcommon/q_shared.h"
 #include "../renderercommon/tr_public.h"
-#include "qgl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,7 +53,7 @@ typedef struct image_s {
 	char		imgName[MAX_QPATH];		// game path, including extension
 	int			width, height;				// source image
 	int			uploadWidth, uploadHeight;	// after power of two and picmip but not including clamp to MAX_TEXTURE_SIZE
-	GLuint		texnum;					// gl texture binding
+	unsigned int	texnum;				// backend texture handle
 
 	int			frameUsed;			// for texture usage in frame statistics
 
@@ -116,7 +115,7 @@ extern cvar_t *r_ignorehwgamma;		// overrides hardware gamma capabilities
 extern cvar_t *r_drawBuffer;
 extern cvar_t *r_swapInterval;
 
-extern cvar_t *r_allowExtensions;				// global enable/disable of OpenGL extensions
+extern cvar_t *r_allowExtensions;				// global enable/disable of the r_ext_* features
 extern cvar_t *r_ext_compressed_textures;		// these control use of specific extensions
 extern cvar_t *r_ext_multitexture;
 extern cvar_t *r_ext_compiled_vertex_array;
@@ -161,6 +160,7 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height );
 void R_LoadJPG( const char *name, byte **pic, int *width, int *height );
 void R_LoadPCX( const char *name, byte **pic, int *width, int *height );
 void R_LoadPNG( const char *name, byte **pic, int *width, int *height );
+void RE_SavePNGFromRGB( const char *filename, int width, int height, const byte *rgb, int padding );
 void R_LoadPVR( const char *name, byte **pic, int *width, int *height );
 void R_LoadTGA( const char *name, byte **pic, int *width, int *height );
 
@@ -172,16 +172,14 @@ IMPLEMENTATION SPECIFIC FUNCTIONS
 ====================================================================
 */
 
-void		GLimp_Init( qboolean fixedFunction );
-void		GLimp_Shutdown( void );
-void		GLimp_EndFrame( void );
-
-void		GLimp_LogComment( char *comment );
-void		GLimp_Minimize(void);
-
-void		GLimp_SetGamma( unsigned char red[256],
+// the window is renderervk/vk.h's (sdl/sdl_vkimp.c); the hardware gamma ramp
+// is sdl/sdl_gamma.c's (Windows only: SDL 3 has none)
+void		VKimp_SetGamma( unsigned char red[256],
 		unsigned char green[256],
 		unsigned char blue[256] );
+qboolean	VKimp_InitGamma( void );	// the display takes a ramp: saved, a linear one set
+void		VKimp_RestoreGamma( void );	// the display's own ramp back
+void		VKimp_GammaFocus( void );	// the game's ramp with the focus, the display's without
 
 
 #ifdef __cplusplus

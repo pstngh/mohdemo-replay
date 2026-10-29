@@ -41,17 +41,39 @@
                     <Component Id="game.dll">
                         <File Source="files/game.dll" />
                     </Component>
+                    <Component Id="renderer_vulkan.dll">
+                        <File Source="files/renderer_vulkan.dll" />
+                    </Component>
 
                     <!-- Third-party -->
-                    <Component Id="SDL2.dll">
-                        <File Source="files/SDL2.dll" />
-                    </Component>
-                    <Component Id="OpenAL$(var.Bitness).dll">
-                        <File Source="files/OpenAL$(var.Bitness).dll" />
+                    <Component Id="SDL3.dll">
+                        <File Source="files/SDL3.dll" />
                     </Component>
                     <Component Id="libcurl.dll">
                         <File Source="files/libcurl.dll" />
                     </Component>
+
+                    <!-- Sound: the headphone HRTF set and the notices of the sound libraries -->
+                    <Component Id="OMAHA_SOUND_LICENSES.txt">
+                        <File Source="files/OMAHA-SOUND-LICENSES.txt" />
+                    </Component>
+                    <Directory Name="main">
+                        <Directory Name="sound">
+                            <Directory Name="prom">
+                                <Directory Name="hrtf">
+                                    <Component Id="SADIE_KU100.sofa">
+                                        <File Source="files/main/sound/prom/hrtf/SADIE_KU100_DFC_256_order_fir_48000.sofa" />
+                                    </Component>
+                                    <Component Id="hrtf_README.txt">
+                                        <File Source="files/main/sound/prom/hrtf/README.txt" />
+                                    </Component>
+                                    <Component Id="SADIE_LICENSE.txt">
+                                        <File Source="files/main/sound/prom/hrtf/SADIE_LICENSE.txt" />
+                                    </Component>
+                                </Directory>
+                            </Directory>
+                        </Directory>
+                    </Directory>
 
                     <!-- Launchers -->
                     <Component Id="launch_openmohaa_base.exe">
@@ -98,12 +120,19 @@
             <ComponentRef Id="omohaaded.exe" />
             <ComponentRef Id="cgame.dll" />
             <ComponentRef Id="game.dll" />
+            <ComponentRef Id="renderer_vulkan.dll" />
         </ComponentGroup>
 
         <ComponentGroup Id="ThirdParty">
-            <ComponentRef Id="SDL2.dll" />
-            <ComponentRef Id="OpenAL$(var.Bitness).dll" />
+            <ComponentRef Id="SDL3.dll" />
             <ComponentRef Id="libcurl.dll" />
+        </ComponentGroup>
+
+        <ComponentGroup Id="Sound">
+            <ComponentRef Id="OMAHA_SOUND_LICENSES.txt" />
+            <ComponentRef Id="SADIE_KU100.sofa" />
+            <ComponentRef Id="hrtf_README.txt" />
+            <ComponentRef Id="SADIE_LICENSE.txt" />
         </ComponentGroup>
 
         <ComponentGroup Id="Launchers">

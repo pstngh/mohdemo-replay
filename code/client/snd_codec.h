@@ -52,6 +52,7 @@ typedef struct snd_stream_s
 	int length;
 	int pos;
 	void *ptr;
+	const byte *mem;	// a stream of a file in memory (mp3: S_MP3_OpenMemoryStream)
 } snd_stream_t;
 
 // Codec functions
@@ -107,7 +108,14 @@ void* S_MP3_CodecLoad(const char* filename, snd_info_t * info);
 snd_stream_t * S_MP3_CodecOpenStream(const char* filename);
 void S_MP3_CodecCloseStream(snd_stream_t * stream);
 int S_MP3_CodecReadStream(snd_stream_t * stream, int bytes, void* buffer);
+snd_stream_t *S_MP3_OpenMemoryStream(const byte *data, int length, const snd_info_t *info);
+void S_MP3_CloseMemoryStream(snd_stream_t *stream);
 #endif // USE_CODEC_MAD
+
+// Soundtrack files kept in memory (snd_stream_memory.cpp)
+void S_StreamMemory_Prefetch(const char *filename);
+snd_stream_t *S_StreamMemory_Open(const char *filename);
+void S_StreamMemory_Flush(void);
 
 // Ogg Opus codec
 #ifdef USE_CODEC_OPUS

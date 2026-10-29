@@ -1,0 +1,7 @@
+# obj/obj_team1: hedgerows and trees (alpha-tested), farplane fog 4000, the
+# m5l2 sky box, czech hedgehogs (static models)
+map obj/obj_team1
+shot o1_road -1080 4976 -76 0 45 0
+shot o1_hedge -1080 4976 -76 0 165 0
+shot o1_hedgehogs -1080 4976 -76 0 285 0
+shot o1_sky -1080 4976 -76 -40 45 0

@@ -1,0 +1,9 @@
+# moving multiplayer content for tools/perf.py (see README, Performance, Frame spikes):
+# demos of real matches recorded by original game clients (.dm3, protocol 8),
+# played with fixedtime 16 (frame k is the same moment of the demo in every
+# run). The files are local to the dev machine, not part of the repo: any
+# single-map demo of a stock map works (`demo name file [frames]`).
+# obj_team2, 256 s, recorder's own view, 52 kills, realism rules
+demo o2match "~/Downloads/tommeh demos/b18f80f5f7181a0c-obj-obj_team2.dm3" 15000
+# obj_team4, 246 s, recorder's own view, 23 kills
+demo o4match "~/Downloads/tommeh demos/fe91f5025874301c-obj-obj_team4.dm3" 15000

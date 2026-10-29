@@ -1,0 +1,7 @@
+# m3l3 (single player, forest): dense alpha-tested foliage, LOD terrain,
+# the d-day2 sky through the trees
+map m3l3
+shot m33_path -6800 3248 76 0 270 0
+shot m33_trees -6800 3248 76 0 30 0
+shot m33_sky -6800 3248 76 -40 270 0
+shot m33_grass -5000 -7300 200 20 270 0

@@ -19,7 +19,7 @@ too little), the menu next to the filter shows only default or realism
 demos, and the filter finds demos by name, level or player: for a player, it shows their kills in each demo, and playing one
 chooses them. For that, `mohdemoindex`, built next to the game, indexes the
 demos in the background the first time (about two minutes for 700), and the
-indexes are kept in `~/.cache/mohdemo-replay` (`~/Library/Caches` on macOS). Double-click a demo to
+indexes are kept in `~/.cache/mohdemo-replay`. Double-click a demo to
 play it (the game starts then, or with Restart game in the toolbar, where
 the folder's button chooses another), click a kill or a round to jump to
 it; hovering a kill tells how it was made. Play chooses what plays:
@@ -55,8 +55,7 @@ with how far the one recording is and how long it has left
 folder chosen, named from a pattern (`{demo}`, the demo's file name,
 `{start}`, `{player}`, `{date}`), with each kill played from how long before
 it to how long after. The size, frames per second, quality, codec (H.264,
-H.265 or the graphics card's H.264 encoder: VAAPI on Linux, VideoToolbox on
-macOS), sound and its bitrate, the viewmodel and the models forced are in
+H.265 or the graphics card's H.264 encoder, with VAAPI), sound and its bitrate, the viewmodel and the models forced are in
 the Videos tab of Settings, which the Record dialog sums up in a line, with
 Change… to set them there, and the Advanced box takes FFmpeg output options
 instead. Motion blur makes each frame of the video a
@@ -66,11 +65,8 @@ kills shows both for a frame, and recording takes about 2.5 times as long,
 nearly 4 with the graphics card's encoder. The clips are written in a hidden
 `.mohreplay-parts` folder next to the video, not in memory. It needs FFmpeg.
 
-On macOS, the game program can be the `openmohaa.app` bundle, and
-`mohdemoindex` is looked for next to it as well. The recorder shows a window
-there, as SDL can't draw without one, and the sound of videos needs the
-game built with OpenAL Soft's headers, as the release builds are. The app
-hasn't been tried on a Mac yet.
+The game built here, on MoHAA Reloaded's Vulkan port, runs on Linux only:
+that port has no macOS build.
 
 The app starts the game with a throwaway home folder, sends it console
 commands through its pipe (`com_pipefile`) and shows what the game reports
@@ -78,8 +74,7 @@ in `demoindex.json` and `demostate.json` (`cl_demoFiles 1`). On Linux it
 asks for Wayland first, then XWayland. The settings changed in the game (its
 options, the console, key binds) are kept for the next games in the game
 folder, as `main/configs/omconfig.cfg` and `main/omconfig.cfg`, which are
-read first, and in `~/.config/mohdemo-replay/omconfig.cfg`
-(`~/Library/Preferences` on macOS), and videos are recorded with them. The
+read first, and in `~/.config/mohdemo-replay/omconfig.cfg`, and videos are recorded with them. The
 app's keys and its pipe aren't kept, so a game run from that folder without
 the app doesn't get them. Some
 are always the app's: the window size, the app's keys, a field of view of

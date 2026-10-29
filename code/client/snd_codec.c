@@ -168,6 +168,17 @@ S_CodecLoad
 */
 void *S_CodecLoad(const char *filename, snd_info_t *info)
 {
+	snd_stream_t *stream;
+
+	if (!info) {
+		// a stream (the sound system opens its streams here): a soundtrack
+		// file kept in memory
+		stream = S_StreamMemory_Open(filename);
+		if (stream) {
+			return stream;
+		}
+	}
+
 	return S_CodecGetSound(filename, info);
 }
 
@@ -178,7 +189,7 @@ S_CodecOpenStream
 */
 snd_stream_t *S_CodecOpenStream(const char *filename)
 {
-	return S_CodecGetSound(filename, NULL);
+	return S_CodecLoad(filename, NULL);
 }
 
 void S_CodecCloseStream(snd_stream_t *stream)

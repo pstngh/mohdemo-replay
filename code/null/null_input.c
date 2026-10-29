@@ -36,6 +36,9 @@ void IN_Restart( void ) {
 void IN_Frame (void) {
 }
 
+void IN_PumpEvents( void ) {
+}
+
 void IN_Shutdown( void ) {
 }
 

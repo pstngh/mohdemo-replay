@@ -1,0 +1,134 @@
+# dm/mohdm1: 40 dynamic lights in front of the door *15 and its walls
+# (r_maxDlights: run with +set r_maxDlights 64 for all of them, the
+# default keeps the 4 nearest the view). The large faces get lights more
+# than 32 apart in the list (a list of their own with a count,
+# vk_set_lightmap_dlights), the smaller ones a window of 32 of them or
+# fewer; dl64_far looks from farther back and higher up, dl64_side and
+# dl64_north along the wall.
+spmap dm/mohdm1
+set spawn fx/dummy.tik targetname dl1
+set spawn fx/dummy.tik targetname dl2
+set spawn fx/dummy.tik targetname dl3
+set spawn fx/dummy.tik targetname dl4
+set spawn fx/dummy.tik targetname dl5
+set spawn fx/dummy.tik targetname dl6
+set spawn fx/dummy.tik targetname dl7
+set spawn fx/dummy.tik targetname dl8
+set spawn fx/dummy.tik targetname dl9
+set spawn fx/dummy.tik targetname dl10
+set spawn fx/dummy.tik targetname dl11
+set spawn fx/dummy.tik targetname dl12
+set spawn fx/dummy.tik targetname dl13
+set spawn fx/dummy.tik targetname dl14
+set spawn fx/dummy.tik targetname dl15
+set spawn fx/dummy.tik targetname dl16
+set spawn fx/dummy.tik targetname dl17
+set spawn fx/dummy.tik targetname dl18
+set spawn fx/dummy.tik targetname dl19
+set spawn fx/dummy.tik targetname dl20
+set spawn fx/dummy.tik targetname dl21
+set spawn fx/dummy.tik targetname dl22
+set spawn fx/dummy.tik targetname dl23
+set spawn fx/dummy.tik targetname dl24
+set spawn fx/dummy.tik targetname dl25
+set spawn fx/dummy.tik targetname dl26
+set spawn fx/dummy.tik targetname dl27
+set spawn fx/dummy.tik targetname dl28
+set spawn fx/dummy.tik targetname dl29
+set spawn fx/dummy.tik targetname dl30
+set spawn fx/dummy.tik targetname dl31
+set spawn fx/dummy.tik targetname dl32
+set spawn fx/dummy.tik targetname dl33
+set spawn fx/dummy.tik targetname dl34
+set spawn fx/dummy.tik targetname dl35
+set spawn fx/dummy.tik targetname dl36
+set spawn fx/dummy.tik targetname dl37
+set spawn fx/dummy.tik targetname dl38
+set spawn fx/dummy.tik targetname dl39
+set spawn fx/dummy.tik targetname dl40
+set wait 200
+set script dl1 origin "-690 450 10"
+set script dl1 light 0.4 0.2 0.1 110
+set script dl2 origin "-690 477 10"
+set script dl2 light 0.1 0.3 0.4 130
+set script dl3 origin "-690 504 10"
+set script dl3 light 0.2 0.4 0.1 150
+set script dl4 origin "-690 531 10"
+set script dl4 light 0.4 0.1 0.3 120
+set script dl5 origin "-690 558 10"
+set script dl5 light 0.3 0.3 0.15 140
+set script dl6 origin "-690 585 10"
+set script dl6 light 0.4 0.2 0.1 110
+set script dl7 origin "-690 612 10"
+set script dl7 light 0.1 0.3 0.4 130
+set script dl8 origin "-690 639 10"
+set script dl8 light 0.2 0.4 0.1 150
+set script dl9 origin "-690 450 40"
+set script dl9 light 0.1 0.3 0.4 140
+set script dl10 origin "-690 477 40"
+set script dl10 light 0.2 0.4 0.1 110
+set script dl11 origin "-690 504 40"
+set script dl11 light 0.4 0.1 0.3 130
+set script dl12 origin "-690 531 40"
+set script dl12 light 0.3 0.3 0.15 150
+set script dl13 origin "-690 558 40"
+set script dl13 light 0.4 0.2 0.1 120
+set script dl14 origin "-690 585 40"
+set script dl14 light 0.1 0.3 0.4 140
+set script dl15 origin "-690 612 40"
+set script dl15 light 0.2 0.4 0.1 110
+set script dl16 origin "-690 639 40"
+set script dl16 light 0.4 0.1 0.3 130
+set script dl17 origin "-690 450 70"
+set script dl17 light 0.2 0.4 0.1 120
+set script dl18 origin "-690 477 70"
+set script dl18 light 0.4 0.1 0.3 140
+set script dl19 origin "-690 504 70"
+set script dl19 light 0.3 0.3 0.15 110
+set script dl20 origin "-690 531 70"
+set script dl20 light 0.4 0.2 0.1 130
+set script dl21 origin "-690 558 70"
+set script dl21 light 0.1 0.3 0.4 150
+set script dl22 origin "-690 585 70"
+set script dl22 light 0.2 0.4 0.1 120
+set script dl23 origin "-690 612 70"
+set script dl23 light 0.4 0.1 0.3 140
+set script dl24 origin "-690 639 70"
+set script dl24 light 0.3 0.3 0.15 110
+set script dl25 origin "-690 450 100"
+set script dl25 light 0.4 0.1 0.3 150
+set script dl26 origin "-690 477 100"
+set script dl26 light 0.3 0.3 0.15 120
+set script dl27 origin "-690 504 100"
+set script dl27 light 0.4 0.2 0.1 140
+set script dl28 origin "-690 531 100"
+set script dl28 light 0.1 0.3 0.4 110
+set script dl29 origin "-690 558 100"
+set script dl29 light 0.2 0.4 0.1 130
+set script dl30 origin "-690 585 100"
+set script dl30 light 0.4 0.1 0.3 150
+set script dl31 origin "-690 612 100"
+set script dl31 light 0.3 0.3 0.15 120
+set script dl32 origin "-690 639 100"
+set script dl32 light 0.4 0.2 0.1 140
+set script dl33 origin "-690 450 130"
+set script dl33 light 0.3 0.3 0.15 130
+set script dl34 origin "-690 477 130"
+set script dl34 light 0.4 0.2 0.1 150
+set script dl35 origin "-690 504 130"
+set script dl35 light 0.1 0.3 0.4 120
+set script dl36 origin "-690 531 130"
+set script dl36 light 0.2 0.4 0.1 140
+set script dl37 origin "-690 558 130"
+set script dl37 light 0.4 0.1 0.3 110
+set script dl38 origin "-690 585 130"
+set script dl38 light 0.3 0.3 0.15 130
+set script dl39 origin "-690 612 130"
+set script dl39 light 0.4 0.2 0.1 150
+set script dl40 origin "-690 639 130"
+set script dl40 light 0.1 0.3 0.4 120
+set wait 4000
+shot dl64_door -600 546 0 5 180 0
+shot dl64_far -520 546 60 15 180 0
+shot dl64_side -640 380 20 5 120 0
+shot dl64_north -640 700 20 5 240 0

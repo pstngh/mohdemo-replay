@@ -1,0 +1,11 @@
+# dm/mohdm1 with three world shaders replaced by fx_mohdm1.shader: every
+# deform, tcGen and tcMod the effects shader takes, and distFade and
+# oneMinusDistFade on a constant color, on world faces; the build before
+# and r_staticEffects 0 draw them on the CPU
+map dm/mohdm1
+set wait 4000
+shot fx_a 848 -216 60 0 180 0
+shot fx_b 848 -216 200 60 180 0
+shot fx_c 848 -216 60 30 160 0
+shot fx_d 400 -216 300 30 -180 0
+shot fx_e 0 0 1500 89 0 0

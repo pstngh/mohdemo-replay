@@ -121,7 +121,6 @@ UISlider::UISlider()
     m_minvalue             = 0.0f;
     m_maxvalue             = 100.0f;
     m_value                = 0.0f;
-    m_oldvalue             = 0.0f;
     m_sliderwidth          = 10.0f;
     m_stepsize             = 1.0f;
     m_slidertype           = SLIDER_INTEGER;
@@ -173,7 +172,6 @@ void UISlider::Pressed(Event *ev)
     }
 
     // click thumb
-    m_oldvalue        = m_value;
     m_thumb_depressed = qtrue;
 
     if (xpos <= m_minx) {
@@ -235,11 +233,10 @@ void UISlider::AutoDecrement(Event *ev)
 
 void UISlider::MouseExited(Event *ev)
 {
-    if (m_thumb_depressed) {
-        m_value = m_oldvalue;
-        UpdateData();
-    }
-
+    // Changed in OPM
+    //  The value stays where the drag left it: the original put it back to
+    //  where the press was, so a mouse that left the slider's few pixels of
+    //  height mid-drag reset it
     m_thumb_depressed      = qfalse;
     m_prev_arrow_depressed = qfalse;
     m_next_arrow_depressed = qfalse;

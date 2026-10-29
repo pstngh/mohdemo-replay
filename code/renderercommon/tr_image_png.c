@@ -2483,3 +2483,47 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 
 	CloseBufferedFile(ThePNG);
 }
+
+/*
+=================
+RE_SavePNGFromRGB
+
+Bottom-up RGB (+ line padding), same buffer JPEG screenshots use.
+=================
+*/
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../thirdparty/stb/stb_image_write.h"
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
+void RE_SavePNGFromRGB(const char *filename, int width, int height, const byte *rgb, int padding)
+{
+	unsigned char *pngData;
+	int pngLen = 0;
+	int stride;
+
+	if (!filename || !filename[0] || width <= 0 || height <= 0 || !rgb) {
+		return;
+	}
+
+	stride = width * 3 + padding;
+	stbi_flip_vertically_on_write(1);
+	pngData = stbi_write_png_to_mem((const unsigned char *)rgb, stride, width, height, 3, &pngLen);
+	stbi_flip_vertically_on_write(0);
+	if (!pngData || pngLen <= 0) {
+		ri.Printf(PRINT_WARNING, "RE_SavePNGFromRGB: encode failed for '%s'\n", filename);
+		if (pngData) {
+			STBIW_FREE(pngData);
+		}
+		return;
+	}
+
+	ri.FS_WriteFile(filename, pngData, pngLen);
+	STBIW_FREE(pngData);
+}

@@ -1,0 +1,10 @@
+# m5l3 (single player, river town): the mohday2 sky box, the sun lens flare
+# (sundirection 238 210, i.e. pitch -58 yaw 30), farplane fog 15000, the
+# river and the bridge
+map m5l3
+shot m53_street 3496 5816 236 0 180 0
+shot m53_sun 3496 5816 236 -58 30 0
+shot m53_sunedge 3496 5816 236 -30 60 0
+shot m53_roofs 1600 4379 800 15 0 0
+shot m53_river 0 0 500 10 0 0
+shot m53_bridge -2000 0 800 10 0 0

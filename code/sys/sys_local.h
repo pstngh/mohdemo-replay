@@ -28,20 +28,13 @@ extern "C" {
 #endif
 
 #ifndef DEDICATED
-#ifdef USE_INTERNAL_SDL_HEADERS
-#	include "SDL_version.h"
-#else
-#	include <SDL_version.h>
-#endif
+#include <SDL3/SDL_version.h>
 
-// Require a minimum version of SDL
-#define MINSDL_MAJOR 2
-#define MINSDL_MINOR 0
-#if SDL_VERSION_ATLEAST( 2, 0, 5 )
-#define MINSDL_PATCH 5
-#else
+// Require a minimum version of SDL (3.2.0, the first SDL 3 release, has
+// every function used; the game ships and is built with 3.4.18)
+#define MINSDL_MAJOR 3
+#define MINSDL_MINOR 2
 #define MINSDL_PATCH 0
-#endif
 #endif
 
 // Console
@@ -56,10 +49,6 @@ unsigned int CON_LogRead( char *out, unsigned int outSize );
 
 char *Sys_BinaryPath( void );
 char *Sys_BinaryPathRelative( const char *relative );
-
-#ifdef __APPLE__
-char *Sys_StripAppBundle( char *pwd );
-#endif
 
 void Sys_GLimpSafeInit( void );
 void Sys_GLimpInit( void );

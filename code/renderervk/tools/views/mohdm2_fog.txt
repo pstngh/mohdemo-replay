@@ -1,0 +1,6 @@
+# dm/mohdm2: farplane fog (5000)
+map dm/mohdm2
+shot f2_a -3352 520 100 0 45 0
+shot f2_b 208 -2368 60 0 135 0
+shot f2_c -2192 -1776 308 0 225 0
+shot f2_d -1000 -1000 900 15 45 0

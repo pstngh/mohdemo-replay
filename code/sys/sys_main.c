@@ -40,13 +40,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 
 #ifndef DEDICATED
-#ifdef USE_INTERNAL_SDL_HEADERS
-#	include "SDL.h"
-#	include "SDL_cpuinfo.h"
-#else
-#	include <SDL.h>
-#	include <SDL_cpuinfo.h>
-#endif
+#	include <SDL3/SDL.h>
+// SDL's WinMain on Windows (the client is a GUI program), which calls main
+#	include <SDL3/SDL_main.h>
 #endif
 
 #include "sys_local.h"
@@ -329,8 +325,7 @@ cpuFeatures_t Sys_GetProcessorFeatures( void )
 	cpuFeatures_t features = 0;
 
 #ifndef DEDICATED
-	if( SDL_HasRDTSC( ) )      features |= CF_RDTSC;
-	if( SDL_Has3DNow( ) )      features |= CF_3DNOW;
+	// SDL 3 has no SDL_HasRDTSC and SDL_Has3DNow (only CF_ALTIVEC is read)
 	if( SDL_HasMMX( ) )        features |= CF_MMX;
 	if( SDL_HasSSE( ) )        features |= CF_SSE;
 	if( SDL_HasSSE2( ) )       features |= CF_SSE2;
@@ -727,8 +722,6 @@ char *Sys_ParseProtocolUri( const char *uri )
 #ifndef DEFAULT_BASEDIR
 #	if defined(DEFAULT_RELATIVE_BASEDIR)
 #		define DEFAULT_BASEDIR Sys_BinaryPathRelative(DEFAULT_RELATIVE_BASEDIR)
-#	elif defined(__APPLE__)
-#		define DEFAULT_BASEDIR Sys_StripAppBundle(Sys_BinaryPath())
 #	else
 #		define DEFAULT_BASEDIR Sys_BinaryPath()
 #	endif
@@ -814,20 +807,19 @@ int main( int argc, char **argv )
 #	endif
 
 	// Run time
-	SDL_version ver;
-	SDL_GetVersion( &ver );
+	const int ver = SDL_GetVersion( );
 
 #define MINSDL_VERSION \
 	XSTRING(MINSDL_MAJOR) "." \
 	XSTRING(MINSDL_MINOR) "." \
 	XSTRING(MINSDL_PATCH)
 
-	if( SDL_VERSIONNUM( ver.major, ver.minor, ver.patch ) <
-			SDL_VERSIONNUM( MINSDL_MAJOR, MINSDL_MINOR, MINSDL_PATCH ) )
+	if( ver < SDL_VERSIONNUM( MINSDL_MAJOR, MINSDL_MINOR, MINSDL_PATCH ) )
 	{
 		Sys_Dialog( DT_ERROR, va( "SDL version " MINSDL_VERSION " or greater is required, "
 			"but only version %d.%d.%d was found. You may be able to obtain a more recent copy "
-			"from https://www.libsdl.org/.", ver.major, ver.minor, ver.patch ), "SDL Library Too Old" );
+			"from https://www.libsdl.org/.", SDL_VERSIONNUM_MAJOR( ver ), SDL_VERSIONNUM_MINOR( ver ),
+			SDL_VERSIONNUM_MICRO( ver ) ), "SDL Library Too Old" );
 
 		Sys_Exit( 1 );
 	}
@@ -838,12 +830,6 @@ int main( int argc, char **argv )
 
 	// Set the initial time base
 	Sys_Milliseconds( );
-
-#ifdef __APPLE__
-	// This is passed if we are launched by double-clicking
-	if ( argc >= 2 && Q_strncmp ( argv[1], "-psn", 4 ) == 0 )
-		argc = 1;
-#endif
 
 	Sys_ParseArgs( argc, argv );
 	Sys_SetBinaryPath( Sys_Dirname( argv[ 0 ] ) );

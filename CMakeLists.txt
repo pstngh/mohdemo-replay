@@ -13,15 +13,11 @@ project(${PROJECT_NAME} VERSION ${PROJECT_VERSION} LANGUAGES C CXX)
 
 option(BUILD_SERVER "Build dedicated server" ON)
 option(BUILD_CLIENT "Build client" ON)
-option(BUILD_RENDERER_GL1 "Build GL1 renderer" ON)
-option(BUILD_RENDERER_GL2 "Build GL2 renderer" OFF)
+option(BUILD_RENDERER_VULKAN "Build the Vulkan renderer" ON)
 option(BUILD_GAME_LIBRARIES "Build game module libraries" ON)
 option(BUILD_GAME_QVMS "Build game module qvms" ON)
 option(BUILD_STANDALONE "Build binaries for standalone games" OFF)
 
-option(USE_RENDERER_DLOPEN "Dynamically load the renderer(s)" ON)
-option(USE_OPENAL "OpenAL audio" ON)
-option(USE_OPENAL_DLOPEN "Dynamically load OpenAL" ON)
 option(USE_HTTP "HTTP download support" ON)
 option(USE_CODEC_VORBIS "Ogg Vorbis support" ON)
 option(USE_CODEC_OPUS "Ogg Opus support" ON)
@@ -76,18 +72,16 @@ include(deploy/all)
 include(version)
 
 include(server)
-include(renderer_gl1)
-include(renderer_gl2)
+include(renderer_vulkan)
 include(client)
 include(basegame)
 #include(missionpack)
 include(launcher)
 
 include(post_configure)
-#include(installer)
 
-# Added in OPM
-#  Lost when the CMake files were brought in line with ioq3
+# Unit tests (CTest's BUILD_TESTING, on by default)
 if(BUILD_TESTING)
     include(tests/all)
 endif()
+#include(installer)

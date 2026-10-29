@@ -1,0 +1,10 @@
+# m3l2 (single player, bocage): subpen_water4 (lightmap through nextBundle)
+# under canal_sludge (additive, deformVertexes wave, tcMod scroll, nextBundle),
+# the sun lens flare (sundirection 315 315), farplane fog 6200, trees
+map m3l2
+shot m32_house -3608 2304 60 0 300 0
+shot m32_farm -3608 2304 60 0 60 0
+shot m32_water -3500 1952 0 25 180 0
+shot m32_water2 -3852 2100 -60 50 270 0
+shot m32_sun -3608 2304 60 -45 315 0
+shot m32_trees -3608 2304 600 10 0 0

@@ -21,7 +21,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "snd_local.h"
-#include "snd_openal_new.h"
 #include "client.h"
 #include "cl_ui.h"
 
@@ -49,6 +48,8 @@ cvar_t *s_testsound;
 cvar_t *s_separation;
 cvar_t *s_musicVolume;
 cvar_t *s_ambientVolume;
+cvar_t *s_soundtrackCache;
+cvar_t *s_loadBuffers;
 
 sfx_info_t sfx_infos[MAX_SFX_INFOS];
 
@@ -103,6 +104,12 @@ void S_Init(qboolean full_startup)
     s_volume         = Cvar_Get("s_volume", "0.9", CVAR_ARCHIVE);
     s_musicVolume    = Cvar_Get("s_musicvolume", "0.9", CVAR_ARCHIVE);
     s_ambientVolume  = Cvar_Get("s_ambientvolume", "1.00", CVAR_ARCHIVE);
+    // the soundtrack file's text and its songs' mp3 files (scanned) kept in
+    // memory until the next map load (MUSIC_LoadSoundtrackFile, snd_stream_memory.cpp)
+    s_soundtrackCache = Cvar_Get("s_soundtrackCache", "1", 0);
+    // the registered sounds' samples decoded for the mixer when the
+    // registration ends, not on their first play (S_EndRegistration)
+    s_loadBuffers    = Cvar_Get("s_loadBuffers", "1", 0);
     s_separation     = Cvar_Get("s_separation", "0.5", CVAR_ARCHIVE);
     s_khz            = Cvar_Get("s_khz", "44", CVAR_ARCHIVE | CVAR_SOUND_LATCH);
     s_loadas8bit     = Cvar_Get("s_loadas8bit", "0", CVAR_ARCHIVE | CVAR_LATCH);
@@ -285,6 +292,7 @@ void S_BeginRegistration()
     Com_Printf("------- Sound Begin Registration -------\n");
 
     S_StopAllSounds(true);
+    MUSIC_FlushCaches();
 
     s_registrationSequence++;
     s_inRegistration                    = true;
@@ -429,11 +437,22 @@ void S_EndRegistration()
         }
 
         if (sfx->registration_sequence && sfx->registration_sequence != s_registrationSequence) {
+            S_Driver_FreeSfx(sfx);
             if (sfx->data) {
                 Z_Free(sfx->data);
             }
 
             *sfx = {};
+        }
+    }
+
+    if (s_loadBuffers->integer) {
+        // the decode of a sound's samples for the mixer on its first play
+        // took up to 0.6 ms in the frame of the match that played it
+        for (i = 0; i < s_numSfx; i++) {
+            if (s_knownSfx[i].name[0]) {
+                S_Driver_PreloadSfx(&s_knownSfx[i]);
+            }
         }
     }
 
@@ -447,7 +466,7 @@ S_UpdateEntity
 */
 void S_UpdateEntity(int entityNum, const vec3_t origin, const vec3_t vel, qboolean use_listener)
 {
-    if (entityNum > MAX_GENTITIES) {
+    if (entityNum < 0 || entityNum >= MAX_GENTITIES) {
         Com_Error(ERR_DROP, "S_UpdateEntityPosition: bad entitynum %i", entityNum);
     }
 

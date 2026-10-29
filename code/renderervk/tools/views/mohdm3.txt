@@ -1,0 +1,10 @@
+# dm/mohdm3: sky box mohday1, the sun lens flare (sundirection 315 250),
+# environment-mapped windows (tcGen environment, blendFunc), trees in the park
+# (alpha-tested static models with vertex deforms), LOD terrain (grass)
+map dm/mohdm3
+shot d3_street -456 -576 70 0 0 0
+shot d3_sun -456 -576 70 -45 250 0
+shot d3_winenv 1257 -2131 281 0 209 0
+shot d3_park 4544 -3657 400 15 270 0
+shot d3_top 3000 -2400 1500 50 0 0
+shot d3_terrain 6800 -2800 800 20 140 0

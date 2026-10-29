@@ -1,0 +1,13 @@
+# dm/mohdm1 sun flare (lens flare "sun" from global/lensflaredefs.txt, drawn
+# by tr_sun_flare.cpp: sprite at the sun, full-screen white blend that fades
+# over 600 ms once the sun leaves the view)
+map dm/mohdm1
+# let the "Game Saved" message go away
+set wait 4000
+shot m1_sun 848 -216 60 -40 150 0
+shot m1_sun_off 848 -216 60 -30 170 0
+shot m1_sun_edge 848 -216 60 -25 120 0
+# look away: the sprite goes at once, the white blend fades
+shot m1_sun_fade1 848 -216 60 0 -30 0 160
+shot m1_sun_back 848 -216 60 -40 150 0
+shot m1_sun_fade2 848 -216 60 0 -30 0 400

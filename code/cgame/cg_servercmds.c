@@ -216,13 +216,32 @@ void CG_ParseServerinfo(void)
 ================
 CG_ConfigStringModified
 
+With cg_csAppend 1 only the changed configstring is copied, after the text of
+the others in cgame's gamestate (the client's whole gamestate, 53 KB, when it
+doesn't fit): a round restart changes 60 to 70 configstrings in one frame,
+each twice (CG_ExecuteNewServerCommands). The client changes only this one
+for each "cs" command, so both gamestates keep the same strings.
 ================
 */
 static void CG_ConfigStringModified(int num, qboolean modelOnly)
 {
-    // get the gamestate from the client system, which will have the
-    // new configstring already integrated
-    cgi.GetGameState(&cgs.gameState);
+    const char *s;
+    size_t      len;
+
+    s   = cg_csAppend->integer ? cgi.GetConfigString(num) : NULL;
+    len = s ? strlen(s) : 0;
+    if (s && !len) {
+        // the default empty string at 0
+        cgs.gameState.stringOffsets[num] = 0;
+    } else if (s && len + 1 + cgs.gameState.dataCount <= MAX_GAMESTATE_CHARS) {
+        cgs.gameState.stringOffsets[num] = cgs.gameState.dataCount;
+        memcpy(cgs.gameState.stringData + cgs.gameState.dataCount, s, len + 1);
+        cgs.gameState.dataCount += len + 1;
+    } else {
+        // get the gamestate from the client system, which will have the
+        // new configstring already integrated
+        cgi.GetGameState(&cgs.gameState);
+    }
 
     CG_ProcessConfigString(num, modelOnly);
 }

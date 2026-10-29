@@ -1,0 +1,8 @@
+# dm/mohdm7 (night, Algiers): the africanight sky box with its scrolling
+# additive cloud layer (talonclouds), lit windows, palm trees
+map dm/mohdm7
+shot d7_alley -2272 -936 -76 0 90 0
+shot d7_sky -2272 -936 -76 -30 90 0
+shot d7_arch 816 -1056 -220 0 225 0
+shot d7_plaza 113 374 0 10 0 0
+shot d7_window 113 374 0 -20 180 0

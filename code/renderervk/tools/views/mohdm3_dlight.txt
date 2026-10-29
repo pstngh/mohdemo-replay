@@ -1,0 +1,13 @@
+# dm/mohdm3 dynamic lights on LOD terrain (R_RealDlightTerrain), seen from
+# above the oaks; see mohdm1_dlight.
+spmap dm/mohdm3
+set spawn fx/dummy.tik targetname dl1
+set spawn fx/dummy.tik targetname dl2
+set wait 200
+set script dl1 origin "6800 -3350 250"
+set script dl1 light 1 0.6 0.3 400
+set script dl2 origin "6550 -3450 200"
+set script dl2 light 0.3 0.5 1 300
+set wait 4000
+shot d3dl_terrain 6750 -3250 600 60 270 0
+shot d3dl_terrain2 6750 -3000 400 35 250 0

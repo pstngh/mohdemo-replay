@@ -1,0 +1,5 @@
+# m5l2a (single player): inside the King Tiger (tele has no effect), farplane
+# fog 5500, the forest road
+map m5l2a
+shot m52_road 3320 -4144 300 0 90 0
+shot m52_sky 3320 -4144 300 -40 90 0

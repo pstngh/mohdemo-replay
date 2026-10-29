@@ -1,0 +1,10 @@
+# obj/obj_team2: interiors with caged lamps, wet pipes (tcGen environment
+# under a blended stage), the mohday1 sky at dusk and the sun lens flare
+# (sundirection 315 90)
+map obj/obj_team2
+shot o2_lamp -528 944 -380 0 270 0
+shot o2_pipe1 688 300 40 -20 90 0
+shot o2_pipe2 0 420 0 20 150 0
+shot o2_yard 1744 2832 68 0 315 0
+shot o2_dusk 3072 2416 68 0 180 0
+shot o2_sun 2500 1500 68 -45 90 0

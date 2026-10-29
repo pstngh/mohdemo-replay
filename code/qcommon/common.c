@@ -1901,7 +1901,8 @@ void Com_Init( char *commandLine ) {
 	showLoad = Cvar_Get( "showLoad", "0", 0 );
 	convertAnims = Cvar_Get( "convertAnim", "0", 0 );
 	com_altivec = Cvar_Get ("com_altivec", "1", CVAR_ARCHIVE);
-	com_maxfps = Cvar_Get( "com_maxfps", "85", CVAR_ARCHIVE );
+	// MoHAA Reloaded's default (upstream's is 85), as on the metal branch; movement doesn't depend on it (cl_movefps)
+	com_maxfps = Cvar_Get( "com_maxfps", "125", CVAR_ARCHIVE );
 	deathmatch = Cvar_Get( "deathmatch", "0", 0 );
 	paused = Cvar_Get( "paused", "0", 64 );
 	autopaused = Cvar_Get( "autopaused", "1", CVAR_ARCHIVE );
@@ -2163,6 +2164,44 @@ void Com_WriteConfig_f( void ) {
 Com_ModifyMsec
 ================
 */
+/*
+=================
+Com_LatchRenderFraction
+
+One monotonic read, latched to com_frameTime. The fraction is how far the
+monotonic clock has moved into the current server millisecond. It is not
+added to serverTime and it is not a Pmove input.
+=================
+*/
+static int		renderLatchMs;
+static int64_t	renderLatchUs;
+static float	renderFraction;
+
+void Com_LatchRenderFraction( void ) {
+	int64_t	nowUs;
+	float	frac;
+
+	nowUs = Sys_Microseconds();
+	if ( com_frameTime != renderLatchMs ) {
+		renderLatchMs = com_frameTime;
+		renderLatchUs = nowUs;
+		renderFraction = 0.0f;
+		return;
+	}
+
+	frac = (float)( nowUs - renderLatchUs ) / 1000.0f;
+	if ( frac < 0.0f ) {
+		frac = 0.0f;
+	} else if ( frac > 0.999f ) {
+		frac = 0.999f;
+	}
+	renderFraction = frac;
+}
+
+float Com_RenderTimeFraction( void ) {
+	return renderFraction;
+}
+
 int Com_ModifyMsec( int msec ) {
 	int		clampTime;
 
@@ -2175,8 +2214,10 @@ int Com_ModifyMsec( int msec ) {
 		msec *= com_timescale->value;
 	}
 
-	// don't let it scale below 1 msec
-	if ( msec < 1 && com_timescale->value) {
+	// don't let it scale below 1 msec; at timescale 1 a frame shorter than a
+	// millisecond (client caps above 1000, uncapped) lasts 0 ms, else the game
+	// would run ahead of real time
+	if ( msec < 1 && com_timescale->value && com_timescale->value != 1.0f ) {
 		msec = 1;
 	}
 
@@ -2229,15 +2270,107 @@ int Com_TimeVal(int minMsec)
 
 /*
 =================
+Com_FrameWait
+
+Waits until the next frame may start: until Sys_Milliseconds has passed
+com_frameTime by minMsec and Sys_Microseconds has reached deadlineUs. The
+network is read as packets come (NET_SleepUs) and the local server sends
+its queued packets when they are due.
+
+Both are waited for the same way: asleep until COM_POLL_US before, then
+polling the network. Sleeps end late, by up to 0.9 ms on a Ryzen 7 8700GE
+when the core reached its deepest idle state; shorter sleeps instead of the
+polling used less CPU but let the core clock down, and the frame's work
+(input read to present) took longer. The millisecond clock is waited for in
+whole milliseconds, its last one polled (when it ticks is not known), or,
+with onTick, from the last tick seen while polling: Sys_Milliseconds and
+Sys_Microseconds run at the same rate, so it ticks whole milliseconds after
+it, and its last COM_POLL_US are polled like the deadline's (not on
+Windows, where Sys_Milliseconds follows the timer interrupts).
+
+When the polling starts after a sleep, the window system's events are
+handled once (IN_PumpEvents), so the next frame's input read has only what
+came after.
+=================
+*/
+#ifdef _WIN32
+#define COM_POLL_US		2000	// sleeps last whole timer ticks, 1 ms at best
+#else
+#define COM_POLL_US		1000
+#endif
+
+static void Com_FrameWait( int minMsec, int64_t deadlineUs, qboolean onTick )
+{
+	static int		tickMsec;	// the last tick of Sys_Milliseconds seen while polling
+	static int64_t	tickUs;		// and when, 0: none
+	int64_t	sleepUs, msecUs;
+	int		timeVal, timeValSV;
+	qboolean	slept = qfalse, pumped = qfalse;
+
+	do {
+		sleepUs = deadlineUs - Sys_Microseconds() - COM_POLL_US;
+#ifdef _WIN32
+		sleepUs -= sleepUs % 1000;
+#endif
+
+		timeVal = Com_TimeVal( minMsec );
+		msecUs = ( timeVal - 1 ) * 1000LL;
+#ifndef _WIN32
+		if ( onTick && timeVal && tickUs ) {
+			// whole milliseconds after the last tick seen, which must be timeVal
+			// - 1 to timeVal ms away (50 us for the poll that saw it); else the
+			// clock was set: wait as without onTick until a tick is seen again
+			int64_t tickInUs = tickUs + ( com_frameTime + minMsec - tickMsec ) * 1000LL - Sys_Microseconds();
+			if ( tickInUs > msecUs - 50 && tickInUs <= msecUs + 1050 ) {
+				msecUs = tickInUs - COM_POLL_US;
+			} else {
+				tickUs = 0;
+			}
+		}
+#endif
+		if ( sleepUs < msecUs ) {
+			sleepUs = msecUs;
+		}
+
+		if ( com_sv_running->integer ) {
+			timeValSV = SV_SendQueuedPackets();
+			if ( sleepUs > ( timeValSV - 1 ) * 1000LL ) {
+				sleepUs = ( timeValSV - 1 ) * 1000LL;
+			}
+		}
+
+		if ( com_busyWait->integer || sleepUs < 0 ) {
+			sleepUs = 0;
+		}
+		if ( slept && !sleepUs && !pumped ) {
+			IN_PumpEvents();
+			pumped = qtrue;
+		}
+		if ( sleepUs ) {
+			slept = qtrue;
+		}
+		NET_SleepUs( sleepUs );
+		if ( !sleepUs && timeVal && !Com_TimeVal( minMsec ) ) {
+			tickMsec = com_frameTime + minMsec;
+			tickUs = Sys_Microseconds();
+		}
+	} while ( Com_TimeVal( minMsec ) || Sys_Microseconds() < deadlineUs );
+}
+
+/*
+=================
 Com_Frame
 =================
 */
 void Com_Frame( void ) {
 
 	int		msec, minMsec;
-	int		timeVal, timeValSV;
-	static int	lastTime = 0, bias = 0;
- 
+	static int	lastTime = 0;
+	static int64_t	nextFrameUs;	// deadline of the frame start
+	static int	nextFrameMs;	// the same in whole milliseconds, caps that divide 1000
+	int64_t	periodUs, nowUs;
+	int		periodMs, nowMs, maxfps;
+
 	int		timeBeforeFirstEvents;
 	int		timeBeforeServer;
 	int		timeBeforeEvents;
@@ -2289,7 +2422,18 @@ void Com_Frame( void ) {
 		timeBeforeFirstEvents = Sys_Milliseconds ();
 	}
 
-    // Figure out how much time we have
+    // Figure out how much time we have: a dedicated server's frame, and the
+    // period of a client's frame rate cap. Caps up to 1000 also wait for 1 ms
+    // of Sys_Milliseconds (no frame of 0 ms); at a timescale of 1, a client
+    // cap above 1000 waits only for its deadline in microseconds and an
+    // uncapped client not at all: its frames can last 0 ms of game time
+    // (Com_ModifyMsec, which makes them 1 ms at other timescales), the
+    // commands to the server come at their own rate (cl_movefps). With
+    // cl_movefps 0 every frame makes a command, so caps above 1000 and
+    // uncapped are 1000 (a frame per tick), as stock
+    minMsec = 1;
+    periodUs = 0;
+    periodMs = 0;
     if (!com_timedemo->integer)
     {
         if (com_dedicated->integer)
@@ -2297,52 +2441,70 @@ void Com_Frame( void ) {
         else
         {
             if (com_minimized->integer && com_maxfpsMinimized->integer > 0)
-                minMsec = 1000 / com_maxfpsMinimized->integer;
+                maxfps = com_maxfpsMinimized->integer;
             else if (com_unfocused->integer && com_maxfpsUnfocused->integer > 0)
-                minMsec = 1000 / com_maxfpsUnfocused->integer;
-            else if (com_maxfps->integer > 0)
-                minMsec = 1000 / com_maxfps->integer;
+                maxfps = com_maxfpsUnfocused->integer;
             else
-                minMsec = 1;
+                maxfps = com_maxfps->integer;
 
-            timeVal = com_frameTime - lastTime;
-            bias += timeVal - minMsec;
+#ifndef DEDICATED
+            if ((maxfps > 1000 || maxfps <= 0) && CL_CommandPerFrame())
+                maxfps = 1000;
+#endif
 
-            if (bias > minMsec)
-                bias = minMsec;
-
-            // Adjust minMsec if previous frame took too long to render so
-            // that framerate is stable at the requested value.
-            minMsec -= bias;
+            // 1000: minMsec alone, a frame per tick of Sys_Milliseconds
+            if (maxfps > 1000)
+            {
+                periodUs = (1000000 + maxfps - 1) / maxfps; // rounded up: never above the cap
+                if (com_timescale->value == 1.0f)
+                    minMsec = 0;
+            }
+            else if (maxfps > 0 && maxfps < 1000)
+            {
+                if (1000 % maxfps == 0)
+                    periodMs = 1000 / maxfps;
+                else
+                    periodUs = (1000000 + maxfps - 1) / maxfps;
+            }
+            else if (maxfps <= 0 && com_timescale->value == 1.0f)
+                minMsec = 0;
         }
     }
-    else
-        minMsec = 1;
 
-    do
+    // The deadline advances by exactly one period, so that caps that don't
+    // divide 1000 are exact and frames evenly spaced. A frame late by less
+    // than a period is made up by the next one; after a later one, frames
+    // start again from now (no burst to catch up).
+    nowUs = Sys_Microseconds();
+    nextFrameUs += periodUs;
+    if (nowUs - nextFrameUs > periodUs)
+        nextFrameUs = nowUs;
+
+    // Caps that divide 1000 keep the deadline in whole milliseconds of
+    // Sys_Milliseconds, the clock of com_frameTime, and frames start when it
+    // ticks (the wait polls the millisecond before): every frame is then
+    // 1000 / cap ms of game time, one usercmd, as with the old limiter. A
+    // deadline in microseconds sits anywhere in the millisecond, and near
+    // its end the microseconds from the start to com_frameTime's read put
+    // some reads in the next one: 3 and 5 ms frames instead of 4 at 250.
+    // Same rule after a late frame.
+    if (periodMs)
     {
-        if (com_sv_running->integer)
-        {
-            timeValSV = SV_SendQueuedPackets();
+        nowMs = Sys_Milliseconds();
+        nextFrameMs += periodMs;
+        if (nowMs - nextFrameMs > periodMs)
+            nextFrameMs = nowMs;
+        if (minMsec < nextFrameMs - com_frameTime)
+            minMsec = nextFrameMs - com_frameTime;
+    }
 
-            timeVal = Com_TimeVal(minMsec);
-
-            if (timeValSV < timeVal)
-                timeVal = timeValSV;
-        }
-        else
-            timeVal = Com_TimeVal(minMsec);
-
-        if (com_busyWait->integer || timeVal < 1)
-            NET_Sleep(0);
-        else
-            NET_Sleep(timeVal - 1);
-    } while (Com_TimeVal(minMsec));
+    Com_FrameWait(minMsec, nextFrameUs, periodMs != 0);
 
     IN_Frame();
 
     lastTime = com_frameTime;
     com_frameTime = Com_EventLoop();
+    Com_LatchRenderFraction();
 
     msec = com_frameTime - lastTime;
 
@@ -2460,7 +2622,9 @@ void Com_Frame( void ) {
 #ifdef __cplusplus
 		fpstime = fps_clock_t::now();
 #else
-		fpstime = Sys_Milliseconds();
+		// microseconds: frames shorter than a millisecond (above 1000 a
+		// second) made whole milliseconds a coarse measure
+		fpstime = Sys_Microseconds();
 #endif
 
 		delta = fpstime - fpslasttime;
@@ -2478,7 +2642,7 @@ void Com_Frame( void ) {
 		}
 #else
 		if (fpstotal) {
-			currentfps = MAX_FPS_TIMES / (fpstotal / 1000.0);
+			currentfps = MAX_FPS_TIMES / (fpstotal / 1000000.0);
 		} else {
 			currentfps = 0.0;
 		}

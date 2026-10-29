@@ -55,6 +55,15 @@ UILayout::UILayout(const char *filename)
     }
 }
 
+UILayout::UILayout(const char *name, const char *buffer, int length)
+{
+    BogusFunction();
+    m_script   = NULL;
+    m_filename = name;
+
+    LoadBuffer(name, buffer, length);
+}
+
 void UILayout::BogusFunction(void) {}
 
 void UILayout::CreateWidgetContainer(Event *ev)
@@ -223,6 +232,19 @@ void UILayout::Load(const char *filename, bool bFullLoad)
     ProcessCommands(bFullLoad);
 
     m_bLoaded = bFullLoad;
+
+    delete m_script;
+    m_script = NULL;
+}
+
+void UILayout::LoadBuffer(const char *name, const char *buffer, int length)
+{
+    m_bLoaded = true;
+
+    m_script = new Script;
+    m_script->LoadFile(name, length, buffer);
+
+    ProcessCommands(true);
 
     delete m_script;
     m_script = NULL;

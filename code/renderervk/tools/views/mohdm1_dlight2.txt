@@ -1,0 +1,34 @@
+# dm/mohdm1 dynamic lights on what mohdm1_dlight doesn't show (its views
+# have the world's faces, static models: the bushes, lit per vertex with
+# useSpecialLighting, and a small entity): a brush model, the door *15, lit
+# per pixel by light 0 (dl2_door), by light 1 (dl2_doorproj: GL1 lit brush
+# models' lightmaps with light 0 only, R_AddBrushModelSurfaces, and gave the
+# faces light 0 didn't reach ProjectDlightTexture from the others) and by
+# three lights (dl2_door3), curved patches (the vault at -620 -350 120) and
+# an entity (a soldier: per vertex, RB_Sphere_SetupEntity / RB_Light_Real).
+# The lights are script_models given a light as in mohdm1_dlight; spawned in
+# this order, dl1 is light 0.
+spmap dm/mohdm1
+set spawn fx/dummy.tik targetname dl1
+set spawn fx/dummy.tik targetname dl2
+set spawn fx/dummy.tik targetname dl3
+set spawn script_model model human/allied_airborne_soldier.tik targetname sol
+set wait 200
+set script dl1 origin "-700 546 60"
+set script dl1 light 1 0.7 0.4 250
+set script dl2 origin "760 -300 2000"
+set script dl2 light 0.4 0.6 1 260
+set script dl3 origin "790 -230 70"
+set script dl3 light 1 0.4 0.8 220
+set script sol origin "700 -280 0"
+set script sol angle 0
+set wait 4000
+shot dl2_door -600 546 0 5 180 0
+set script dl1 origin "-620 -350 80"
+set script dl2 origin "-700 546 60"
+shot dl2_doorproj -600 546 0 5 180 0
+shot dl2_vault -450 -350 0 -15 180 0
+shot dl2_soldier 900 -280 0 5 180 0
+set script dl1 origin "-700 610 60"
+set script dl3 origin "-700 480 60"
+shot dl2_door3 -600 546 0 5 180 0

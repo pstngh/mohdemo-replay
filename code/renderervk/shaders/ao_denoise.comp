@@ -1,0 +1,61 @@
+/*
+===========================================================================
+Copyright (C) 2026 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+// ao_denoise.comp -- the ambient occlusion's second blur (r_ao,
+// ao_common.glsl): with two blurs (r_aoQuality 3, or without history: the
+// first frames after a cut are the noisiest) ao_temporal.comp's lighter
+// first one is in o_blur; this one blurs it again (AoBlur) into what
+// ao_apply.frag blends (AoResult).
+
+#version 450
+#include "ao_common.glsl"
+
+layout( local_size_x = 8, local_size_y = 8 ) in;
+
+void main() {
+	ivec2 lo = pc.view.rect.xy;
+	ivec2 hi = pc.view.rect.xy + pc.view.rect.zw - 1;
+	ivec2 p = lo + ivec2( gl_GlobalInvocationID.xy );
+
+	if ( any( greaterThan( p, hi ) ) ) {
+		return;
+	}
+
+	// the 3 x 3 in gathers (AO_GATHER3X3's order: g[0] = (L, C, T, TL),
+	// g[1] = (C, R, TR, T), g[2] = (BL, B, C, L), g[3] = (B, BR, R, C)) and
+	// the view distances two away
+	vec4 g[4], d[4];
+	float v[9], z[13];
+
+	AO_GATHER3X3( u_blur, p, 0, g );
+	AO_GATHER3X3( u_aoDepth, p, 0, d );
+	v[0] = g[0].w; v[1] = g[0].z; v[2] = g[1].z; v[3] = g[0].x; v[4] = g[0].y; v[5] = g[1].y; v[6] = g[2].x; v[7] = g[2].y; v[8] = g[3].y;
+	z[0] = d[0].w; z[1] = d[0].z; z[2] = d[1].z; z[3] = d[0].x; z[4] = d[0].y; z[5] = d[1].y; z[6] = d[2].x; z[7] = d[2].y; z[8] = d[3].y;
+	z[9] = texelFetch( u_aoDepth, clamp( p - ivec2( 2, 0 ), lo, hi ), 0 ).r;
+	z[10] = texelFetch( u_aoDepth, clamp( p + ivec2( 2, 0 ), lo, hi ), 0 ).r;
+	z[11] = texelFetch( u_aoDepth, clamp( p - ivec2( 0, 2 ), lo, hi ), 0 ).r;
+	z[12] = texelFetch( u_aoDepth, clamp( p + ivec2( 0, 2 ), lo, hi ), 0 ).r;
+
+	float frames = texelFetch( u_blur, p, 0 ).g;
+
+	imageStore( o_result, p, AoResult( AoBlur( v, z, frames, true ), z[4] ) );
+}

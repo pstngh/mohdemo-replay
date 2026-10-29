@@ -1,0 +1,10 @@
+# m6l2a (single player, snowy town at night): snowfield1 (tcMod parallax,
+# nextBundle, additive stage with a lightmap), frozenriver, street lamps,
+# snowy forest on LOD terrain
+map m6l2a
+shot m62_square -2278 -3500 50 15 300 0
+shot m62_wall -2200 -3400 120 30 270 0
+shot m62_river -556 -2700 -150 35 270 0
+shot m62_bridge -556 -3000 -150 30 90 0
+shot m62_forest -5248 -4160 309 20 0 0
+shot m62_forest2 -5248 -4160 309 20 180 0

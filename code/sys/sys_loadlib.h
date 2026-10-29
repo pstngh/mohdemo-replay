@@ -35,16 +35,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #		define Sys_LibraryError() dlerror()
 #	endif
 #else
-#	ifdef USE_INTERNAL_SDL_HEADERS
-#		include "SDL.h"
-#		include "SDL_loadso.h"
-#	else
-#		include <SDL.h>
-#		include <SDL_loadso.h>
-#	endif
-#	define Sys_LoadLibrary(f) SDL_LoadObject(f)
-#	define Sys_UnloadLibrary(h) SDL_UnloadObject(h)
-#	define Sys_LoadFunction(h,fn) SDL_LoadFunction(h,fn)
+#	include <SDL3/SDL.h>
+// handles are void *, as the callers keep them (SDL 3's are SDL_SharedObject *)
+#	define Sys_LoadLibrary(f) (void*)SDL_LoadObject(f)
+#	define Sys_UnloadLibrary(h) SDL_UnloadObject((SDL_SharedObject*)h)
+#	define Sys_LoadFunction(h,fn) (void*)SDL_LoadFunction((SDL_SharedObject*)h,fn)
 #	define Sys_LibraryError() SDL_GetError()
 #endif
 

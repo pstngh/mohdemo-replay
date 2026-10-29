@@ -67,6 +67,7 @@ cvar_t	*cl_demoFiles;
 cvar_t	*cl_demoKillBefore;
 cvar_t	*cl_demoKillAfter;
 cvar_t	*cl_demoMultiKill;
+cvar_t	*cl_csAppend;
 
 cvar_t	*cl_shownet;
 cvar_t	*cl_netprofile;
@@ -97,7 +98,6 @@ cvar_t	*m_pitch;
 cvar_t	*m_yaw;
 cvar_t	*m_forward;
 cvar_t	*m_side;
-cvar_t	*m_filter;
 
 cvar_t	*j_pitch;
 cvar_t	*j_yaw;
@@ -4285,7 +4285,15 @@ void CL_InitRef( void ) {
 #define RENDERER_ARCH_DLL_EXT DLL_SUFFIX DLL_EXT
 
 #ifdef USE_RENDERER_DLOPEN
-	cl_renderer = Cvar_Get("cl_renderer", "opengl1", CVAR_ARCHIVE | CVAR_LATCH);
+	// renderer_vulkan, the only renderer; another name loads renderer_<name>
+	// (a test copy), and a name without a library falls back to vulkan.
+	// Upstream's OpenGL renderers are gone: an old config's opengl1 is reset,
+	// also where an earlier install left its library in the game folder
+	cl_renderer = Cvar_Get("cl_renderer", "vulkan", CVAR_ARCHIVE | CVAR_LATCH);
+	if (!Q_stricmpn(cl_renderer->string, "opengl", 6)) {
+		Com_Printf("cl_renderer %s: no OpenGL renderer any more, using vulkan\n", cl_renderer->string);
+		Cvar_ForceReset("cl_renderer");
+	}
 
 	Com_sprintf(dllName, sizeof(dllName), "renderer_%s" RENDERER_ARCH_DLL_EXT, cl_renderer->string);
 
@@ -4681,6 +4689,8 @@ void CL_Init( void ) {
 	cl_demoKillAfter = Cvar_Get ("cl_demoKillAfter", "2", CVAR_ARCHIVE );
 	//  Seconds at most between a player's kills in a multi-kill
 	cl_demoMultiKill = Cvar_Get ("cl_demoMultiKill", "3", CVAR_ARCHIVE );
+	// changed configstrings appended to the gamestate (CL_ConfigstringModified)
+	cl_csAppend = Cvar_Get ("cl_csAppend", "1", 0 );
 	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP );
 	cl_activeAction = Cvar_Get( "activeAction", "", CVAR_TEMP );
 
@@ -4703,7 +4713,8 @@ void CL_Init( void ) {
 	cl_pitchspeed = Cvar_Get ("cl_pitchspeed", "140", CVAR_ARCHIVE);
 	cl_anglespeedkey = Cvar_Get ("cl_anglespeedkey", "1.5", 0);
 
-	cl_maxpackets = Cvar_Get ("cl_maxpackets", "30", CVAR_ARCHIVE );
+	// every command of cl_movefps 100 in its own packet (MoHAA Reloaded's default, upstream's is 30)
+	cl_maxpackets = Cvar_Get ("cl_maxpackets", "125", CVAR_ARCHIVE );
 	cl_packetdup = Cvar_Get ("cl_packetdup", "1", CVAR_ARCHIVE );
 
 	cl_run = Cvar_Get( "cl_run", "1", CVAR_ARCHIVE );
@@ -4744,12 +4755,8 @@ void CL_Init( void ) {
 	m_yaw = Cvar_Get ("m_yaw", "0.022", CVAR_ARCHIVE);
 	m_forward = Cvar_Get ("m_forward", "0.25", CVAR_ARCHIVE);
 	m_side = Cvar_Get ("m_side", "0.25", CVAR_ARCHIVE);
-#ifdef MACOS_X
-        // Input is jittery on OS X w/o this
-	m_filter = Cvar_Get ("m_filter", "1", CVAR_ARCHIVE);
-#else
-	m_filter = Cvar_Get ("m_filter", "0", CVAR_ARCHIVE);
-#endif
+	// no m_filter: upstream's averaged each frame's mouse movement with the
+	// frame before's (half of every movement a frame later)
 
 	j_pitch =        Cvar_Get ("j_pitch",        "0.022", CVAR_ARCHIVE);
 	j_yaw =          Cvar_Get ("j_yaw",          "-0.022", CVAR_ARCHIVE);

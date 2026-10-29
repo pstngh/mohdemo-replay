@@ -1821,6 +1821,185 @@ qboolean UI_FullscreenMenuUp()
 
 /*
 ====================
+HDR calibration (r_hdrOutputTest)
+
+Menus built into the client, so they exist whatever the search path, two
+for HDR output and two for the HDR look (r_hdrOutput 2): the black level's
+(a slider on r_hdrBlack, Next) and the peak's (a slider on r_hdrPeak,
+Finish). Next pushes the peak's menu on top of the black level's, as the
+stock menus chain theirs (a pushmenu right after a popmenu is dropped: both
+lock the menus for their motion time), so Escape there goes back to the
+black level; Finish sets r_hdrOutputTest 0, and UI_HdrCalibrationUpdate
+closes them. Their widgets sit in the bottom fifth; the renderer draws the
+screen's pattern above them (r_hdrOutputTestPage, vk_output.c). A
+ui/<name>.urc of the same name replaces one.
+====================
+*/
+#define UI_HDR_MENU_BLACK     "hdr_calibrate_black"
+#define UI_HDR_MENU_PEAK      "hdr_calibrate_peak"
+// the HDR look's: SDR has no peak to find, its peak screen shows how far
+// r_hdrPeak lifts a bright surface toward white (VK_OutputSdrBox)
+#define UI_HDR_MENU_BLACK_SDR "hdr_calibrate_black_sdr"
+#define UI_HDR_MENU_PEAK_SDR  "hdr_calibrate_peak_sdr"
+
+// the peak sliders' range, VK_HDR_CAL_PEAK_MIN and MAX in vk_output.c
+#define UI_HDR_PEAK_MIN "100"
+#define UI_HDR_PEAK_MAX "10000"
+
+#define UI_HDR_MENU_HEADER(name) \
+    "menu \"" name "\" 640 480 NONE 0\n" \
+    "fullscreen 1\n" \
+    "bgcolor 0 0 0 1\n" \
+    "borderstyle NONE\n" \
+    "bgfill 0 0 0 1\n" \
+    "virtualres 1\n"
+
+#define UI_HDR_MENU_BODY(text, cvar, low, high, step, button, command) \
+    "resource\nLabel\n{\n" \
+    "name \"Default\"\n" \
+    "title \"" text "\"\n" \
+    "rect 70 392 500 16\n" \
+    "fgcolor 1.00 1.00 1.00 1.00\n" \
+    "bgcolor 0.00 0.00 0.00 0.00\n" \
+    "borderstyle \"NONE\"\n" \
+    "}\n" \
+    "resource\nSlider\n{\n" \
+    "name \"Default\"\n" \
+    "rect 170 412 300 32\n" \
+    "fgcolor 1.00 1.00 1.00 1.00\n" \
+    "bgcolor 0.50 0.50 0.50 0.00\n" \
+    "borderstyle \"NONE\"\n" \
+    "shader \"textures/menu/slider\"\n" \
+    "linkcvar \"" cvar "\"\n" \
+    "slidertype float\n" \
+    "setrange " low " " high "\n" \
+    "stepsize " step "\n" \
+    "}\n" \
+    "resource\nLabel\n{\n" \
+    "name \"Default\"\n" \
+    "rect 480 420 80 16\n" \
+    "fgcolor 1.00 1.00 1.00 1.00\n" \
+    "bgcolor 0.00 0.00 0.00 0.00\n" \
+    "borderstyle \"NONE\"\n" \
+    "linkcvar \"" cvar "\"\n" \
+    "}\n" \
+    "resource\nButton\n{\n" \
+    "title \"" button "\"\n" \
+    "name \"Default\"\n" \
+    "rect 272 448 96 24\n" \
+    "fgcolor 1.00 1.00 1.00 1.00\n" \
+    "bgcolor 0.25 0.25 0.25 1.00\n" \
+    "borderstyle \"3D_BORDER\"\n" \
+    "clicksound \"sound/menu/apply.wav\"\n" \
+    "stuffcommand \"" command "\"\n" \
+    "}\n" \
+    "end.\n"
+
+#define UI_HDR_BLACK_TEXT "Move the slider until the box in the middle is barely visible"
+
+#define UI_BUILTIN_MENU(name, text) {name, text, sizeof(text) - 1}
+
+static const struct {
+    const char *name;
+    const char *text;
+    int         length;
+} ui_builtinMenus[] = {
+    UI_BUILTIN_MENU(UI_HDR_MENU_BLACK, UI_HDR_MENU_HEADER(UI_HDR_MENU_BLACK) UI_HDR_MENU_BODY(
+        UI_HDR_BLACK_TEXT, "r_hdrBlack", "-0.5", "1", "0.05", "Next", "pushmenu " UI_HDR_MENU_PEAK
+    )),
+    UI_BUILTIN_MENU(UI_HDR_MENU_PEAK, UI_HDR_MENU_HEADER(UI_HDR_MENU_PEAK) UI_HDR_MENU_BODY(
+        "Raise the slider until the box disappears into the background",
+        "r_hdrPeak", UI_HDR_PEAK_MIN, UI_HDR_PEAK_MAX, "50", "Finish", "set r_hdrOutputTest 0"
+    )),
+    UI_BUILTIN_MENU(UI_HDR_MENU_BLACK_SDR, UI_HDR_MENU_HEADER(UI_HDR_MENU_BLACK_SDR) UI_HDR_MENU_BODY(
+        UI_HDR_BLACK_TEXT, "r_hdrBlack", "-0.5", "1", "0.05", "Next", "pushmenu " UI_HDR_MENU_PEAK_SDR
+    )),
+    UI_BUILTIN_MENU(UI_HDR_MENU_PEAK_SDR, UI_HDR_MENU_HEADER(UI_HDR_MENU_PEAK_SDR) UI_HDR_MENU_BODY(
+        "Raise the slider to lift the box toward the white around it",
+        "r_hdrPeak", UI_HDR_PEAK_MIN, UI_HDR_PEAK_MAX, "50", "Finish", "set r_hdrOutputTest 0"
+    )),
+};
+
+/*
+====================
+UI_LoadBuiltinMenus
+
+The client's own menus, after the ui/*.urc files: only those no file
+defines
+====================
+*/
+static void UI_LoadBuiltinMenus(void)
+{
+    size_t i;
+
+    for (i = 0; i < ARRAY_LEN(ui_builtinMenus); i++) {
+        if (!menuManager.FindMenu(ui_builtinMenus[i].name)) {
+            new UILayout(
+                va("ui/%s.urc", ui_builtinMenus[i].name), ui_builtinMenus[i].text, ui_builtinMenus[i].length
+            );
+        }
+    }
+}
+
+/*
+====================
+UI_HdrCalibrationUpdate
+
+Every frame: r_hdrOutputTest 1 opens the black level's menu (the HDR
+look's with r_hdrOutput 2); when no calibration menu is on top any more
+(Escape on the black level's) r_hdrOutputTest goes back to 0, and while it
+is 0 (Finish, the console, the renderer refusing) the calibration menu on
+top is closed, one a frame (popping waits for the menus' lock).
+r_hdrOutputTestPage tells the renderer which pattern to draw: 1 black, 2
+peak, 0 none
+====================
+*/
+static void UI_HdrCalibrationUpdate(void)
+{
+    static cvar_t  *test, *page, *output;
+    static qboolean wasOpen;
+    Menu           *menu;
+    int             onPage;
+
+    if (!test) {
+        test   = Cvar_Get("r_hdrOutputTest", "0", 0);
+        page   = Cvar_Get("r_hdrOutputTestPage", "0", CVAR_ROM);
+        output = Cvar_Get("r_hdrOutput", "0", CVAR_ARCHIVE | CVAR_LATCH);
+    }
+
+    menu   = menuManager.CurrentMenu();
+    onPage = 0;
+    if (menu && (!str::icmp(menu->m_name, UI_HDR_MENU_BLACK) || !str::icmp(menu->m_name, UI_HDR_MENU_BLACK_SDR))) {
+        onPage = 1;
+    } else if (menu && (!str::icmp(menu->m_name, UI_HDR_MENU_PEAK) || !str::icmp(menu->m_name, UI_HDR_MENU_PEAK_SDR))) {
+        onPage = 2;
+    }
+
+    if (test->integer && !onPage) {
+        if (wasOpen) {
+            // closed (Escape)
+            Cvar_Set("r_hdrOutputTest", "0");
+        } else {
+            const char *first = output->integer == 2 ? UI_HDR_MENU_BLACK_SDR : UI_HDR_MENU_BLACK;
+
+            if (menuManager.FindMenu(first)) {
+                UI_PushMenu(first);
+                onPage = 1;
+            }
+        }
+    } else if (!test->integer && onPage) {
+        UI_PopMenu(qfalse);
+        onPage = 0;
+    }
+
+    wasOpen = onPage != 0;
+    if (page->integer != onPage) {
+        Cvar_Set("r_hdrOutputTestPage", va("%i", onPage));
+    }
+}
+
+/*
+====================
 UI_Update
 
 Updates the UI.
@@ -1834,6 +2013,7 @@ void UI_Update(void)
     re.SetRenderTime(cls.realtime);
     CL_FillUIDef();
     uWinMan.ServiceEvents();
+    UI_HdrCalibrationUpdate();
 
     //
     // draw the base HUD when in-game
@@ -4918,9 +5098,7 @@ CL_TryStartIntro
 */
 void CL_TryStartIntro(void)
 {
-    // Modified in OPM
-    //  Without the intro, start at the main menu: the console only opens by
-    //  itself for developers
+    // the console opens at startup only in developer mode (upstream opened it whenever no intro played)
     if (developer->integer) {
         UI_ToggleConsole();
     } else if (cl_playintro->integer) {
@@ -5260,7 +5438,8 @@ void CL_InitializeUI(void)
     ui_minicon         = Cvar_Get("ui_minicon", "0", 1);
     ui_gmbox           = Cvar_Get("ui_gmbox", "1", 1);
     ui_consoleposition = Cvar_Get("ui_consoleposition", "", 1);
-    ui_console         = Cvar_Get("ui_console", "0", 1);
+    // the console key works by default (MoHAA Reloaded's default, upstream's is 0)
+    ui_console         = Cvar_Get("ui_console", "1", 1);
     ui_crosshair       = Cvar_Get("ui_crosshair", "1", 1);
     ui_weaponsbar      = Cvar_Get("ui_weaponsbar", "1", 1);
     ui_weaponsbartime  = Cvar_Get("ui_weaponsbartime", "2500", 1);
@@ -5306,7 +5485,7 @@ void CL_InitializeUI(void)
     ui_legalscreen_fadeout = Cvar_Get("ui_legalscreen_fadeout", "1", 0);
     ui_legalscreen_stay    = Cvar_Get("ui_legalscreen_stay", "3", 0);
     cl_greenfps            = Cvar_Get("cl_greenfps", "0", 1);
-    // Changed in OPM: no intro unless asked for
+    // no intro videos unless asked for (MoHAA Reloaded's default, upstream's is 1)
     cl_playintro           = Cvar_Get("cl_playintro", "0", 0);
     cl_movieaudio          = Cvar_Get("cl_movieaudio", "1", 0);
     Cvar_Get("ui_startmap", "", 1);
@@ -5451,6 +5630,8 @@ void CL_InitializeUI(void)
     }
 
     FS_FreeFileList(filenames);
+
+    UI_LoadBuiltinMenus();
 
     uWinMan.CreateMenus();
 

@@ -35,6 +35,8 @@ extern cvar_t *s_loadas8bit;
 extern cvar_t *s_separation;
 extern cvar_t *s_musicVolume;
 extern cvar_t *s_ambientVolume;
+extern cvar_t *s_soundtrackCache;
+extern cvar_t *s_loadBuffers;
 
 #define MAX_SOUNDSYSTEM_CHANNELS_3D        32
 #define MAX_SOUNDSYSTEM_CHANNELS_2D        32
@@ -63,6 +65,9 @@ typedef struct {
     int dataofs;
     int datasize;
     int dataalign;
+
+    // Added in Omaha: rate of the file before DownSampleWav (sfx_info loop points use it)
+    float srcrate;
 } wavinfo_t;
 
 typedef struct sfx_s {
@@ -162,6 +167,8 @@ enum channel_flags_t {
     CHANNEL_FLAG_LOOPING        = 128,
     // Added in OPM
     CHANNEL_FLAG_MISSING_ENT    = 256,
+    // Added in Omaha: the voice belongs to a loop slot (AddLoopSounds), not a one-shot
+    CHANNEL_FLAG_LOOP_OWNED     = 512,
 };
 
 enum sfx_flags_t {
@@ -170,6 +177,9 @@ enum sfx_flags_t {
     SFX_FLAG_STREAMED      = 4,
     SFX_FLAG_NO_OFFSET     = 8,
     SFX_FLAG_NULL          = 16,
+    // Added in Omaha: streamed combat VO force-load (s_pain_hrtf) was tried once
+    SFX_FLAG_PROMOTE_DONE   = 32,
+    SFX_FLAG_PROMOTE_FAILED = 64,
 };
 
 enum loopsound_flags_t {
@@ -192,10 +202,6 @@ extern sfx_info_t sfx_infos[];
 extern sfx_t      s_knownSfx[];
 extern int        s_numSfx;
 extern s_entity_t s_entity[];
-
-// The current sound driver.
-// Currently OPENAL
-#define SOUND_DRIVER OPENAL
 
 //
 // snd_info.cpp
@@ -223,22 +229,24 @@ qboolean S_LoadSound(const char *fileName, sfx_t *sfx, int streamed, qboolean fo
 //
 // Driver-specific functions
 //
-#define S_Call_SndDriver(driver, func)  S_##driver##_##func
-#define S_Call_SndDriverX(driver, func) S_Call_SndDriver(driver, func)
+// Changed in Omaha: the driver is the sound host selected at S_Init (snd_host.h)
+#include "snd_host.h"
 
-#define S_Driver_Init                   S_Call_SndDriverX(SOUND_DRIVER, Init)
-#define S_Driver_Shutdown               S_Call_SndDriverX(SOUND_DRIVER, Shutdown)
-#define S_Driver_StartSound             S_Call_SndDriverX(SOUND_DRIVER, StartSound)
-#define S_Driver_AddLoopingSound        S_Call_SndDriverX(SOUND_DRIVER, AddLoopingSound)
-#define S_Driver_ClearLoopingSounds     S_Call_SndDriverX(SOUND_DRIVER, ClearLoopingSounds)
-#define S_Driver_StopSound              S_Call_SndDriverX(SOUND_DRIVER, StopSound)
-#define S_Driver_StopAllSounds          S_Call_SndDriverX(SOUND_DRIVER, StopAllSounds)
-#define S_Driver_Respatialize           S_Call_SndDriverX(SOUND_DRIVER, Respatialize)
-#define S_Driver_SetReverb              S_Call_SndDriverX(SOUND_DRIVER, SetReverb)
-#define S_Driver_Update                 S_Call_SndDriverX(SOUND_DRIVER, Update)
-#define S_Driver_GetMusicFilename       S_Call_SndDriverX(SOUND_DRIVER, GetMusicFilename)
-#define S_Driver_GetMusicLoopCount      S_Call_SndDriverX(SOUND_DRIVER, GetMusicLoopCount)
-#define S_Driver_GetMusicOffset         S_Call_SndDriverX(SOUND_DRIVER, GetMusicOffset)
+#define S_Driver_Init                   S_Host_Init
+#define S_Driver_Shutdown               s_sndHost->Shutdown
+#define S_Driver_StartSound             s_sndHost->StartSound
+#define S_Driver_AddLoopingSound        s_sndHost->AddLoopingSound
+#define S_Driver_ClearLoopingSounds     s_sndHost->ClearLoopingSounds
+#define S_Driver_StopSound              s_sndHost->StopSound
+#define S_Driver_StopAllSounds          s_sndHost->StopAllSounds
+#define S_Driver_Respatialize           s_sndHost->Respatialize
+#define S_Driver_SetReverb              s_sndHost->SetReverb
+#define S_Driver_Update                 s_sndHost->Update
+#define S_Driver_GetMusicFilename       s_sndHost->GetMusicFilename
+#define S_Driver_GetMusicLoopCount      s_sndHost->GetMusicLoopCount
+#define S_Driver_GetMusicOffset         s_sndHost->GetMusicOffset
+#define S_Driver_PreloadSfx             s_sndHost->PreloadSfx
+#define S_Driver_FreeSfx                s_sndHost->FreeSfx
 
 void S_PrintInfo();
 void S_DumpInfo();

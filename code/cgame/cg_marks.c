@@ -60,6 +60,151 @@ cvar_t     *cg_treadmark_test;
 
 vec3_t vec_upwards = {0, 0, 1};
 
+/*
+Temporary marks (the blob and feet shadows of cg_shadows, temporary decals)
+go to the renderer every frame and are not kept. What they are projected
+onto, the world's brushes and terrain, doesn't move: a temporary mark made
+again in the same server snapshot with the same shader, origin, direction,
+orientation and size gets the fragments it got before, and the verts too
+when its colors are the same. A mark with a fragment on a brush entity is
+built every frame; one without keeps its fragments for the rest of the
+snapshot, so a brush entity that moves under it within the snapshot (a
+door) only gets its part from the next one.
+*/
+#define TEMP_MARK_SLOTS 16
+#define TEMP_MARK_VERTS 64
+
+typedef struct {
+    int            serverTime;
+    qhandle_t      shader;
+    vec3_t         origin;
+    vec3_t         dir;
+    float          orientation;
+    float          sScale;
+    float          tScale;
+    float          sCenter;
+    float          tCenter;
+    int            numFragments;
+    int            numPoints;
+    vec3_t         axis[3];
+    vec3_t         points[MAX_MARK_POINTS];
+    markFragment_t fragments[MAX_MARK_FRAGMENTS];
+    // the verts passed to the renderer for the fragments, with these colors
+    qboolean       hasVerts;
+    byte           colors[4];
+    int            numVerts;
+    polyVert_t     verts[TEMP_MARK_VERTS];
+} tempMarkSlot_t;
+
+static tempMarkSlot_t cg_tempMarks[TEMP_MARK_SLOTS];
+static int            cg_nextTempMark;
+static int            cg_tempMarkTime;
+
+/*
+===============
+CG_FindTempMark
+
+The slot of a temporary mark made with the same parameters in this server
+snapshot, or NULL
+===============
+*/
+static tempMarkSlot_t *CG_FindTempMark(
+    int          serverTime,
+    qhandle_t    shader,
+    const vec3_t origin,
+    const vec3_t dir,
+    float        orientation,
+    float        sScale,
+    float        tScale,
+    float        sCenter,
+    float        tCenter
+)
+{
+    tempMarkSlot_t *s;
+    int             i;
+
+    if (serverTime < cg_tempMarkTime) {
+        // a new map, or a demo started again
+        memset(cg_tempMarks, 0, sizeof(cg_tempMarks));
+        cg_nextTempMark = 0;
+    }
+    cg_tempMarkTime = serverTime;
+
+    for (i = 0, s = cg_tempMarks; i < TEMP_MARK_SLOTS; i++, s++) {
+        if (s->serverTime == serverTime && s->shader == shader && s->orientation == orientation && s->sScale == sScale
+            && s->tScale == tScale && s->sCenter == sCenter && s->tCenter == tCenter && VectorCompare(s->origin, origin)
+            && VectorCompare(s->dir, dir)) {
+            return s;
+        }
+    }
+    return NULL;
+}
+
+/*
+===============
+CG_KeepTempMark
+
+Keeps the fragments of a temporary mark for the rest of the server snapshot
+when none of them is on a brush entity; returns the slot, or NULL
+===============
+*/
+static tempMarkSlot_t *CG_KeepTempMark(
+    int                   serverTime,
+    qhandle_t             shader,
+    const vec3_t          origin,
+    const vec3_t          dir,
+    float                 orientation,
+    float                 sScale,
+    float                 tScale,
+    float                 sCenter,
+    float                 tCenter,
+    const vec3_t          axis[3],
+    const vec3_t         *points,
+    const markFragment_t *fragments,
+    int                   numFragments
+)
+{
+    tempMarkSlot_t *s;
+    int             numPoints;
+    int             i;
+
+    if (numFragments < 0 || numFragments > MAX_MARK_FRAGMENTS) {
+        return NULL;
+    }
+
+    numPoints = 0;
+    for (i = 0; i < numFragments; i++) {
+        if (fragments[i].iIndex < 0) {
+            return NULL;
+        }
+        numPoints = Q_max(numPoints, fragments[i].firstPoint + fragments[i].numPoints);
+    }
+    if (numPoints > MAX_MARK_POINTS) {
+        return NULL;
+    }
+
+    s               = &cg_tempMarks[cg_nextTempMark];
+    cg_nextTempMark = (cg_nextTempMark + 1) % TEMP_MARK_SLOTS;
+
+    s->serverTime   = serverTime;
+    s->shader       = shader;
+    VectorCopy(origin, s->origin);
+    VectorCopy(dir, s->dir);
+    s->orientation  = orientation;
+    s->sScale       = sScale;
+    s->tScale       = tScale;
+    s->sCenter      = sCenter;
+    s->tCenter      = tCenter;
+    s->numFragments = numFragments;
+    s->numPoints    = numPoints;
+    memcpy(s->axis, axis, sizeof(s->axis));
+    memcpy(s->points, points, sizeof(vec3_t) * numPoints);
+    memcpy(s->fragments, fragments, sizeof(markFragment_t) * numFragments);
+    s->hasVerts = qfalse;
+    s->numVerts = 0;
+    return s;
+}
+
 typedef struct cg_impactmarkinfo_s {
     vec3_t axis[3];
     vec3_t origin;
@@ -627,6 +772,8 @@ void CG_ImpactMark(
     vec3_t              v;
     float               fRadiusSquared;
     cg_impactmarkinfo_t info;
+    tempMarkSlot_t     *tempMark;
+    int                 serverTime;
 
     if (!cg_bMarksInitialized) {
         return;
@@ -661,36 +808,69 @@ void CG_ImpactMark(
     fSScale3 = (1.0 - fSCenter) * fSScale + (1.0 - fSCenter) * fSScale;
     fTScale3 = (1.0 - fTCenter) * fTScale + (1.0 - fTCenter) * fTScale;
 
-    // create the texture axis
+    tempMark   = NULL;
+    serverTime = cg.snap ? cg.snap->serverTime : 0;
+    if (temporary && serverTime) {
+        tempMark =
+            CG_FindTempMark(serverTime, markShader, origin, dir, orientation, fSScale, fTScale, fSCenter, fTCenter);
+    }
 
-    if (orientation) {
-        VectorNormalize2(dir, info.axis[0]);
-        PerpendicularVector(info.axis[1], info.axis[0]);
-        RotatePointAroundVector(info.axis[2], info.axis[0], info.axis[1], orientation);
-        CrossProduct(info.axis[0], info.axis[2], info.axis[1]);
+    if (tempMark) {
+        // made in this snapshot already
+        numFragments = tempMark->numFragments;
+        memcpy(markPoints, tempMark->points, sizeof(vec3_t) * tempMark->numPoints);
+        memcpy(markFragments, tempMark->fragments, sizeof(markFragment_t) * numFragments);
+        memcpy(info.axis, tempMark->axis, sizeof(info.axis));
     } else {
-        vec3_t angles;
-        vec3_t tmp;
+        // create the texture axis
 
-        VectorNormalize2(dir, info.axis[0]);
-        VectorCopy(dir, tmp);
-        vectoangles(tmp, angles);
-        AnglesToAxis(angles, info.axis);
-        VectorScale(info.axis[2], -1, info.axis[2]);
+        if (orientation) {
+            VectorNormalize2(dir, info.axis[0]);
+            PerpendicularVector(info.axis[1], info.axis[0]);
+            RotatePointAroundVector(info.axis[2], info.axis[0], info.axis[1], orientation);
+            CrossProduct(info.axis[0], info.axis[2], info.axis[1]);
+        } else {
+            vec3_t angles;
+            vec3_t tmp;
+
+            VectorNormalize2(dir, info.axis[0]);
+            VectorCopy(dir, tmp);
+            vectoangles(tmp, angles);
+            AnglesToAxis(angles, info.axis);
+            VectorScale(info.axis[2], -1, info.axis[2]);
+        }
+
+        // create the full polygon
+        for (i = 0; i < 3; i++) {
+            originalPoints[0][i] = origin[i] - fSScale2 * info.axis[1][i] - fTScale2 * info.axis[2][i];
+            originalPoints[1][i] = origin[i] + fSScale3 * info.axis[1][i] - fTScale2 * info.axis[2][i];
+            originalPoints[2][i] = origin[i] + fSScale3 * info.axis[1][i] + fTScale3 * info.axis[2][i];
+            originalPoints[3][i] = origin[i] - fSScale2 * info.axis[1][i] + fTScale3 * info.axis[2][i];
+        }
+
+        // get the fragments
+        VectorScale(dir, -32, projection);
+
+        numFragments = CG_GetMarkFragments(4, originalPoints, projection, markPoints, markFragments, fRadiusSquared);
+
+        if (temporary && serverTime) {
+            tempMark = CG_KeepTempMark(
+                serverTime,
+                markShader,
+                origin,
+                dir,
+                orientation,
+                fSScale,
+                fTScale,
+                fSCenter,
+                fTCenter,
+                (const vec3_t *)info.axis,
+                (const vec3_t *)markPoints,
+                markFragments,
+                numFragments
+            );
+        }
     }
-
-    // create the full polygon
-    for (i = 0; i < 3; i++) {
-        originalPoints[0][i] = origin[i] - fSScale2 * info.axis[1][i] - fTScale2 * info.axis[2][i];
-        originalPoints[1][i] = origin[i] + fSScale3 * info.axis[1][i] - fTScale2 * info.axis[2][i];
-        originalPoints[2][i] = origin[i] + fSScale3 * info.axis[1][i] + fTScale3 * info.axis[2][i];
-        originalPoints[3][i] = origin[i] - fSScale2 * info.axis[1][i] + fTScale3 * info.axis[2][i];
-    }
-
-    // get the fragments
-    VectorScale(dir, -32, projection);
-
-    numFragments = CG_GetMarkFragments(4, originalPoints, projection, markPoints, markFragments, fRadiusSquared);
 
     if (dolighting) {
         vec3_t vLight;
@@ -714,22 +894,54 @@ void CG_ImpactMark(
     info.fSCenter = fSCenter;
     info.fTCenter = fTCenter;
     VectorCopy(origin, info.origin);
-    VectorAdd(origin, dir, v);
-    info.leafnum = cgi.CM_PointLeafnum(v);
 
     if (temporary) {
         polyVert_t verts[8];
 
+        // a kept mark's fragments are the world's, whose verts depend only
+        // on the slot's parameters and the colors
+        if (tempMark && tempMark->hasVerts && !memcmp(tempMark->colors, info.colors, sizeof(tempMark->colors))) {
+            const polyVert_t *sv = tempMark->verts;
+
+            for (i = 0, mf = markFragments; i < numFragments; i++, mf++) {
+                int numVerts = Q_min(mf->numPoints, 8);
+
+                // the renderer may change the verts it gets
+                memcpy(verts, sv, sizeof(polyVert_t) * numVerts);
+                CG_AddFragmentToScene(mf->iIndex, markShader, numVerts, verts);
+                sv += numVerts;
+            }
+            return;
+        }
+
+        if (tempMark) {
+            tempMark->hasVerts = qfalse;
+            tempMark->numVerts = 0;
+        }
         for (i = 0, mf = markFragments; i < numFragments; i++, mf++) {
             if (mf->numPoints > 8) {
                 mf->numPoints = 8;
             }
 
             if (CG_ImpactMark_PerPolyCallback(markPoints, mf, verts, (void *)&info)) {
+                if (tempMark && tempMark->numVerts + mf->numPoints <= TEMP_MARK_VERTS) {
+                    memcpy(tempMark->verts + tempMark->numVerts, verts, sizeof(polyVert_t) * mf->numPoints);
+                    tempMark->numVerts += mf->numPoints;
+                } else {
+                    tempMark = NULL;
+                }
                 CG_AddFragmentToScene(mf->iIndex, markShader, mf->numPoints, verts);
+            } else {
+                tempMark = NULL;
             }
         }
+        if (tempMark) {
+            memcpy(tempMark->colors, info.colors, sizeof(tempMark->colors));
+            tempMark->hasVerts = qtrue;
+        }
     } else {
+        VectorAdd(origin, dir, v);
+        info.leafnum = cgi.CM_PointLeafnum(v);
         CG_AssembleFinalMarks(
             markPoints,
             markFragments,

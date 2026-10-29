@@ -1,0 +1,9 @@
+# obj/obj_team4: the three poster decals of maps/obj/obj_team4.dcl (its map
+# time matches the BSP), farplane fog 4700, the m5l2 sky, the river bed
+map obj/obj_team4
+shot o4_poster1 -150 1407 389 0 180 0
+shot o4_poster2 983 980 163 0 -90 0
+shot o4_poster3 815 700 498 0 90 0
+shot o4_street -880 -2064 308 0 315 0
+shot o4_sky -880 -2064 308 -40 315 0
+shot o4_river -4288 600 150 25 270 0

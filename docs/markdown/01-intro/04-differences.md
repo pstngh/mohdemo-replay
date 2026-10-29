@@ -16,7 +16,7 @@ This document lists all differences in the engine between versions of the origin
 ## Summary
 
 - SDL2 backend
-- OpenAL sound support (better sound quality)
+- Omaha sound mixer (no OpenAL dependency)
 - Full 64-bit support
 - Cross-platform support
 - Multiuser support on OS (On Windows, user game data is stored in "%APPDATA%\openmohaa")
@@ -311,7 +311,7 @@ OpenMoHAA includes all known fixes and features from the latest version of Spear
 - 4K support
 - Customizable FOV
 - Improved mouse support on windowed mode
-- OpenAL and SDL are used
+- The Omaha mixer and SDL are used
 - Smoother animations
 
 #### Stufftext restriction
@@ -413,6 +413,7 @@ Enable this feature with `set sv_netoptimize 2`.
 - Improved portable turret placement
 - Increased the DM message limit in multiplayer
 - Nocliping when dead no longer makes the player animation sketchy
+- Leaning in the Allied Assault single-player campaign can be allowed with `g_splean`
 
 ## Planned features
 

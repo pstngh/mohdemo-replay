@@ -1,0 +1,7 @@
+# dm/mohdm5: dense farplane fog (farplane 1800); the snow particles are
+# random and differ between runs
+map dm/mohdm5
+shot f5_a 4896 -4640 172 0 180 0
+shot f5_b 2624 -4048 228 0 90 0
+shot f5_c 4352 -3424 252 0 225 0
+shot f5_d 3500 -4000 700 20 180 0

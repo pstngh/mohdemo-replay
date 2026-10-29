@@ -1,0 +1,30 @@
+# The in-game HUD over views of dm/mohdm1 in a team match (the other lists
+# hide it with ui_hud 0): compass, health, ammo, crosshair, score and time
+# left, chat lines and the scoreboard, for the 2D batches (README,
+# Implementation notes, 2D batches): lines of text of one color in one
+# widget, the compass's pairs of triangles, the widgets' transparent boxes
+# (DrawBox). The player's name is set (the default has a random number) and
+# the spawn and the weapon change waited for before the first shot. The
+# compass turns with the wall clock: masked.
+set g_gametype 2
+set sv_maxclients 4
+set sv_floodProtect 0
+set set name Tester
+map dm/mohdm1
+set ui_hud 1
+set join_team allies
+set primarydmweapon rifle
+set wait 3000
+set give all
+set wait 5000
+shot hud_court 400 -216 300 30 -150 0
+set say one two three
+set say four five six
+set say a third line
+shot hud_spawn 848 -216 60 0 -180 0
+set +scores
+shot hud_scores 848 -216 60 0 -180 0
+set -scores
+mask hud_court 16,12,96,96
+mask hud_spawn 16,12,96,96
+mask hud_scores 16,12,96,96

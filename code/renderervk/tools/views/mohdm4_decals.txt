@@ -1,0 +1,6 @@
+# dm/mohdm4 with fog off: the three poster decals of maps/DM/mohdm4.dcl
+map dm/mohdm4
+set r_farplane_nofog 1
+shot d4_poster1 814 700 498 0 90 0
+shot d4_poster2 983 980 163 0 -90 0
+shot d4_poster3 -150 1407 389 0 180 0

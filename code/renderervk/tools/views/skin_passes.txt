@@ -1,0 +1,92 @@
+# The generic iterator's stages skinned on the GPU (R_SkinPasses, see the
+# README, Skinned passes): the Afrika Korps goggles (facewrap: an environment
+# map and a blended pass), the tank commander's coat, hat and gloves
+# (environmentmodel and lightingSpherical), the bullet-hit debris
+# (lightingGrid with alphaGen entity) and the sniper lenses (environmentmodel
+# with alphaGen const), then with dynamic lights next to them, which send the
+# lenses back to the CPU (their alpha) and light the others in the vertex shader.
+spmap dm/mohdm1
+set spawn script_model model player/german_afrika_private.tik targetname k1
+set spawn script_model model player/german_panzer_tankcommander.tik targetname k2
+set spawn script_model model fx/bh_wood_piece.tik targetname k3
+set spawn script_model model fx/bh_grass_piece.tik targetname k4
+set spawn script_model model fx/bh_foliage_leaf.tik targetname k5
+set spawn script_model model fx/bh_metal_fastpiece.tik targetname k6
+set spawn script_model model fx/water_splash_drop.tik targetname k7
+set spawn script_model model weapons/kar98sniper.tik targetname k8
+set spawn script_model model weapons/springfield.tik targetname k9
+set wait 200
+set script k1 origin "700 -160 100"
+set script k1 physics_on
+set script k1 droptofloor 512
+set script k1 physics_off
+set script k1 physics_velocity "0 0 -1"
+set script k2 origin "700 -270 100"
+set script k2 physics_on
+set script k2 droptofloor 512
+set script k2 physics_off
+set script k2 physics_velocity "0 0 -1"
+set script k3 origin "790 -250 100"
+set script k3 physics_on
+set script k3 droptofloor 512
+set script k3 physics_off
+set script k3 physics_velocity "0 0 -1"
+set script k4 origin "790 -235 100"
+set script k4 physics_on
+set script k4 droptofloor 512
+set script k4 physics_off
+set script k4 physics_velocity "0 0 -1"
+set script k5 origin "790 -220 100"
+set script k5 physics_on
+set script k5 droptofloor 512
+set script k5 physics_off
+set script k5 physics_velocity "0 0 -1"
+set script k6 origin "790 -205 100"
+set script k6 physics_on
+set script k6 droptofloor 512
+set script k6 physics_off
+set script k6 physics_velocity "0 0 -1"
+set script k7 origin "790 -190 100"
+set script k7 physics_on
+set script k7 droptofloor 512
+set script k7 physics_off
+set script k7 physics_velocity "0 0 -1"
+set script k8 origin "770 -175 100"
+set script k8 physics_on
+set script k8 droptofloor 512
+set script k8 physics_off
+set script k8 physics_velocity "0 0 -1"
+set script k9 origin "770 -255 100"
+set script k9 physics_on
+set script k9 droptofloor 512
+set script k9 physics_off
+set script k9 physics_velocity "0 0 -1"
+set wait 200
+set script k1 angle 0
+set script k1 anim rifle_stand_idle
+set script k2 angle 0
+set script k2 anim rifle_stand_idle
+set script k3 angle 0
+set script k3 scale 4
+set script k4 angle 0
+set script k4 scale 4
+set script k5 angle 0
+set script k5 scale 4
+set script k6 angle 0
+set script k6 scale 4
+set script k7 angle 0
+set script k7 scale 4
+set script k8 angle 90
+set script k9 angle 90
+set wait 27000
+shot sp_front 848 -216 60 10 180 0
+shot sp_floor 848 -216 60 40 180 0
+set spawn fx/dummy.tik targetname kl1
+set spawn fx/dummy.tik targetname kl2
+set wait 200
+set script kl1 origin "760 -180 40"
+set script kl1 light 1 0.8 0.4 200
+set script kl2 origin "720 -250 60"
+set script kl2 light 0.6 0.7 1 220
+shot sp_lit 848 -216 60 10 180 0
+shot sp_lit_floor 848 -216 60 40 180 0

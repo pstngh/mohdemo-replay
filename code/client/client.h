@@ -129,8 +129,12 @@ typedef struct {
 
 	int			parseEntitiesNum;	// index (not anded off) into cl_parse_entities[]
 
-	int			mouseDx[2], mouseDy[2];	// added to by mouse events
-	int			mouseIndex;
+	int			mouseDx, mouseDy;	// added to by mouse events, taken by the next look (CL_MouseLook)
+
+	// what the mouse look of each frame leaves for the next usercmd
+	// (commands come at cl_movefps, see CL_ApplyLook)
+	int			lookButtons;		// BUTTON_ANY
+	float		lookMove[2];		// mouse strafe: rightmove, forwardmove
 
 	int				mousex, mousey;
 	unsigned int	mouseButtons;
@@ -448,6 +452,7 @@ extern	cvar_t	*cl_showSend;
 extern	cvar_t	*cl_timeNudge;
 extern	cvar_t	*cl_showTimeDelta;
 extern	cvar_t	*cl_freezeDemo;
+extern	cvar_t	*cl_csAppend;
 
 extern	cvar_t	*cl_yawspeed;
 extern	cvar_t	*cl_pitchspeed;
@@ -469,7 +474,6 @@ extern	cvar_t	*m_pitch;
 extern	cvar_t	*m_yaw;
 extern	cvar_t	*m_forward;
 extern	cvar_t	*m_side;
-extern	cvar_t	*m_filter;
 
 extern	cvar_t	*j_pitch;
 extern	cvar_t	*j_yaw;
@@ -615,6 +619,8 @@ void CL_UpdateMouse();
 void CL_InitInput (void);
 void CL_ShutdownInput(void);
 void CL_SendCmd (void);
+void CL_GetViewUserCmd( usercmd_t *ucmd );
+void CL_GetLiveUserCmd( usercmd_t *ucmd );
 void CL_ClearState (void);
 void CL_ReadPackets (void);
 

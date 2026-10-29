@@ -1,4 +1,4 @@
-# Unix specific settings (this includes macOS and emscripten)
+# Unix specific settings
 
 if(NOT UNIX)
     return()
@@ -6,11 +6,7 @@ endif()
 
 list(APPEND SYSTEM_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_unix.c)
 
-if(EMSCRIPTEN)
-    list(APPEND SYSTEM_PLATFORM_SOURCES ${SOURCE_DIR}/sys/con_passive.c)
-else()
-    list(APPEND SYSTEM_PLATFORM_SOURCES ${SOURCE_DIR}/sys/con_tty.c)
-endif()
+list(APPEND SYSTEM_PLATFORM_SOURCES ${SOURCE_DIR}/sys/con_tty.c)
 
 #if(USE_HTTP)
 #    list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/client/cl_http_curl.c)

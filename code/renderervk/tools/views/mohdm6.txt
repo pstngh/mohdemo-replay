@@ -1,0 +1,9 @@
+# dm/mohdm6 (Stalingrad): dark interiors lit by light bulbs (light flares
+# drawn as sprites), the mohday1 sky over the courtyard, roofs
+map dm/mohdm6
+shot d6_hall 240 -104 -120 0 315 0
+shot d6_room 448 -160 108 0 135 0
+shot d6_yard 21 320 -80 0 0 0
+shot d6_sky 21 320 -80 -40 0 0
+shot d6_roofs 0 300 900 60 90 0
+shot d6_stairs -408 -768 108 0 0 0

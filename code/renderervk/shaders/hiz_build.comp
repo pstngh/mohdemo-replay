@@ -1,0 +1,280 @@
+/*
+===========================================================================
+Copyright (C) 2026 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+// hiz_build.comp -- the temporal path's depth pyramid (r_temporal,
+// vk_temporal.c): each texel holds the minimum (r) and the maximum (g) view
+// distance of what it covers. Level 0 is half the framebuffer's size; a
+// texel covers 2 x 2 texels (or pixels) of the level before it, 3 on the
+// last row or column of an odd size, so every texel of a level is covered
+// by exactly one of the next. The view weapon and the sky are at the far
+// distance: they hide nothing.
+//
+// Three variants:
+//  - PREPARE: levels 0 and 1 from the depth buffer (read once, 2 x 2
+//    pixels with one gather where it can)
+//  - the default: one or two levels from the one before
+//  - TAIL: every remaining level of a small one (VK_TEMPORAL_TAIL_SIZE) in a
+//    single workgroup, one level after the other with barriers in between:
+//    one dispatch instead of one per level
+// PREPARE and the default make two levels the same way: an invocation per
+// texel of the first, 8 x 8 in a workgroup, which the workgroup combines
+// through shared memory into 4 x 4 texels of the second. A texel of the
+// second whose texels of the first reach into the next workgroup's (the
+// last row or column of an odd size) makes those again itself.
+
+#version 450
+
+#ifdef PREPARE
+#extension GL_GOOGLE_include_directive : require
+#include "temporal_common.glsl"
+#endif
+
+#ifdef TAIL
+layout( local_size_x = 16, local_size_y = 16 ) in;
+#define COHERENT coherent
+#else
+layout( local_size_x = 8, local_size_y = 8 ) in;
+#define COHERENT
+#endif
+
+#ifdef PREPARE
+layout( set = 0, binding = 0 ) uniform sampler2D u_depth;
+layout( set = 0, binding = 1 ) uniform sampler2D u_normal;
+layout( set = 0, binding = 2, rg32f ) uniform writeonly image2D u_out0;	// level 0
+layout( set = 0, binding = 3, rg32f ) uniform writeonly image2D u_out1;	// level 1
+
+layout( push_constant ) uniform Push {
+	TemporalView	view;
+	ivec4	size;		// framebuffer width and height, level 0's
+	int		count;		// levels to make: 1 (level 0) or 2
+} pc;
+#else
+layout( set = 0, binding = 0, rg32f ) uniform COHERENT image2D u_level0;
+layout( set = 0, binding = 1, rg32f ) uniform COHERENT image2D u_level1;
+layout( set = 0, binding = 2, rg32f ) uniform COHERENT image2D u_level2;
+#ifdef TAIL
+layout( set = 0, binding = 3, rg32f ) uniform coherent image2D u_level3;
+layout( set = 0, binding = 4, rg32f ) uniform coherent image2D u_level4;
+layout( set = 0, binding = 5, rg32f ) uniform coherent image2D u_level5;
+layout( set = 0, binding = 6, rg32f ) uniform coherent image2D u_level6;
+layout( set = 0, binding = 7, rg32f ) uniform coherent image2D u_level7;
+#endif
+
+layout( push_constant ) uniform Push {
+	ivec2	size;		// the size of u_level0
+	int		count;		// the levels to make after it
+} pc;
+#endif
+
+ivec2 Half( ivec2 s ) {
+	return max( s >> 1, ivec2( 1 ) );
+}
+
+// the last texel of a level of size src that texel t of the next one (of
+// size dst) covers; the first is t * 2
+ivec2 Last( ivec2 t, ivec2 dst, ivec2 src ) {
+	return min( ivec2( t.x == dst.x - 1 ? src.x - 1 : t.x * 2 + 1, t.y == dst.y - 1 ? src.y - 1 : t.y * 2 + 1 ), src - 1 );
+}
+
+vec2 Combine( vec2 a, vec2 b ) {
+	return vec2( min( a.x, b.x ), max( a.y, b.y ) );
+}
+
+#ifdef PREPARE
+
+// a pixel's view distance, the weapon and the sky at the far distance
+float PixelDistance( ivec2 p ) {
+	float wz = texelFetch( u_depth, p, 0 ).r;
+	bool weapon = wz < pc.view.depth.z;
+
+	// without r_depthClamp the weapon's depths are the world's: its class
+	if ( pc.view.depth.z == 0.0 && wz < pc.view.params.w ) {
+		weapon = TemporalClass( texelFetch( u_normal, p, 0 ) ) == TEMPORAL_CLASS_WEAPON;
+	}
+	return weapon ? pc.view.depth.w : TemporalViewDistance( pc.view, wz, false );
+}
+
+// texel t of level 0 from the pixels it covers: 2 x 2 pixels with one
+// gather where the depth alone tells the weapon (r_depthClamp)
+vec2 Level0( ivec2 t ) {
+	ivec2 p1 = Last( t, pc.size.zw, pc.size.xy );
+	vec2 r = vec2( 3.4e38, 0.0 );
+
+	if ( all( equal( p1, t * 2 + 1 ) ) && pc.view.depth.z > 0.0 ) {
+		vec4 wz = textureGather( u_depth, vec2( t * 2 + 1 ) / vec2( pc.size.xy ), 0 );
+		vec4 d;
+
+		for ( int i = 0; i < 4; i++ ) {
+			d[i] = wz[i] < pc.view.depth.z ? pc.view.depth.w : TemporalViewDistance( pc.view, wz[i], false );
+		}
+		return vec2( min( min( d.x, d.y ), min( d.z, d.w ) ), max( max( d.x, d.y ), max( d.z, d.w ) ) );
+	}
+
+	for ( int y = t.y * 2; y <= p1.y; y++ ) {
+		for ( int x = t.x * 2; x <= p1.x; x++ ) {
+			r = Combine( r, vec2( PixelDistance( ivec2( x, y ) ) ) );
+		}
+	}
+	return r;
+}
+
+ivec2 SizeFirst() {
+	return pc.size.zw;
+}
+
+vec2 First( ivec2 t ) {
+	return Level0( t );
+}
+
+void StoreFirst( ivec2 t, vec2 v ) {
+	imageStore( u_out0, t, vec4( v, 0.0, 0.0 ) );
+}
+
+void StoreSecond( ivec2 t, vec2 v ) {
+	imageStore( u_out1, t, vec4( v, 0.0, 0.0 ) );
+}
+
+#else
+
+vec2 Load( int level, ivec2 p ) {
+	switch ( level ) {
+	case 0: return imageLoad( u_level0, p ).rg;
+	case 1: return imageLoad( u_level1, p ).rg;
+#ifdef TAIL
+	case 2: return imageLoad( u_level2, p ).rg;
+	case 3: return imageLoad( u_level3, p ).rg;
+	case 4: return imageLoad( u_level4, p ).rg;
+	case 5: return imageLoad( u_level5, p ).rg;
+	default: return imageLoad( u_level6, p ).rg;
+#else
+	default: return imageLoad( u_level2, p ).rg;
+#endif
+	}
+}
+
+void Store( int level, ivec2 p, vec2 v ) {
+	switch ( level ) {
+	case 1: imageStore( u_level1, p, vec4( v, 0.0, 0.0 ) ); break;
+	case 2: imageStore( u_level2, p, vec4( v, 0.0, 0.0 ) ); break;
+#ifdef TAIL
+	case 3: imageStore( u_level3, p, vec4( v, 0.0, 0.0 ) ); break;
+	case 4: imageStore( u_level4, p, vec4( v, 0.0, 0.0 ) ); break;
+	case 5: imageStore( u_level5, p, vec4( v, 0.0, 0.0 ) ); break;
+	case 6: imageStore( u_level6, p, vec4( v, 0.0, 0.0 ) ); break;
+	case 7: imageStore( u_level7, p, vec4( v, 0.0, 0.0 ) ); break;
+#endif
+	default: break;
+	}
+}
+
+// texel t of level (of size dst) from the one before (of size src)
+vec2 Reduce( int level, ivec2 t, ivec2 dst, ivec2 src ) {
+	ivec2 p1 = Last( t, dst, src );
+	vec2 r = vec2( 3.4e38, 0.0 );
+
+	for ( int y = t.y * 2; y <= p1.y; y++ ) {
+		for ( int x = t.x * 2; x <= p1.x; x++ ) {
+			r = Combine( r, Load( level - 1, ivec2( x, y ) ) );
+		}
+	}
+	return r;
+}
+
+#ifndef TAIL
+ivec2 SizeFirst() {
+	return Half( pc.size );
+}
+
+vec2 First( ivec2 t ) {
+	return Reduce( 1, t, Half( pc.size ), pc.size );
+}
+
+void StoreFirst( ivec2 t, vec2 v ) {
+	Store( 1, t, v );
+}
+
+void StoreSecond( ivec2 t, vec2 v ) {
+	Store( 2, t, v );
+}
+#endif
+
+#ifdef TAIL
+void main() {
+	ivec2 src = pc.size;
+
+	for ( int level = 1; level <= pc.count; level++ ) {
+		ivec2 dst = Half( src );
+
+		for ( int i = int( gl_LocalInvocationIndex ); i < dst.x * dst.y; i += 256 ) {
+			ivec2 t = ivec2( i % dst.x, i / dst.x );
+
+			Store( level, t, Reduce( level, t, dst, src ) );
+		}
+		memoryBarrierImage();
+		barrier();
+		src = dst;
+	}
+}
+#endif
+
+#endif
+
+#ifndef TAIL
+// the first level's texels of this workgroup
+shared vec2 s_first[8][8];
+
+void main() {
+	ivec2 group = ivec2( gl_WorkGroupID.xy );
+	ivec2 l = ivec2( gl_LocalInvocationID.xy );
+	ivec2 t = group * 8 + l;
+	ivec2 size1 = SizeFirst();
+	vec2 v = vec2( 3.4e38, 0.0 );
+
+	if ( all( lessThan( t, size1 ) ) ) {
+		v = First( t );
+		StoreFirst( t, v );
+	}
+	if ( pc.count == 1 ) {
+		return;
+	}
+	s_first[l.y][l.x] = v;
+	barrier();
+
+	// the second level's texel of this invocation: 4 x 4 of the workgroup
+	ivec2 size2 = Half( size1 );
+	ivec2 t2 = group * 4 + l;
+	if ( any( greaterThanEqual( l, ivec2( 4 ) ) ) || any( greaterThanEqual( t2, size2 ) ) ) {
+		return;
+	}
+	ivec2 q1 = Last( t2, size2, size1 );
+	vec2 r = vec2( 3.4e38, 0.0 );
+
+	for ( int y = t2.y * 2; y <= q1.y; y++ ) {
+		for ( int x = t2.x * 2; x <= q1.x; x++ ) {
+			ivec2 q = ivec2( x, y ) - group * 8;
+
+			r = Combine( r, all( lessThan( q, ivec2( 8 ) ) ) ? s_first[q.y][q.x] : First( ivec2( x, y ) ) );
+		}
+	}
+	StoreSecond( t2, r );
+}
+#endif

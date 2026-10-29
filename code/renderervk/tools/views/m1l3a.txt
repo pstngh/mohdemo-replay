@@ -1,0 +1,10 @@
+# m1l3a (single player): the player mans the gun of a halftrack (tele has no
+# effect, the views only turn); farplane fog 4600 with the mohnightfog sky,
+# LOD terrain. The halftrack starts driving about 15 s into the level, so
+# the views are taken before.
+map m1l3a
+set wait 4000
+shot m13_a 3352 -6176 -28 0 135 0
+shot m13_b 3352 -6176 -28 0 255 0
+shot m13_c 3352 -6176 -28 0 375 0
+shot m13_sky 3352 -6176 -28 -40 135 0

@@ -1,0 +1,6450 @@
+/*
+===========================================================================
+Copyright (C) 2024 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+/*
+ * Changed in Omaha: forked from the previous sound host as the Project: Omaha sound
+ * host (MOH channel policy, music, streams, mix buses, overlap/pocket ducking,
+ * growable voices). Voice I/O goes through the miniaudio mixer in
+ * snd_render_omaha.cpp. The core selects this host through s_sndHostOmaha.
+ */
+
+#include "../snd_local.h"
+#include "snd_omaha.h"
+#include "../client.h"
+#include "../../server/server.h"
+#include "../snd_codec.h"
+#include "snd_stream_async.h"
+#include "snd_category.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#define MAX_MUSIC_SONGS 16
+
+// Host-internal; the public sound API reaches these through s_sndHostOmaha.
+static void S_OMAHA_FadeSound(float fTime);
+static void S_OMAHA_PreloadSfx(sfx_t *pSfx);
+static sndCategory_t S_OMAHA_ResolveCategory(const sfx_t *pSfx, int iEntChannel);
+static qboolean S_OMAHA_TryPromoteCombatVo(sfx_t *pSfx);
+static float S_OMAHA_GetBaseVolume(void);
+static qboolean S_OMAHA_NeedFullRestart(void);
+static void S_OMAHA_PrintInfo(void);
+static void S_OMAHA_DumpInfo(void);
+static void S_OMAHA_MUSIC_Pause(void);
+static void S_OMAHA_MUSIC_Unpause(void);
+static void S_OMAHA_PauseSound(void);
+static void S_OMAHA_UnpauseSound(void);
+static void S_OMAHA_callbackServer(int entnum, int channel_number, const char *name);
+static void S_OMAHA_StopLoopingSound(omaha_loop_sound_t *pLoopSound);
+static void S_OMAHA_StopLoopingSounds(void);
+static void S_OMAHA_AddLoopSounds(const vec3_t vTempAxis);
+static qboolean S_OMAHA_IsSoundPlaying(int channel_number, const char *sfxName);
+static void S_OMAHA_SaveData(soundsystemsavegame_t *pSave);
+static void S_OMAHA_ReLoad(soundsystemsavegame_t *pSave);
+static void S_OMAHA_LoadData(soundsystemsavegame_t *pSave);
+static qboolean S_OMAHA_MUSIC_LoadSoundtrackFile(const char *filename);
+static qboolean S_OMAHA_MUSIC_SongValid(const char *mood);
+static qboolean S_OMAHA_MUSIC_Loaded(void);
+static void S_OMAHA_Music_Update(void);
+static void S_OMAHA_MUSIC_SongEnded(void);
+static void S_OMAHA_MUSIC_NewSoundtrack(const char *name);
+static void S_OMAHA_MUSIC_UpdateMood(int current, int fallback);
+static void S_OMAHA_MUSIC_UpdateVolume(float volume, float fade_time);
+static void S_OMAHA_MUSIC_StopAllSongs(void);
+static void S_OMAHA_MUSIC_FreeAllSongs(void);
+static qboolean S_OMAHA_MUSIC_Playing(void);
+static int S_OMAHA_MUSIC_FindSong(const char *name);
+static void S_OMAHA_loadsoundtrack(void);
+static const char *S_OMAHA_CurrentSoundtrack(void);
+static void S_OMAHA_PlaySong(void);
+static int S_OMAHA_MUSIC_CurrentSongChannel(void);
+static void S_OMAHA_MUSIC_StopChannel(int channel_number);
+static qboolean S_OMAHA_MUSIC_PlaySong(const char *alias);
+static void S_OMAHA_MUSIC_UpdateMusicVolumes(void);
+static void S_OMAHA_MUSIC_CheckForStoppedSongs(void);
+static void S_OMAHA_TriggeredMusic_SetupHandle(const char *pszName, int iLoopCount, int iOffset, qboolean autostart);
+static void S_OMAHA_TriggeredMusic_Start(void);
+static void S_OMAHA_TriggeredMusic_StartLoop(void);
+static void S_OMAHA_TriggeredMusic_Stop(void);
+static void S_OMAHA_TriggeredMusic_Volume(void);
+static void S_OMAHA_TriggeredMusic_Pause(void);
+static void S_OMAHA_TriggeredMusic_Unpause(void);
+static void S_OMAHA_TriggeredMusic_PlayIntroMusic(void);
+static void S_OMAHA_StopMovieAudio(void);
+static void S_OMAHA_SetupMovieAudio(const char *pszMovieName);
+static int S_OMAHA_CurrentMoviePosition(void);
+
+static bool  s_bFading             = false;
+static float s_fFadeVolume         = 1.f;
+static float s_fVelocityScale      = 0.005f;
+/* Added in Omaha: omaha-mixer obstruction gate and cached listener origin. */
+static cvar_t *s_obstruction;
+/* Added in Omaha: gate for OM_MIX_* category scales (overlap/pocket stay on). */
+static cvar_t *s_mix;
+/*
+ * Added in Omaha: force-load short combat VO (pain/death) so they can take the
+ * 3D / HRTF path. Retail marks them streamed dialog; on load failure keep 2D.
+ */
+static cvar_t *s_pain_hrtf;
+static vec3_t  s_vObstructionListener;
+/* Changed in Omaha: mix / overlap / pocket knobs are compile-time (no console cvars). */
+static constexpr float OM_MIX_FIRE_LOCAL   = 0.6f;
+static constexpr float OM_MIX_FIRE_OTHER   = 0.65f;
+static constexpr float OM_MIX_FOLEY        = 0.7f;
+static constexpr float OM_MIX_IMPACTS      = 0.6f;
+static constexpr float OM_MIX_EXPLOSIONS   = 0.75f;
+static constexpr float OM_MIX_FOOTSTEPS    = 1.35f;
+static constexpr float OM_MIX_BODYFALLS    = 1.f;
+static constexpr float OM_MIX_VOICE        = 0.9f;
+static constexpr float OM_MIX_VEHICLES     = 0.8f;
+static constexpr float OM_MIX_WORLD        = 0.8f;
+static constexpr int   OM_OVERLAP_ENABLE   = 1;
+static constexpr float OM_OVERLAP_TAU      = 70.f;
+static constexpr float OM_OVERLAP_POWER    = 0.7f;
+static constexpr float OM_OVERLAP_SPREAD   = 2.f;
+static constexpr float OM_OVERLAP_FLOOR    = 0.1f;
+static constexpr int   OM_POCKET_ENABLE    = 1;
+static constexpr float OM_POCKET_POWER     = 0.7f;
+static constexpr float OM_POCKET_MIN       = 0.35f;
+static constexpr float OM_POCKET_FIRE_R    = 512.f;
+static constexpr float OM_POCKET_FIRE_TAU  = 80.f;
+static constexpr float OM_POCKET_EXPL_R    = 512.f;
+static constexpr float OM_POCKET_EXPL_TAU  = 120.f;
+/* Changed in Omaha: obstruction trace interval fixed (was s_obstruction_cal_time). */
+static constexpr int OM_OBSTRUCT_CAL_MS = 100;
+/* Added in Omaha: how long a looping one-shot outlives an entity that left the snapshot. */
+static constexpr int OM_LOOP_STALE_ENT_MS = 1000;
+// Added in Omaha: stream queue target and the most chunks one update may queue.
+static constexpr int OM_STREAM_AHEAD_MS   = 300;
+static constexpr int OM_STREAM_REFILL_MAX = 8;
+
+static constexpr float s_fVolumeGain = 1.f; // = 84.f;
+/* Miles sample volume was 0–127 after ×84; full-knob content ceiling = 127/84. */
+static constexpr float OM_CONTENT_VOLUME_MAX = 127.f / 84.f;
+
+static cvar_t *s_milesdriver;
+static cvar_t *s_show_cpu;
+static cvar_t *s_show_num_active_sounds;
+cvar_t *s_show_sounds;
+static cvar_t *s_speaker_type;
+static cvar_t *s_snddevice;
+
+static const char *S_OMAHA_DeviceName(void)
+{
+    if (s_snddevice && s_snddevice->string[0]) {
+        return s_snddevice->string;
+    }
+    return "";
+}
+
+static bool         s_soundReady      = false;
+static float        al_current_volume = 0;
+static unsigned int al_frequency      = 22050;
+
+static qboolean music_active            = qfalse;
+static int      music_current_mood      = 0;
+static int      music_fallback_mood     = 0;
+static float    old_music_volume        = 1.f;
+static float    music_volume            = 1.f;
+static float    new_music_volume        = 1.f;
+static float    music_volume_fade_time  = 0;
+static long int music_volume_start_time = 0;
+static int      music_volume_direction  = 0;
+static int      music_volume_changed    = 0;
+/* Added in Omaha: voice sidechain. 1 = full music, smaller = dipped. */
+static float    s_musicDuck             = 1.f;
+static float    s_musicDuckHeld         = 1.f;
+static float    s_musicDuckSent         = 1.f;
+static qboolean s_musicDuckMoved        = qfalse;
+static int      s_musicDuckHoldUntil    = 0;
+static int      s_musicDuckTime         = 0;
+static int      music_loaded            = 0;
+static int      music_numsongs          = 0;
+static int      music_currentsong       = 0;
+// s_ambientvolume 0 stopped the soundtrack and dropped its files (S_OMAHA_MUSIC_AmbientOff)
+static qboolean music_ambientOff        = qfalse;
+
+static song_t           music_songs[MAX_MUSIC_SONGS];
+static omaha_internal_t omaha;
+/*
+ * Added in Omaha: per baseline slot, 1 + the overflow index its restored voice
+ * had when saved (0 = none). Cleared by the next StopAllSounds.
+ */
+static int s_restoredFrom[MAX_SOUNDSYSTEM_POSITION_CHANNELS];
+static float            s_fFadeStartTime;
+static float            s_fFadeStopTime;
+static char             current_soundtrack[128];
+// the text of the last soundtrack file (s_soundtrackCache, MUSIC_SoundtrackText)
+static char             music_textName[MAX_RES_NAME];
+static char            *music_text;
+
+static void S_OMAHA_PlayMP3();
+static void S_OMAHA_StopMP3();
+static void S_OMAHA_Pitch();
+static int
+S_OMAHA_SpatializeStereoSound(const vec3_t listener_origin, const vec3_t listener_left, const vec3_t origin);
+static void S_OMAHA_ApplyListenerGain(qboolean bForce);
+static void S_OMAHA_UpdateObstruction(
+    omaha_channel *pChannel, const vec3_t vListener, const vec3_t vOrigin, bool bWorld, bool bForce
+);
+static int               S_OMAHA_SpatialRoute(const omaha_channel *pChannel, bool bWorld);
+static omSampleFormat_t S_SndFmtFromWidthChannels(float width, int channels);
+static int               S_OMAHA_SfxLoopPoint(const sfx_t *pSfx, int frame);
+
+/*
+==============
+S_OMAHA_NukeChannel
+==============
+*/
+static void S_OMAHA_NukeChannel(omaha_channel *channel)
+{
+    if (!channel) {
+        return;
+    }
+
+    if (g_sndRenderer && channel->voiceId != OM_VOICE_NONE) {
+        g_sndRenderer->DestroyVoice(channel->voiceId);
+        channel->voiceId = OM_VOICE_NONE;
+    }
+}
+
+/*
+==============
+S_OMAHA_NukeContext
+==============
+*/
+static void S_OMAHA_NukeContext()
+{
+    int i;
+
+    /* Added in Omaha: streams hand their codec back from the async worker and close it. */
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS_2D_STREAM; ++i) {
+        omaha.chan_2D_stream[i].stop();
+    }
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; ++i) {
+        omaha.chan_song[i].stop();
+    }
+    omaha.chan_mp3.stop();
+    omaha.chan_trig_music.stop();
+    omaha.chan_movie.stop();
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS; ++i) {
+        S_OMAHA_NukeChannel(omaha.channel[i]);
+    }
+
+    /* sfx->buffer holds a renderer buffer index (+1); the renderer frees its buffers. */
+    for (i = 0; i < s_numSfx; i++) {
+        s_knownSfx[i].buffer = 0;
+    }
+    omaha.movieSFX.buffer = 0;
+    S_Renderer_Shutdown();
+}
+
+static omaha_channel *S_OMAHA_GetPosChannel(int index);
+
+/*
+==============
+S_OMAHA_FreeSfx
+
+Added in Omaha: the core drops or reloads pSfx. Channels still bound to its
+renderer sound let go first, so no voice can restart a recycled sound id.
+==============
+*/
+static void S_OMAHA_FreeSfx(sfx_t *pSfx)
+{
+    omSoundId_t bid;
+    int         i;
+
+    if (!pSfx || !pSfx->buffer) {
+        return;
+    }
+
+    bid          = (omSoundId_t)(pSfx->buffer - 1);
+    pSfx->buffer = 0;
+    if (!s_soundReady || !g_sndRenderer) {
+        return;
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS + omaha.channel_extra_count; i++) {
+        omaha_channel *pChannel = S_OMAHA_GetPosChannel(i);
+
+        if (pChannel && pChannel->bufferId == bid) {
+            pChannel->force_free();
+            pChannel->bufferId = OM_SOUND_NONE;
+            pChannel->pSfx     = NULL;
+        }
+    }
+    g_sndRenderer->DestroySound(bid);
+}
+
+/*
+==============
+S_OMAHA_ApplyFrequency
+==============
+*/
+static void S_OMAHA_ApplyFrequency(void)
+{
+    int khz = 44;
+
+    if (s_khz) {
+        khz = s_khz->integer;
+    }
+    switch (khz) {
+    case 11:
+        al_frequency = 11025;
+        break;
+    default:
+        Com_Printf("Sound: s_khz %d is not supported (use 11, 22, 44 or 48); using 22\n", khz);
+        // fall through
+    case 22:
+        al_frequency = 22050;
+        break;
+    case 44:
+        al_frequency = 44100;
+        break;
+    case 48:
+        al_frequency = 48000;
+        break;
+    }
+}
+
+/*
+==============
+S_OMAHA_InitChannel
+==============
+*/
+static bool S_OMAHA_InitChannel(int idx, omaha_channel *chan)
+{
+    if (idx >= 0 && idx < MAX_SOUNDSYSTEM_CHANNELS) {
+        omaha.channel[idx] = chan;
+    }
+    VectorClear(chan->vOrigin);
+    chan->fVolume         = 1.0;
+    chan->fNewPitchMult   = 0.0;
+    chan->fMinDist        = 0.0;
+    chan->fMaxDist        = 0.0;
+    chan->pSfx            = 0;
+    chan->iEntNum         = 0;
+    chan->iEntChannel     = 0;
+    chan->iBaseRate       = 0;
+    chan->iStartTime      = 0;
+    chan->iTime           = 0;
+    chan->iEndTime        = 0;
+    chan->iFlags          = 0;
+    chan->iPausedOffset   = 0;
+    chan->fading          = FADE_NONE;
+    chan->fade_time       = 0;
+    chan->fade_start_time = 0;
+    chan->song_number     = 0;
+    chan->voiceId         = OM_VOICE_NONE;
+    chan->bufferId        = OM_SOUND_NONE;
+    chan->voiceKind       = 0;
+    chan->loopBlockStart  = 0;
+    chan->loopBlockEnd    = -1;
+    chan->iNextObstructionCheck = 0;
+    chan->fObstruction          = 0;
+    chan->fOcclusion            = 0;
+    chan->iCategory             = (int)SND_CAT_NONE;
+    chan->iSpatialRoute         = -1;
+    memset(&chan->cur, 0, sizeof(chan->cur));
+    chan->cur.pitch   = 1.f;
+    chan->cur.minDist = 200.f;
+    chan->cur.maxDist = 12800.f;
+    chan->cur.loopEnd = -1;
+    chan->cur.route   = OM_ROUTE_BUS;
+    chan->sent        = chan->cur;
+    chan->sentOk      = qfalse;
+    chan->startOffset = 0;
+    chan->bTraceValid = qfalse;
+    return true;
+}
+
+/*
+==============
+S_OMAHA_Init
+==============
+*/
+qboolean S_OMAHA_Init()
+{
+    int               i;
+    sndDeviceConfig_t cfg;
+
+    if (s_soundReady) {
+        Com_DPrintf("S_OMAHA_Init(): Called when sound is already initialized!\n");
+        return qtrue;
+    }
+
+    s_milesdriver            = Cvar_Get("s_milesdriver", "auto", CVAR_SOUND_LATCH | CVAR_ARCHIVE);
+    s_snddevice              = Cvar_Get("s_device", "", CVAR_SOUND_LATCH | CVAR_ARCHIVE);
+    s_show_cpu               = Cvar_Get("s_show_cpu", "0", 0);
+    s_show_num_active_sounds = Cvar_Get("s_show_num_active_sounds", "0", 0);
+    s_show_sounds            = Cvar_Get("s_show_sounds", "0", 0);
+    s_speaker_type           = Cvar_Get("s_speaker_type", "0", CVAR_ARCHIVE | CVAR_SOUND_LATCH);
+    /* Added in Omaha: world-trace obstruction on the omaha mixer (1 = on). */
+    s_obstruction = Cvar_Get("s_obstruction", "1", CVAR_ARCHIVE);
+    /* Added in Omaha: 1 = OM_MIX_* bus gains; 0 = unity (overlap/pocket unchanged). */
+    s_mix         = Cvar_Get("s_mix", "1", CVAR_ARCHIVE);
+    /* Added in Omaha: 1 = force-load pain/death VO for 3D/HRTF (0 = retail streamed 2D). */
+    s_pain_hrtf   = Cvar_Get("s_pain_hrtf", "1", CVAR_ARCHIVE);
+    /* Added in Omaha: SOFA HRTF set for omaha headphones (s_speaker_type 1). */
+    Cvar_Get("s_hrtf_file", SND_HRTF_DEFAULT_FILE, CVAR_ARCHIVE | CVAR_SOUND_LATCH);
+    /* Added in Omaha: developer A/B — force live SOFA DIRECT queries (skip bake runtime). */
+    Cvar_Get("s_hrtf_live_query", "0", CVAR_SOUND_LATCH);
+
+    if (!Cvar_Get("s_initsound", "1", 0)->integer) {
+        Com_Printf("Sound: s_initsound set to zero...disabling audio.\n");
+        return true;
+    }
+
+    memset(&cfg, 0, sizeof(cfg));
+    S_OMAHA_ApplyFrequency();
+    if (s_speaker_type->integer == 1) {
+        /* Changed: headphones mix at the HRTF set's 48 kHz; resampled to 44.1 (s_khz's default) its baked filters fail their check */
+        al_frequency = 48000;
+    }
+    cfg.sampleRate  = (int)al_frequency;
+    cfg.deviceName  = S_OMAHA_DeviceName();
+    cfg.speakerType = s_speaker_type->integer;
+
+    if (!S_Renderer_Init(&cfg)) {
+        return qfalse;
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS; i++) {
+        omaha.channel[i] = NULL;
+    }
+
+    /* Added in Omaha: growable loop list + overflow voice pools. */
+    omaha.overflow_3D                 = NULL;
+    omaha.overflow_3D_count           = 0;
+    omaha.overflow_3D_capacity        = 0;
+    omaha.overflow_2D                 = NULL;
+    omaha.overflow_2D_count           = 0;
+    omaha.overflow_2D_capacity        = 0;
+    omaha.overflow_2D_stream          = NULL;
+    omaha.overflow_2D_stream_count    = 0;
+    omaha.overflow_2D_stream_capacity = 0;
+    omaha.channel_extra               = NULL;
+    omaha.channel_extra_count         = 0;
+    omaha.channel_extra_capacity      = 0;
+    omaha.position_channel_count      = MAX_SOUNDSYSTEM_POSITION_CHANNELS;
+    omaha.loop_sounds_capacity        = MAX_SOUNDSYSTEM_LOOP_SOUNDS;
+    omaha.loop_sounds_count           = MAX_SOUNDSYSTEM_LOOP_SOUNDS;
+    omaha.loop_sounds                 = (omaha_loop_sound_t *)Z_Malloc(omaha.loop_sounds_capacity * sizeof(*omaha.loop_sounds));
+    memset(omaha.loop_sounds, 0, omaha.loop_sounds_capacity * sizeof(*omaha.loop_sounds));
+
+    s_speaker_type->modified = false;
+
+    /* Changed in Omaha: omaha master is post-limiter (see S_OMAHA_ApplyListenerGain). */
+    S_OMAHA_ApplyListenerGain(qtrue);
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS_3D; i++) {
+        if (!S_OMAHA_InitChannel(i, &omaha.chan_3D[i])) {
+            return false;
+        }
+        omaha.chan_3D[i].voiceKind = 0;
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS_2D; i++) {
+        if (!S_OMAHA_InitChannel(i + MAX_SOUNDSYSTEM_CHANNELS_3D, &omaha.chan_2D[i])) {
+            return false;
+        }
+        omaha.chan_2D[i].voiceKind = 1;
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS_2D_STREAM; i++) {
+        if (!S_OMAHA_InitChannel(
+                i + MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D, &omaha.chan_2D_stream[i]
+            )) {
+            return false;
+        }
+        omaha.chan_2D_stream[i].voiceKind = 2;
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        if (!S_OMAHA_InitChannel(
+                i + MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D + MAX_SOUNDSYSTEM_CHANNELS_2D_STREAM,
+                &omaha.chan_song[i]
+            )) {
+            return false;
+        }
+    }
+
+    if (!S_OMAHA_InitChannel(SOUNDSYSTEM_CHANNEL_MP3_ID, &omaha.chan_mp3)) {
+        return false;
+    }
+
+    if (!S_OMAHA_InitChannel(SOUNDSYSTEM_CHANNEL_TRIGGER_MUSIC_ID, &omaha.chan_trig_music)) {
+        return false;
+    }
+
+    if (!S_OMAHA_InitChannel(SOUNDSYSTEM_CHANNEL_MOVIE_ID, &omaha.chan_movie)) {
+        return false;
+    }
+
+    //
+    // Disable sound virtualization on special channels
+    //  (triggered music, ambient sounds...)
+    //
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        omaha.chan_song[i].set_no_virtualization();
+    }
+    omaha.chan_mp3.set_no_virtualization();
+    omaha.chan_trig_music.set_no_virtualization();
+    omaha.chan_movie.set_no_virtualization();
+
+    Cmd_AddCommand("playmp3", S_OMAHA_PlayMP3);
+    Cmd_AddCommand("stopmp3", S_OMAHA_StopMP3);
+    Cmd_AddCommand("loadsoundtrack", S_OMAHA_loadsoundtrack);
+    Cmd_AddCommand("playsong", S_OMAHA_PlaySong);
+    Cmd_AddCommand("pitch", S_OMAHA_Pitch);
+    Cmd_AddCommand("tmstart", S_OMAHA_TriggeredMusic_Start);
+    Cmd_AddCommand("tmstartloop", S_OMAHA_TriggeredMusic_StartLoop);
+    Cmd_AddCommand("tmstop", S_OMAHA_TriggeredMusic_Stop);
+    // Added in 2.0
+    Cmd_AddCommand("tmvolume", S_OMAHA_TriggeredMusic_Volume);
+
+    S_OMAHA_ClearLoopingSounds();
+    load_sfx_info();
+    s_soundReady = true;
+
+    // Added in OPM
+    S_CodecInit();
+
+    return true;
+}
+
+/*
+==============
+S_OMAHA_Shutdown
+==============
+*/
+void S_OMAHA_Shutdown()
+{
+    int i;
+
+    if (!s_soundReady) {
+        Com_DPrintf("S_OMAHA_Shutdown(): Called when sound is NOT initialized!\n");
+        return;
+    }
+
+    S_OMAHA_StopAllSounds(true);
+
+    Cmd_RemoveCommand("playmp3");
+    Cmd_RemoveCommand("stopmp3");
+    Cmd_RemoveCommand("loadsoundtrack");
+    Cmd_RemoveCommand("playsong");
+    Cmd_RemoveCommand("pitch");
+    Cmd_RemoveCommand("tmstart");
+    Cmd_RemoveCommand("tmstartloop");
+    Cmd_RemoveCommand("tmstop");
+    // Added in 2.0
+    Cmd_RemoveCommand("tmvolume");
+
+    /* Added in Omaha: free growable overflow voices (Z_Free rejects NULL). */
+    for (i = 0; i < omaha.channel_extra_count; i++) {
+        S_OMAHA_NukeChannel(omaha.channel_extra[i]);
+        delete omaha.channel_extra[i];
+    }
+    if (omaha.channel_extra) {
+        Z_Free(omaha.channel_extra);
+        omaha.channel_extra = NULL;
+    }
+    omaha.channel_extra_count    = 0;
+    omaha.channel_extra_capacity = 0;
+    if (omaha.overflow_3D) {
+        Z_Free(omaha.overflow_3D);
+        omaha.overflow_3D = NULL;
+    }
+    if (omaha.overflow_2D) {
+        Z_Free(omaha.overflow_2D);
+        omaha.overflow_2D = NULL;
+    }
+    if (omaha.overflow_2D_stream) {
+        Z_Free(omaha.overflow_2D_stream);
+        omaha.overflow_2D_stream = NULL;
+    }
+    omaha.overflow_3D_count = omaha.overflow_3D_capacity = 0;
+    omaha.overflow_2D_count = omaha.overflow_2D_capacity = 0;
+    omaha.overflow_2D_stream_count = omaha.overflow_2D_stream_capacity = 0;
+    if (omaha.loop_sounds) {
+        Z_Free(omaha.loop_sounds);
+        omaha.loop_sounds = NULL;
+    }
+    omaha.loop_sounds_count = omaha.loop_sounds_capacity = 0;
+
+    S_OMAHA_NukeContext();
+    s_soundReady = false;
+
+    S_AsyncStream_Shutdown(); // Added in Omaha
+}
+
+/*
+==============
+S_OMAHA_FadeSound
+==============
+*/
+void S_OMAHA_FadeSound(float fTime)
+{
+    Com_Printf("Called FadeSound with: %f\n", fTime);
+
+    if (fTime > 0) {
+        s_bFading        = true;
+        s_fFadeStartTime = cls.realtime;
+        s_fFadeVolume    = 1;
+        s_fFadeStopTime  = cls.realtime + fTime;
+    } else {
+        s_fFadeVolume = 1;
+        s_bFading     = false;
+        // Fixed in OPM
+        //  Make sure to restore the music volume
+        //  in case the map restarts immediately after the intermission
+        music_volume_changed = true;
+    }
+}
+
+/*
+==============
+S_OMAHA_GetBaseVolume
+
+Changed in Omaha: on the omaha mixer, s_volume and the fade are applied once on
+the stereo master after the limiter (S_OMAHA_ApplyListenerGain), so voices
+carry content gain only.
+==============
+*/
+float S_OMAHA_GetBaseVolume()
+{
+    return 1.f;
+}
+
+/*
+==============
+S_OMAHA_ApplyListenerGain
+
+Added in Omaha: s_volume and fade are one gain after the limiter, so raising
+volume does not change how hard the limiter works.
+==============
+*/
+static void S_OMAHA_ApplyListenerGain(qboolean bForce)
+{
+    static float fLastOmahaMaster = -1.f;
+    float        fGain;
+
+    fGain = s_volume->value * Square(s_volume->value) * s_fFadeVolume;
+    if (!bForce && fGain == fLastOmahaMaster) {
+        return;
+    }
+    fLastOmahaMaster  = fGain;
+    al_current_volume = fGain;
+    g_sndRenderer->SetListenerGain(fGain);
+}
+
+/*
+==============
+S_OMAHA_IsLocalEntity
+
+Added in Omaha: the listener's own entity or one of its child ents (use_listener).
+==============
+*/
+static qboolean S_OMAHA_IsLocalEntity(int iEntNum)
+{
+    int localNum;
+
+    if (iEntNum == ENTITYNUM_NONE || iEntNum < 0 || iEntNum >= MAX_GENTITIES) {
+        return qfalse;
+    }
+
+    localNum = -1;
+    if (cl.snap.valid) {
+        localNum = cl.snap.ps.clientNum;
+    } else if (s_iListenerNumber >= 0) {
+        localNum = s_iListenerNumber;
+    }
+    if (localNum >= 0 && iEntNum == localNum) {
+        return qtrue;
+    }
+    return s_entity[iEntNum].use_listener ? qtrue : qfalse;
+}
+
+/*
+==============
+S_OMAHA_ClampContentVolume
+
+Added in Omaha: content volume from alias/script/pk3 stays at or below the
+Miles full-knob ceiling (OM_CONTENT_VOLUME_MAX = 127/84 ≈ 1.51). OM_MIX_* / overlap / pocket
+may still raise gain afterward. Negative means default (same as prior StartSound
+paths). Master (s_volume) is applied post-limiter and does not widen this cap.
+==============
+*/
+static float S_OMAHA_ClampContentVolume(float fVolume)
+{
+    if (fVolume < 0.f) {
+        return 1.f;
+    }
+    if (fVolume > OM_CONTENT_VOLUME_MAX) {
+        return OM_CONTENT_VOLUME_MAX;
+    }
+    return fVolume;
+}
+
+/*
+==============
+S_OMAHA_CategoryGainScale
+
+Added in Omaha: mix-bus multipliers (hardcoded OM_MIX_*, range 0–2). FIRE splits
+local vs other (weapon child ents use use_listener). NONE / unknown → 1.
+s_mix 0 forces unity so stock relative levels return without disabling overlap/pocket.
+==============
+*/
+static float S_OMAHA_CategoryGainScale(sndCategory_t cat, int iEntNum)
+{
+    float g;
+
+    if (!s_mix || !s_mix->integer) {
+        return 1.f;
+    }
+
+    switch (cat) {
+    case SND_CAT_FIRE:
+        g = S_OMAHA_IsLocalEntity(iEntNum) ? OM_MIX_FIRE_LOCAL : OM_MIX_FIRE_OTHER;
+        break;
+    case SND_CAT_FOLEY:
+        g = OM_MIX_FOLEY;
+        break;
+    case SND_CAT_IMPACTS:
+        g = OM_MIX_IMPACTS;
+        break;
+    case SND_CAT_EXPLOSIONS:
+        g = OM_MIX_EXPLOSIONS;
+        break;
+    case SND_CAT_FOOTSTEPS:
+        g = OM_MIX_FOOTSTEPS;
+        break;
+    case SND_CAT_BODYFALLS:
+        g = OM_MIX_BODYFALLS;
+        break;
+    case SND_CAT_VOICE:
+        g = OM_MIX_VOICE;
+        break;
+    case SND_CAT_VEHICLES:
+        g = OM_MIX_VEHICLES;
+        break;
+    case SND_CAT_WORLD:
+        g = OM_MIX_WORLD;
+        break;
+    case SND_CAT_AUTO:
+    case SND_CAT_NONE:
+    default:
+        return 1.f;
+    }
+
+    if (g < 0.f) {
+        return 0.f;
+    }
+    if (g > 2.f) {
+        return 2.f;
+    }
+    return g;
+}
+
+/*
+==============
+S_OMAHA_ClassifySfx
+
+Added in Omaha: category of a sample from the global aliases that play it.
+cgame resolves aliases to files before S_StartSound, so the host recovers the
+alias names here instead of widening the stock cgame/client sound API. Files
+shared by aliases of different categories (puddle step vs grenade bounce,
+gear foley vs step) are decided by the path, independent of alias order.
+==============
+*/
+/*
+==============
+S_OMAHA_AliasFiles
+
+Changed: what the global aliases say about each file they play, from one walk
+of the alias list (again after each registration and when it changed): the
+category bits of the aliases and whether one is combat VO (OM_ALIAS_COMBAT_VO).
+Each sound's first play walked the whole list before (0.2 to 0.9 ms in that
+frame), and every start of a streamed sound that isn't combat VO did (0.3 to
+0.5 ms).
+==============
+*/
+#define OM_ALIAS_COMBAT_VO (1u << 31)
+
+static qboolean S_OMAHA_IsCombatVoAlias(const char *alias);
+
+static std::unordered_map<std::string, unsigned int> s_aliasFiles;
+static const AliasList_t                            *s_aliasFilesList;
+static const AliasListNode_t                        *s_aliasFilesHead;
+static int                                           s_aliasFilesCount = -1;
+
+static unsigned int S_OMAHA_AliasFiles(const char *sfxName)
+{
+    std::unordered_map<std::string, unsigned int> &files = s_aliasFiles;
+    AliasList_t                                   *list;
+    AliasListNode_t                               *node;
+    std::string                                    key;
+
+    list = Alias_GetGlobalList();
+    if (!list) {
+        return 0;
+    }
+
+    if (list != s_aliasFilesList || list->data_list != s_aliasFilesHead || list->num_in_list != s_aliasFilesCount) {
+        files.clear();
+        for (node = list->data_list; node; node = node->next) {
+            unsigned int bits = 1u << S_SoundCategory_ClassifyName(node->alias_name, node->real_name);
+
+            if (S_OMAHA_IsCombatVoAlias(node->alias_name)) {
+                bits |= OM_ALIAS_COMBAT_VO;
+            }
+            key = node->real_name;
+            for (char &c : key) {
+                c = (char)tolower((unsigned char)c);
+            }
+            files[key] |= bits;
+        }
+        s_aliasFilesList  = list;
+        s_aliasFilesHead  = list->data_list;
+        s_aliasFilesCount = list->num_in_list;
+    }
+
+    key = sfxName;
+    for (char &c : key) {
+        c = (char)tolower((unsigned char)c);
+    }
+    auto it = files.find(key);
+    return it != files.end() ? it->second : 0;
+}
+
+static sndCategory_t S_OMAHA_ClassifySfx(const char *sfxName)
+{
+    // When aliases disagree and the path decides nothing, the first listed wins.
+    static const sndCategory_t priority[] = {
+        SND_CAT_VOICE,
+        SND_CAT_EXPLOSIONS,
+        SND_CAT_FIRE,
+        SND_CAT_IMPACTS,
+        SND_CAT_BODYFALLS,
+        SND_CAT_FOOTSTEPS,
+        SND_CAT_VEHICLES,
+        SND_CAT_FOLEY,
+        SND_CAT_WORLD,
+        SND_CAT_NONE,
+        SND_CAT_AUTO,
+    };
+    sndCategory_t pathCat;
+    unsigned int  seen = 0;
+    size_t        i;
+
+    if (sfxName && sfxName[0]) {
+        seen = S_OMAHA_AliasFiles(sfxName) & ~OM_ALIAS_COMBAT_VO;
+    }
+
+    if (!seen) {
+        return S_SoundCategory_ClassifyName(NULL, sfxName);
+    }
+
+    if (seen & (seen - 1)) {
+        pathCat = S_SoundCategory_ClassifyName(NULL, sfxName);
+        if (pathCat != SND_CAT_AUTO) {
+            return pathCat;
+        }
+    }
+
+    for (i = 0; i < ARRAY_LEN(priority); i++) {
+        if (seen & (1u << priority[i])) {
+            return priority[i];
+        }
+    }
+    return SND_CAT_AUTO;
+}
+
+/*
+==============
+S_OMAHA_ResolveCategory
+
+Added in Omaha: alias / path category cached per sfx slot (keyed by a name hash
+so reused slots reclassify); CHAN_* only decides samples neither one matches.
+==============
+*/
+static struct {
+    int           hash;
+    sndCategory_t cat;
+} s_sfxCategory[MAX_SFX];
+
+static sndCategory_t S_OMAHA_ResolveCategory(const sfx_t *pSfx, int iEntChannel)
+{
+    const int     idx  = (int)(pSfx - s_knownSfx);
+    const int     hash = Com_HashKey((char *)pSfx->name, MAX_RES_NAME) + 1;
+    sndCategory_t cat;
+
+    if (idx < 0 || idx >= MAX_SFX) {
+        cat = S_OMAHA_ClassifySfx(pSfx->name);
+        return cat != SND_CAT_AUTO ? cat : S_SoundCategory_FromChannel(iEntChannel);
+    }
+
+    if (s_sfxCategory[idx].hash != hash) {
+        s_sfxCategory[idx].hash = hash;
+        s_sfxCategory[idx].cat  = S_OMAHA_ClassifySfx(pSfx->name);
+    }
+
+    cat = s_sfxCategory[idx].cat;
+    if (cat == SND_CAT_AUTO) {
+        return S_SoundCategory_FromChannel(iEntChannel);
+    }
+    return cat;
+}
+
+/*
+==============
+S_OMAHA_NeedFullRestart
+==============
+*/
+qboolean S_OMAHA_NeedFullRestart()
+{
+    return Cvar_Get("s_initsound", "1", 0)->integer != s_bLastInitSound;
+}
+
+/*
+==============
+S_OMAHA_PrintInfo
+==============
+*/
+void S_OMAHA_PrintInfo()
+{
+    const char *dev;
+
+    Com_Printf("----- Sound Info -----\n");
+
+    if (s_bSoundStarted) {
+        dev = S_OMAHA_DeviceName();
+        if (!dev || !*dev) {
+            dev = "{default}";
+        }
+        Com_Printf("device - %s\n", dev);
+        Com_Printf("samplebits - 16\n");
+        Com_Printf("speed - %d\n", al_frequency);
+        if (s_loadas8bit->integer) {
+            Com_Printf("Can NOT force all sounds to 8 bit in omaha.\n");
+        }
+    } else {
+        Com_Printf("sound system not started\n");
+    }
+
+    Com_Printf("----------------------\n");
+}
+
+/*
+==============
+S_DumpStatus
+==============
+*/
+static void S_DumpStatus(const char *pszChanName, int iChanNum, omaha_channel *channel)
+{
+    sfx_t *sfx;
+
+    sfx = channel->pSfx;
+
+    /* Changed in Omaha: query state through the channel (renderer-aware). */
+    if (channel->is_playing() || channel->is_paused()) {
+        const char *pszMode = channel->is_playing() ? "playing" : "paused";
+
+        if (sfx) {
+            if (sfx != (sfx_t *)-16 && sfx->name[0]) {
+                Com_Printf("%s channel %i - %s sfx %s\n", pszChanName, iChanNum, pszMode, sfx->name);
+            } else {
+                Com_Printf("%s channel %i - %s with nameless sfx\n", pszChanName, iChanNum, pszMode);
+            }
+        } else {
+            Com_Printf("%s channel %i - %s with NULL sfx\n", pszChanName, iChanNum, pszMode);
+        }
+    }
+}
+
+/*
+==============
+S_OMAHA_DumpInfo
+==============
+*/
+void S_OMAHA_DumpInfo()
+{
+    int i;
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS_3D; i++) {
+        S_DumpStatus("3D", i, omaha.channel[i]);
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS_2D; i++) {
+        S_DumpStatus("2D", i, omaha.channel[MAX_SOUNDSYSTEM_CHANNELS_3D + i]);
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS_2D_STREAM; i++) {
+        S_DumpStatus("2D stream", i, omaha.channel[MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D + i]);
+    }
+
+    /* Fixed in Omaha: the index walk stopped after the songs and MP3; name each channel instead. */
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        S_DumpStatus("Song", i, &omaha.chan_song[i]);
+    }
+    S_DumpStatus("MP3", 0, &omaha.chan_mp3);
+    S_DumpStatus("Triggered music", 0, &omaha.chan_trig_music);
+    S_DumpStatus("Movie", 0, &omaha.chan_movie);
+}
+
+/*
+==============
+S_OMAHA_Pitch
+==============
+*/
+static void S_OMAHA_Pitch()
+{
+    Com_Printf("S_OMAHA_Pitch() needs to be implemented!\n");
+}
+
+/*
+==============
+S_OMAHA_LoadMP3
+==============
+*/
+/*
+ * Changed: takes the stream channel it loads into. With omaha_channel *, GCC 15
+ * (-O2) devirtualized chan->stop() on &omaha.chan_mp3 to no target and
+ * dropped the whole function: playmp3 recursed until the stack overflowed.
+ */
+static bool S_OMAHA_LoadMP3(const char *_path, omaha_channel_two_d_stream *chan)
+{
+    char          path[MAX_QPATH];
+    snd_info_t    info;
+    void         *data;
+    omSoundId_t bid;
+    qboolean      ok;
+
+    chan->stop();
+
+    Q_strncpyz(path, _path, sizeof(path));
+    path[MAX_QPATH - 1] = 0;
+
+    FS_CorrectCase(path);
+
+    /* Changed in Omaha: decode once and upload a resident sound. */
+    if (chan->bufferId != OM_SOUND_NONE) {
+        g_sndRenderer->DestroySound(chan->bufferId);
+        chan->bufferId = OM_SOUND_NONE;
+    }
+
+    data = S_CodecLoad(path, &info);
+    if (!data) {
+        return false;
+    }
+
+    bid = g_sndRenderer->CreateSound();
+    if (bid == OM_SOUND_NONE) {
+        Hunk_FreeTempMemory(data);
+        return false;
+    }
+    if (info.size == 0) {
+        byte dummyData[2] = {0};
+        ok = g_sndRenderer->UploadSound(bid, OM_FMT_MONO16, dummyData, 2, 22050, 0, 0);
+    } else {
+        ok = g_sndRenderer->UploadSound(
+            bid, S_SndFmtFromWidthChannels(info.width, info.channels), data, info.size, info.rate, info.dataalign, 0
+        );
+    }
+    Hunk_FreeTempMemory(data);
+    if (!ok) {
+        g_sndRenderer->DestroySound(bid);
+        return false;
+    }
+
+    chan->bufferId = bid;
+    chan->cur.pitch = 1.f;
+    chan->set_no_3d();
+    return true;
+}
+
+/*
+==============
+S_OMAHA_PlayMP3
+==============
+*/
+static void S_OMAHA_PlayMP3()
+{
+    const char *path;
+
+    if (Cmd_Argc() != 2) {
+        Com_Printf("playmp3 <mp3 file>\n");
+        return;
+    }
+
+    path = Cmd_Argv(1);
+    if (!S_OMAHA_LoadMP3(path, &omaha.chan_mp3)) {
+        Com_Printf("Failed to play mp3 - %s\n", path);
+        return;
+    }
+
+    omaha.chan_mp3.play();
+    Com_Printf("Playing mp3 - %s\n", path);
+}
+
+/*
+==============
+S_OMAHA_StopMP3
+==============
+*/
+static void S_OMAHA_StopMP3()
+{
+    S_OMAHA_NukeChannel(&omaha.chan_mp3);
+}
+
+/*
+==============
+S_OMAHA_MUSIC_Pause
+==============
+*/
+void S_OMAHA_MUSIC_Pause()
+{
+    int i;
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        omaha.chan_song[i].pause();
+    }
+}
+
+/*
+==============
+S_OMAHA_MUSIC_Unpause
+==============
+*/
+void S_OMAHA_MUSIC_Unpause()
+{
+    int i;
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        if (omaha.chan_song[i].is_paused()) {
+            omaha.chan_song[i].play();
+        }
+    }
+}
+
+static omaha_channel *S_OMAHA_GetPosChannel(int index);
+
+/*
+==============
+S_OMAHA_PauseSound
+==============
+*/
+void S_OMAHA_PauseSound()
+{
+    int i;
+
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    s_bSoundPaused = true;
+
+    /* Changed in Omaha: include overflow voices. */
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS + omaha.channel_extra_count; i++) {
+        omaha_channel *pChannel = S_OMAHA_GetPosChannel(i);
+        if (!pChannel) {
+            continue;
+        }
+
+        if (pChannel->iEntChannel == CHAN_MENU) {
+            continue;
+        }
+
+        if (!pChannel->is_playing()) {
+            continue;
+        }
+
+        pChannel->pause();
+    }
+
+    if (omaha.chan_mp3.is_playing()) {
+        omaha.chan_mp3.pause();
+    }
+
+    S_OMAHA_MUSIC_Pause();
+    S_OMAHA_TriggeredMusic_Pause();
+}
+
+/*
+==============
+S_OMAHA_UnpauseSound
+==============
+*/
+void S_OMAHA_UnpauseSound()
+{
+    int i;
+
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    /* Changed in Omaha: include overflow voices. */
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS + omaha.channel_extra_count; i++) {
+        omaha_channel *pChannel = S_OMAHA_GetPosChannel(i);
+        if (!pChannel) {
+            continue;
+        }
+
+        if (pChannel->is_paused() || (pChannel->iFlags & CHANNEL_FLAG_PLAY_DEFERRED)) {
+            pChannel->iFlags &= ~CHANNEL_FLAG_PLAY_DEFERRED;
+            pChannel->play();
+        }
+    }
+
+    if (omaha.chan_mp3.is_paused()) {
+        omaha.chan_mp3.play();
+    }
+
+    S_OMAHA_MUSIC_Unpause();
+    S_OMAHA_TriggeredMusic_Unpause();
+
+    s_bSoundPaused = false;
+}
+
+/*
+==============
+S_OMAHA_ShouldStart
+==============
+*/
+static qboolean S_OMAHA_ShouldStart(const vec3_t vOrigin, float fMinDist, float fMaxDist)
+{
+    vec3_t vDir;
+    vec3_t vListenerOrigin;
+    vec3_t alvec;
+
+    if (!s_soundReady) {
+        return false;
+    }
+
+    (void)fMinDist;
+    g_sndRenderer->GetListenerPosition(alvec);
+
+    VectorCopy(alvec, vListenerOrigin);
+    VectorSubtract(vOrigin, vListenerOrigin, vDir);
+
+    return Square(fMaxDist) > VectorLengthSquared(vDir);
+}
+
+/*
+==============
+S_OMAHA_GetPosChannel
+Added in Omaha: baseline + overflow position channels.
+==============
+*/
+static omaha_channel *S_OMAHA_GetPosChannel(int index)
+{
+    if (index < 0) {
+        return NULL;
+    }
+    if (index < MAX_SOUNDSYSTEM_POSITION_CHANNELS) {
+        return omaha.channel[index];
+    }
+    index -= MAX_SOUNDSYSTEM_POSITION_CHANNELS;
+    if (index < omaha.channel_extra_count) {
+        return omaha.channel_extra[index];
+    }
+    return NULL;
+}
+
+/*
+==============
+S_OMAHA_LevelAtListener
+Added in Omaha: channel gain with clamped inverse-distance falloff at the listener.
+==============
+*/
+static float S_OMAHA_LevelAtListener(float fVolume, const vec3_t vOrigin, float fMinDist, float *pfDist)
+{
+    vec3_t vDir;
+    float  fDist;
+
+    VectorSubtract(vOrigin, s_vObstructionListener, vDir);
+    fDist = VectorLength(vDir);
+    if (pfDist) {
+        *pfDist = fDist;
+    }
+    if (fMinDist <= 0.f || fDist <= fMinDist) {
+        return fVolume;
+    }
+    return fVolume * fMinDist / fDist;
+}
+
+/*
+==============
+S_OMAHA_OverlapGain
+
+Added in Omaha: start gain for an entity-less 3D one-shot, reduced by how much
+it overlaps same-category entity-less voices already playing (recent, at least
+as loud at the listener, same direction). Fixed for the voice's lifetime.
+==============
+*/
+static float S_OMAHA_OverlapGain(sndCategory_t cat, const vec3_t vOrigin, float fVolume, float fMinDist, float *pfOverlap)
+{
+    vec3_t vNewDir;
+    float  fNewDist;
+    float  fNewLevel;
+    float  fTau;
+    float  fPower;
+    float  fSpread;
+    float  fOverlap;
+    int    iMaxAge;
+    int    i;
+
+    fOverlap = 0.f;
+    if (pfOverlap) {
+        *pfOverlap = 0.f;
+    }
+
+    fTau    = OM_OVERLAP_TAU;
+    fPower  = OM_OVERLAP_POWER;
+    fSpread = OM_OVERLAP_SPREAD;
+    if (fTau < 1.f) {
+        fTau = 1.f;
+    }
+    if (fPower <= 0.f) {
+        return 1.f;
+    }
+    if (fSpread < 0.f) {
+        fSpread = 0.f;
+    }
+    iMaxAge = (int)(fTau * 4.f);
+
+    fNewLevel = S_OMAHA_LevelAtListener(fVolume, vOrigin, fMinDist, &fNewDist);
+    if (fNewLevel <= 0.f) {
+        return 1.f;
+    }
+    VectorSubtract(vOrigin, s_vObstructionListener, vNewDir);
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS + omaha.channel_extra_count; i++) {
+        omaha_channel *pChannel = S_OMAHA_GetPosChannel(i);
+        vec3_t          vOldDir;
+        float           fOldDist;
+        float           fOldLevel;
+        float           fCos;
+        float           fDirSim;
+        float           fNear;
+        float           fLevelW;
+        int             iAge;
+
+        if (!pChannel || pChannel->voiceKind != 0 || pChannel->iCategory != (int)cat) {
+            continue;
+        }
+        if (!(pChannel->iFlags & CHANNEL_FLAG_NO_ENTITY) || (pChannel->iFlags & CHANNEL_FLAG_LOOPING)) {
+            continue;
+        }
+        iAge = cl.serverTime - pChannel->iStartTime;
+        if (iAge < 0) {
+            iAge = 0;
+        }
+        if (iAge >= iMaxAge || !pChannel->is_playing()) {
+            continue;
+        }
+
+        fOldLevel = S_OMAHA_LevelAtListener(pChannel->fVolume, pChannel->vOrigin, pChannel->fMinDist, &fOldDist);
+        fLevelW   = fOldLevel / fNewLevel;
+        if (fLevelW > 1.f) {
+            fLevelW = 1.f;
+        }
+
+        VectorSubtract(pChannel->vOrigin, s_vObstructionListener, vOldDir);
+        if (fNewDist > 0.001f && fOldDist > 0.001f) {
+            fCos = DotProduct(vNewDir, vOldDir) / (fNewDist * fOldDist);
+        } else {
+            fCos = 1.f;
+        }
+        fDirSim = powf(Q_clamp_float(0.5f * (1.f + fCos), 0.f, 1.f), fSpread);
+
+        /* Both inside their min distance: direction no longer separates them. */
+        fNear = 1.f - Q_max(fNewDist / Q_max(fMinDist, 1.f), fOldDist / Q_max(pChannel->fMinDist, 1.f));
+        if (fNear > fDirSim) {
+            fDirSim = fNear;
+        }
+
+        fOverlap += expf(-(float)iAge / fTau) * fLevelW * fDirSim;
+    }
+
+    if (pfOverlap) {
+        *pfOverlap = fOverlap;
+    }
+    return powf(1.f + fOverlap, -fPower);
+}
+
+/*
+==============
+S_OMAHA_PocketGain
+
+Added in Omaha: start gain for other players' fire and for explosions, reduced
+by recent same-category voices whose origins sit in the same pocket (origin
+distance, smooth edge from R/2 to R), weighted by level at the listener.
+FIRE skips local voices and the same entity, so a lone shooter sounds stock.
+Clamped to OM_POCKET_MIN: never drops. Fixed for the voice's lifetime.
+==============
+*/
+static float S_OMAHA_PocketGain(
+    sndCategory_t cat, int iEntNum, const vec3_t vOrigin, float fVolume, float fMinDist, float *pfOverlap
+)
+{
+    float fNewLevel;
+    float fRadius;
+    float fTau;
+    float fPower;
+    float fMin;
+    float fOverlap;
+    float g;
+    int   iMaxAge;
+    int   i;
+
+    fOverlap = 0.f;
+    if (pfOverlap) {
+        *pfOverlap = 0.f;
+    }
+
+    if (cat == SND_CAT_FIRE) {
+        fRadius = OM_POCKET_FIRE_R;
+        fTau    = OM_POCKET_FIRE_TAU;
+    } else {
+        fRadius = OM_POCKET_EXPL_R;
+        fTau    = OM_POCKET_EXPL_TAU;
+    }
+    fPower = OM_POCKET_POWER;
+    fMin   = Q_clamp_float(OM_POCKET_MIN, 0.f, 1.f);
+    if (fRadius < 1.f) {
+        fRadius = 1.f;
+    }
+    if (fTau < 1.f) {
+        fTau = 1.f;
+    }
+    if (fPower <= 0.f) {
+        return 1.f;
+    }
+    iMaxAge = (int)(fTau * 4.f);
+
+    fNewLevel = S_OMAHA_LevelAtListener(fVolume, vOrigin, fMinDist, NULL);
+    if (fNewLevel <= 0.f) {
+        return 1.f;
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS + omaha.channel_extra_count; i++) {
+        omaha_channel *pChannel = S_OMAHA_GetPosChannel(i);
+        vec3_t          vDelta;
+        float           fDist;
+        float           fPocket;
+        float           fLevelW;
+        int             iAge;
+
+        if (!pChannel || pChannel->voiceKind != 0 || pChannel->iCategory != (int)cat) {
+            continue;
+        }
+        if (pChannel->iFlags & CHANNEL_FLAG_LOOPING) {
+            continue;
+        }
+        if (cat == SND_CAT_FIRE && !(pChannel->iFlags & CHANNEL_FLAG_NO_ENTITY)) {
+            if (pChannel->iEntNum == iEntNum || S_OMAHA_IsLocalEntity(pChannel->iEntNum)) {
+                continue;
+            }
+        }
+        iAge = cl.serverTime - pChannel->iStartTime;
+        if (iAge < 0) {
+            iAge = 0;
+        }
+        if (iAge >= iMaxAge || !pChannel->is_playing()) {
+            continue;
+        }
+
+        VectorSubtract(pChannel->vOrigin, vOrigin, vDelta);
+        fDist = VectorLength(vDelta);
+        if (fDist >= fRadius) {
+            continue;
+        }
+        if (fDist <= fRadius * 0.5f) {
+            fPocket = 1.f;
+        } else {
+            float t = (fRadius - fDist) / (fRadius * 0.5f);
+            fPocket = t * t * (3.f - 2.f * t);
+        }
+
+        fLevelW = S_OMAHA_LevelAtListener(pChannel->fVolume, pChannel->vOrigin, pChannel->fMinDist, NULL) / fNewLevel;
+        if (fLevelW > 1.f) {
+            fLevelW = 1.f;
+        }
+
+        fOverlap += expf(-(float)iAge / fTau) * fLevelW * fPocket;
+    }
+
+    if (pfOverlap) {
+        *pfOverlap = fOverlap;
+    }
+    g = powf(1.f + fOverlap, -fPower);
+    return g < fMin ? fMin : g;
+}
+
+/*
+==============
+S_OMAHA_GrowVoicePool
+Added in Omaha: allocate another voice when baseline pools are full (no steal).
+==============
+*/
+static int S_OMAHA_GrowVoicePool(int kind)
+{
+    omaha_channel *chan;
+    int            idx;
+
+    if (kind == 2) {
+        omaha_channel_two_d_stream *streamChan = new omaha_channel_two_d_stream();
+        chan                                    = streamChan;
+        if (omaha.overflow_2D_stream_count >= omaha.overflow_2D_stream_capacity) {
+            int                              newCap = omaha.overflow_2D_stream_capacity + SOUNDSYSTEM_VOICE_GROW_CHUNK;
+            omaha_channel_two_d_stream    **neu =
+                (omaha_channel_two_d_stream **)Z_Malloc(newCap * sizeof(*neu));
+            if (omaha.overflow_2D_stream) {
+                memcpy(neu, omaha.overflow_2D_stream, omaha.overflow_2D_stream_count * sizeof(*neu));
+                Z_Free(omaha.overflow_2D_stream);
+            }
+            omaha.overflow_2D_stream          = neu;
+            omaha.overflow_2D_stream_capacity = newCap;
+        }
+        omaha.overflow_2D_stream[omaha.overflow_2D_stream_count++] = streamChan;
+    } else {
+        chan = new omaha_channel();
+        if (kind == 0) {
+            if (omaha.overflow_3D_count >= omaha.overflow_3D_capacity) {
+                int               newCap = omaha.overflow_3D_capacity + SOUNDSYSTEM_VOICE_GROW_CHUNK;
+                omaha_channel **neu    = (omaha_channel **)Z_Malloc(newCap * sizeof(*neu));
+                if (omaha.overflow_3D) {
+                    memcpy(neu, omaha.overflow_3D, omaha.overflow_3D_count * sizeof(*neu));
+                    Z_Free(omaha.overflow_3D);
+                }
+                omaha.overflow_3D          = neu;
+                omaha.overflow_3D_capacity = newCap;
+            }
+            omaha.overflow_3D[omaha.overflow_3D_count++] = chan;
+        } else {
+            if (omaha.overflow_2D_count >= omaha.overflow_2D_capacity) {
+                int               newCap = omaha.overflow_2D_capacity + SOUNDSYSTEM_VOICE_GROW_CHUNK;
+                omaha_channel **neu    = (omaha_channel **)Z_Malloc(newCap * sizeof(*neu));
+                if (omaha.overflow_2D) {
+                    memcpy(neu, omaha.overflow_2D, omaha.overflow_2D_count * sizeof(*neu));
+                    Z_Free(omaha.overflow_2D);
+                }
+                omaha.overflow_2D          = neu;
+                omaha.overflow_2D_capacity = newCap;
+            }
+            omaha.overflow_2D[omaha.overflow_2D_count++] = chan;
+        }
+    }
+
+    if (omaha.channel_extra_count >= omaha.channel_extra_capacity) {
+        int               newCap = omaha.channel_extra_capacity + SOUNDSYSTEM_VOICE_GROW_CHUNK;
+        omaha_channel **neu    = (omaha_channel **)Z_Malloc(newCap * sizeof(*neu));
+        if (omaha.channel_extra) {
+            memcpy(neu, omaha.channel_extra, omaha.channel_extra_count * sizeof(*neu));
+            Z_Free(omaha.channel_extra);
+        }
+        omaha.channel_extra          = neu;
+        omaha.channel_extra_capacity = newCap;
+    }
+
+    if (!S_OMAHA_InitChannel(-1, chan)) {
+        return -1;
+    }
+    chan->voiceKind = kind;
+    omaha.channel_extra[omaha.channel_extra_count++] = chan;
+    omaha.position_channel_count =
+        MAX_SOUNDSYSTEM_POSITION_CHANNELS + omaha.channel_extra_count;
+    idx = MAX_SOUNDSYSTEM_POSITION_CHANNELS + omaha.channel_extra_count - 1;
+    return idx;
+}
+
+/*
+==============
+S_OMAHA_PickChannelBase
+
+Changed in Omaha: grow overflow voices instead of stealing for capacity.
+==============
+*/
+static int S_OMAHA_PickChannelBase(int iEntNum, int iEntChannel, int iFirstChannel, int iLastChannel)
+{
+    int             i;
+    int             iBestChannel;
+    omaha_channel *pChannel;
+
+    /* Omaha: baseline + overflow; grow instead of steal. */
+    {
+        const int kind =
+            (iFirstChannel >= MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D) ? 2
+            : (iFirstChannel >= MAX_SOUNDSYSTEM_CHANNELS_3D)                             ? 1
+                                                                                       : 0;
+        const int posCount = omaha.position_channel_count > 0 ? omaha.position_channel_count
+                                                               : MAX_SOUNDSYSTEM_POSITION_CHANNELS;
+
+        iBestChannel = -1;
+        if (iEntNum != ENTITYNUM_NONE && iEntChannel) {
+            bool bStoppedChannel = false;
+
+            for (i = 0; i < posCount; i++) {
+                if (i < MAX_SOUNDSYSTEM_POSITION_CHANNELS && (i < iFirstChannel || i > iLastChannel)) {
+                    continue;
+                }
+                pChannel = S_OMAHA_GetPosChannel(i);
+                if (!pChannel) {
+                    continue;
+                }
+                if (i >= MAX_SOUNDSYSTEM_POSITION_CHANNELS && pChannel->voiceKind != kind) {
+                    continue;
+                }
+                if (pChannel->is_free()) {
+                    if (iBestChannel < 0 || i < MAX_SOUNDSYSTEM_POSITION_CHANNELS) {
+                        iBestChannel = i;
+                    }
+                    continue;
+                }
+
+                if (pChannel->iEntNum == iEntNum && pChannel->iEntChannel == iEntChannel) {
+                    pChannel->end_sample();
+                    bStoppedChannel = 1;
+                    iBestChannel    = i;
+                    break;
+                }
+            }
+
+            (void)bStoppedChannel;
+        }
+
+        if (iBestChannel < 0 || (iBestChannel >= 0 && !S_OMAHA_GetPosChannel(iBestChannel)->is_free()
+                                 && !(iEntNum != ENTITYNUM_NONE && iEntChannel))) {
+            iBestChannel = -1;
+            for (i = iFirstChannel; i <= iLastChannel; i++) {
+                pChannel = S_OMAHA_GetPosChannel(i);
+                if (pChannel && pChannel->is_free()) {
+                    return i;
+                }
+            }
+            for (i = MAX_SOUNDSYSTEM_POSITION_CHANNELS; i < posCount; i++) {
+                pChannel = S_OMAHA_GetPosChannel(i);
+                if (pChannel && pChannel->voiceKind == kind && pChannel->is_free()) {
+                    return i;
+                }
+            }
+
+            {
+                int grown = S_OMAHA_GrowVoicePool(kind);
+                if (grown >= 0) {
+                    return grown;
+                }
+            }
+        }
+
+        return iBestChannel;
+    }
+}
+
+/*
+==============
+S_OMAHA_PickChannel3D
+==============
+*/
+static int S_OMAHA_PickChannel3D(int iEntNum, int iEntChannel)
+{
+    return S_OMAHA_PickChannelBase(iEntNum, iEntChannel, 0, MAX_SOUNDSYSTEM_CHANNELS_3D - 1);
+}
+
+/*
+==============
+S_OMAHA_PickChannel2D
+==============
+*/
+static int S_OMAHA_PickChannel2D(int iEntNum, int iEntChannel)
+{
+    return S_OMAHA_PickChannelBase(
+        iEntNum, iEntChannel, MAX_SOUNDSYSTEM_CHANNELS_3D, MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D - 1
+    );
+}
+
+/*
+==============
+S_OMAHA_PickChannel2DStreamed
+==============
+*/
+static int S_OMAHA_PickChannel2DStreamed(int iEntNum, int iEntChannel)
+{
+    return S_OMAHA_PickChannelBase(
+        iEntNum,
+        iEntChannel,
+        MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D,
+        MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D + MAX_SOUNDSYSTEM_CHANNELS_2D_STREAM - 1
+    );
+}
+
+/*
+==============
+S_OMAHA_callbackServer
+==============
+*/
+void S_OMAHA_callbackServer(int entnum, int channel_number, const char *name)
+{
+    if (!com_sv_running->integer) {
+        return;
+    }
+
+    SV_SoundCallback(entnum, channel_number, name);
+}
+
+/*
+==============
+S_OMAHA_Start2DSound
+==============
+*/
+static void S_OMAHA_Start2DSound(
+    const vec3_t vOrigin,
+    int          iEntNum,
+    int          iEntChannel,
+    sfx_t       *pSfx,
+    float        fVolume,
+    float        fMinDistance,
+    float        fPitch,
+    float        fMaxDistance
+)
+{
+    int             iRealEntNum;
+    int             iFreeChannel;
+    omaha_channel *pChannel;
+    float           fRealVolume;
+    bool            bSupportWaitTillSoundDone;
+
+    iRealEntNum = iEntNum & ~S_FLAG_DO_CALLBACK;
+
+    if (pSfx->iFlags & SFX_FLAG_STREAMED) {
+        iFreeChannel = S_OMAHA_PickChannel2DStreamed(iRealEntNum, iEntChannel);
+    } else {
+        iFreeChannel = S_OMAHA_PickChannel2D(iRealEntNum, iEntChannel);
+    }
+
+    if (iFreeChannel < 0) {
+        Com_DPrintf(
+            "Omaha: Couldn't play %s sound '%s' for entity %i on channel %s\n",
+            (pSfx->iFlags & SFX_FLAG_STREAMED) ? "2Dstreamed" : "2D",
+            pSfx->name,
+            iRealEntNum,
+            S_ChannelNumToName(iEntChannel)
+        );
+        return;
+    }
+
+    if (iEntNum & S_FLAG_DO_CALLBACK) {
+        S_OMAHA_callbackServer(iRealEntNum, iFreeChannel, pSfx->name);
+    }
+
+    pChannel = S_OMAHA_GetPosChannel(iFreeChannel);
+    if (!pChannel) {
+        return;
+    }
+    pChannel->force_free();
+
+    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. */
+    fVolume = S_OMAHA_ClampContentVolume(fVolume);
+
+    /* Added in Omaha: category mix multipliers; the category also feeds the music duck. */
+    pChannel->iCategory = (int)S_OMAHA_ResolveCategory(pSfx, iEntChannel);
+    fVolume *= S_OMAHA_CategoryGainScale((sndCategory_t)pChannel->iCategory, iRealEntNum);
+    fRealVolume       = S_OMAHA_GetBaseVolume() * fVolume;
+    pChannel->fVolume = fVolume;
+
+    /* Fixed in Omaha: assign channel before LOCAL_LISTENER check (was using stale iEntChannel). */
+    pChannel->iEntChannel = iEntChannel;
+    if (pChannel->iEntChannel == CHAN_LOCAL) {
+        pChannel->iFlags |= CHANNEL_FLAG_LOCAL_LISTENER;
+    } else {
+        pChannel->iFlags &= ~CHANNEL_FLAG_LOCAL_LISTENER;
+    }
+    pChannel->iFlags &= ~CHANNEL_FLAG_PAUSED;
+
+    if (fMinDistance < 0.0) {
+        fMinDistance = 200.0;
+    }
+    pChannel->fMinDist = fMinDistance;
+
+    if (fMaxDistance < 0.0) {
+        fMaxDistance = pChannel->fMinDist * 64;
+    }
+    pChannel->fMaxDist = fMaxDistance;
+
+    pChannel->fNewPitchMult = 0;
+    pChannel->pSfx          = pSfx;
+    pChannel->iEntNum       = iRealEntNum;
+    if (iRealEntNum == ENTITYNUM_NONE) {
+        VectorClear(pChannel->vOrigin);
+        pChannel->iFlags |= CHANNEL_FLAG_NO_ENTITY;
+
+        if (vOrigin) {
+            VectorCopy(vOrigin, pChannel->vOrigin);
+        }
+    } else {
+        pChannel->iFlags &= ~CHANNEL_FLAG_NO_ENTITY;
+        pChannel->iEntNum = iRealEntNum;
+        if (vOrigin) {
+            VectorCopy(vOrigin, pChannel->vOrigin);
+
+            bSupportWaitTillSoundDone = cl.serverTime - 1 < 0;
+            pChannel->iTime           = cl.serverTime - 1;
+            if (bSupportWaitTillSoundDone) {
+                pChannel->iTime = 0;
+            }
+
+            if (iRealEntNum < 0 || iRealEntNum >= MAX_GENTITIES || s_entity[iRealEntNum].time < pChannel->iTime) {
+                // Fixed in OPM
+                //  Not sure if it's the real solution, but script_origin entities are usually
+                //  never sent to client so the sound will immediately get stopped
+                pChannel->iFlags |= CHANNEL_FLAG_MISSING_ENT;
+            }
+        } else {
+            VectorClear(pChannel->vOrigin);
+            pChannel->iTime = 0;
+        }
+    }
+
+    pChannel->iStartTime = cl.serverTime;
+    pChannel->iEndTime   = (int)(cl.serverTime + pSfx->time_length + 250.f);
+
+    if (pChannel->voiceKind == 2) {
+        // streamed
+        if (!pChannel->set_sfx(pSfx)) {
+            Com_DPrintf("Omaha: Set stream error - %s\n", pSfx->name);
+            return;
+        }
+
+        pChannel->iBaseRate = pChannel->sample_playback_rate();
+        pChannel->set_no_3d();
+        fRealVolume = fRealVolume * s_fVolumeGain;
+    } else {
+        bool sfxOk;
+
+        pChannel->stop();
+        pChannel->set_no_3d();
+        sfxOk = pChannel->set_sfx(pSfx);
+        if (!sfxOk) {
+            return;
+        }
+    }
+
+    // Fixed in OPM
+    //  Make sure to set the pitch before playing the sound
+    if (fPitch > 0) {
+        pChannel->set_sample_playback_rate(pChannel->iBaseRate * fPitch);
+    }
+
+    /* Fixed in Omaha: CHAN_LOCAL cues stay dry so the hitmarker does not pick up the room. */
+    if (pChannel->iFlags & CHANNEL_FLAG_LOCAL_LISTENER) {
+        pChannel->set_no_virtualization();
+    }
+
+    /* Added in Omaha: 2D cues stay clear of obstruction. */
+    S_OMAHA_UpdateObstruction(pChannel, s_vObstructionListener, pChannel->vOrigin, false, true);
+
+    pChannel->set_gain(fRealVolume);
+    pChannel->play();
+
+    if (s_show_sounds->integer > 0) {
+        Com_DPrintf(
+            "Omaha: 2D - %d (#%i) - %s (vol %f, mindist %f, maxdist %f)\n",
+            cl.serverTime,
+            iFreeChannel,
+            pSfx->name,
+            fVolume,
+            fMinDistance,
+            fMaxDistance
+        );
+    }
+}
+
+/*
+==============
+S_OMAHA_TraceObstruction
+
+Added in Omaha: fraction of three listener-to-source rays blocked by world brushes
+(source origin and +/-12 units vertically). Players, entities and fences do not block.
+==============
+*/
+static float S_OMAHA_TraceObstruction(const vec3_t vListener, const vec3_t vOrigin)
+{
+    static const float offsets[3] = {0.f, 12.f, -12.f};
+    trace_t            tr;
+    vec3_t             vEnd;
+    int                i;
+    int                iRays    = 0;
+    int                iBlocked = 0;
+
+    for (i = 0; i < 3; i++) {
+        VectorCopy(vOrigin, vEnd);
+        vEnd[2] += offsets[i];
+        CM_BoxTrace(&tr, vListener, vEnd, vec3_origin, vec3_origin, 0, CONTENTS_SOLID, qfalse);
+        if (tr.startsolid) {
+            // listener inside a brush (noclip): no meaningful answer
+            continue;
+        }
+        iRays++;
+        if (tr.fraction < 1.f) {
+            iBlocked++;
+        }
+    }
+
+    return iRays ? (float)iBlocked / (float)iRays : 0.f;
+}
+
+/*
+==============
+S_OMAHA_ListenerArea
+
+Added in Omaha: BSP area of the listener, once per origin. Solid leafs are area 0.
+==============
+*/
+static int S_OMAHA_ListenerArea(const vec3_t vListener)
+{
+    static int     s_area = -1;
+    static vec3_t  s_pos;
+    static qboolean s_valid;
+    vec3_t         vPoint;
+
+    if (s_valid && VectorCompare(s_pos, vListener)) {
+        return s_area;
+    }
+    VectorCopy(vListener, vPoint);
+    VectorCopy(vListener, s_pos);
+    s_area  = CM_AreaForPoint(vPoint);
+    s_valid = qtrue;
+    return s_area;
+}
+
+/*
+==============
+S_OMAHA_AreaOcclusion
+
+Added in Omaha: 1 when a closed areaportal separates the listener and the source.
+Area 0 (solid or unassigned) does not occlude. cm_noAreas keeps every pair connected.
+==============
+*/
+static float S_OMAHA_AreaOcclusion(const vec3_t vListener, const vec3_t vOrigin)
+{
+    vec3_t vPoint;
+    int    iListener;
+    int    iSource;
+
+    iListener = S_OMAHA_ListenerArea(vListener);
+    VectorCopy(vOrigin, vPoint);
+    iSource = CM_AreaForPoint(vPoint);
+    if (iListener <= 0 || iSource <= 0) {
+        return 0.f;
+    }
+    if (CM_AreasConnected(iListener, iSource)) {
+        return 0.f;
+    }
+    return 1.f;
+}
+
+/*
+==============
+S_OMAHA_UpdateObstruction
+
+Added in Omaha: obstruction target for one channel on the omaha mixer. bWorld
+marks positional world sounds; local/UI/music channels stay clear. bForce traces
+immediately (new sound) instead of waiting for the throttle.
+==============
+*/
+static void S_OMAHA_UpdateObstruction(
+    omaha_channel *pChannel, const vec3_t vListener, const vec3_t vOrigin, bool bWorld, bool bForce
+)
+{
+    float fObstruction;
+    float fOcclusion;
+    int   iRoute;
+    int   iNow;
+
+    /* Added in Omaha: HRTF route refreshes at the same start/update points as obstruction. */
+    iRoute = S_OMAHA_SpatialRoute(pChannel, bWorld);
+    pChannel->cur.route     = iRoute;
+    pChannel->iSpatialRoute = iRoute;
+
+    /*
+     * Added in Omaha: unchanged endpoints reuse the last fraction for up to a
+     * second (movers can still close the ray after that).
+     */
+    iNow = cls.realtime;
+
+    fObstruction = pChannel->fObstruction;
+    fOcclusion   = pChannel->fOcclusion;
+    if (!bWorld || pChannel->voiceKind != 0 || !s_obstruction || !s_obstruction->integer || CM_NumInlineModels() <= 0
+        || (pChannel->iEntNum != ENTITYNUM_NONE && pChannel->iEntNum == s_iListenerNumber)) {
+        fObstruction = 0;
+        fOcclusion   = 0;
+    } else if (bForce || iNow >= pChannel->iNextObstructionCheck) {
+        vec3_t vDelta;
+        float  fDist;
+        int    iInterval;
+
+        iInterval = OM_OBSTRUCT_CAL_MS;
+        pChannel->iNextObstructionCheck = iNow + iInterval;
+
+        if (pChannel->bTraceValid && iNow - pChannel->iTraceTime < 1000
+            && VectorCompare(pChannel->vTraceListener, vListener) && VectorCompare(pChannel->vTraceOrigin, vOrigin)) {
+            fObstruction = pChannel->fObstruction;
+            fOcclusion   = pChannel->fOcclusion;
+        } else {
+            VectorSubtract(vOrigin, vListener, vDelta);
+            fDist = VectorLength(vDelta);
+            if (fDist < 32.f || (pChannel->fMaxDist > 0.f && fDist > pChannel->fMaxDist)) {
+                fObstruction = 0;
+                fOcclusion   = 0;
+            } else {
+                fObstruction = S_OMAHA_TraceObstruction(vListener, vOrigin);
+                fOcclusion   = S_OMAHA_AreaOcclusion(vListener, vOrigin);
+            }
+            VectorCopy(vListener, pChannel->vTraceListener);
+            VectorCopy(vOrigin, pChannel->vTraceOrigin);
+            pChannel->iTraceTime  = iNow;
+            pChannel->bTraceValid = qtrue;
+        }
+    }
+
+    if (fObstruction != pChannel->fObstruction || pChannel->cur.obstruction != fObstruction
+        || fOcclusion != pChannel->fOcclusion || pChannel->cur.occlusion != fOcclusion) {
+        pChannel->fObstruction    = fObstruction;
+        pChannel->fOcclusion      = fOcclusion;
+        pChannel->cur.obstruction = fObstruction;
+        pChannel->cur.occlusion   = fOcclusion;
+        pChannel->flush_params();
+    }
+}
+
+/*
+==============
+S_OMAHA_SpatialRoute
+
+Added in Omaha: headphone HRTF route. Every entity-attached 3D sound of another
+entity in a player-ish category (gunfire, foley, footsteps, bodyfalls, voices,
+vehicles) gets its own HRTF filter, regardless of loudness or distance, so steps
+stay localizable under heavy fire. The listener's own sounds stay dry (no HRTF /
+no ambi bus) so first-person weapons and foley stay present. Everything else
+(debris, impacts, explosions, world, loops, 2D) shares the ambisonic bus. The
+renderer ignores the route unless omaha HRTF is active.
+==============
+*/
+static int S_OMAHA_SpatialRoute(const omaha_channel *pChannel, bool bWorld)
+{
+    if (!bWorld || pChannel->voiceKind != 0) {
+        return OM_ROUTE_BUS;
+    }
+    /* Own / head-locked: dry stereo. Full HRTF on a source at the listener is hollow. */
+    if (pChannel->iFlags & CHANNEL_FLAG_LOCAL_LISTENER) {
+        return OM_ROUTE_DRY;
+    }
+    if (pChannel->iEntNum != ENTITYNUM_NONE && S_OMAHA_IsLocalEntity(pChannel->iEntNum)) {
+        return OM_ROUTE_DRY;
+    }
+    /*
+     * cgame plays footsteps, landings and bodyfalls entity-less at the ground
+     * trace. The listener's own land right below the head and stay dry; anyone
+     * else's get their own HRTF filter like entity-attached sounds.
+     */
+    if ((pChannel->iFlags & CHANNEL_FLAG_NO_ENTITY)
+        && (pChannel->iCategory == SND_CAT_FOOTSTEPS || pChannel->iCategory == SND_CAT_BODYFALLS)) {
+        const float fDx = pChannel->vOrigin[0] - s_vObstructionListener[0];
+        const float fDy = pChannel->vOrigin[1] - s_vObstructionListener[1];
+        const float fDz = s_vObstructionListener[2] - pChannel->vOrigin[2];
+
+        if (fDx * fDx + fDy * fDy < Square(48.f) && fDz > -16.f && fDz < 128.f) {
+            return OM_ROUTE_DRY;
+        }
+        return OM_ROUTE_DIRECT;
+    }
+    if (pChannel->iFlags & CHANNEL_FLAG_NO_ENTITY) {
+        return OM_ROUTE_BUS;
+    }
+    if (pChannel->iEntNum == ENTITYNUM_NONE) {
+        return OM_ROUTE_BUS;
+    }
+
+    switch ((sndCategory_t)pChannel->iCategory) {
+    case SND_CAT_FIRE:
+    case SND_CAT_FOLEY:
+    case SND_CAT_FOOTSTEPS:
+    case SND_CAT_BODYFALLS:
+    case SND_CAT_VOICE:
+    case SND_CAT_VEHICLES:
+        return OM_ROUTE_DIRECT;
+    default:
+        return OM_ROUTE_BUS;
+    }
+}
+
+/*
+==============
+S_OMAHA_IsCombatVoAlias
+
+Added in Omaha: narrow alias names for short combat VO (not mission dialog).
+==============
+*/
+static qboolean S_OMAHA_IsCombatVoAlias(const char *alias)
+{
+    if (!alias || !alias[0]) {
+        return qfalse;
+    }
+    if (!Q_stricmpn(alias, "player_pain", 11) || !Q_stricmpn(alias, "player_death", 12)) {
+        return qtrue;
+    }
+    if (!Q_stricmpn(alias, "manon_pain", 10) || !Q_stricmpn(alias, "manon_death", 11)) {
+        return qtrue;
+    }
+    if (!Q_stricmp(alias, "snd_pain")) {
+        return qtrue;
+    }
+    return qfalse;
+}
+
+/*
+==============
+S_OMAHA_IsCombatVoPath
+
+Added in Omaha: dialogue damage/death wavs only (mission VO lives elsewhere).
+==============
+*/
+static qboolean S_OMAHA_IsCombatVoPath(const char *path)
+{
+    if (!path || !path[0]) {
+        return qfalse;
+    }
+    if (!Q_stristr(path, "/dialogue/") && !Q_stristr(path, "/dialog/")) {
+        return qfalse;
+    }
+    if (Q_stristr(path, "/damage/") || Q_stristr(path, "/death/")) {
+        return qtrue;
+    }
+    return qfalse;
+}
+
+/*
+==============
+S_OMAHA_IsCombatVoSfx
+
+Added in Omaha: path match, or any global alias that plays this file.
+==============
+*/
+static qboolean S_OMAHA_IsCombatVoSfx(const sfx_t *pSfx)
+{
+    if (!pSfx || !pSfx->name[0]) {
+        return qfalse;
+    }
+    if (S_OMAHA_IsCombatVoPath(pSfx->name)) {
+        return qtrue;
+    }
+
+    return (S_OMAHA_AliasFiles(pSfx->name) & OM_ALIAS_COMBAT_VO) ? qtrue : qfalse;
+}
+
+/*
+==============
+S_OMAHA_TryPromoteCombatVo
+
+Added in Omaha: force-load streamed pain/death so they can use 3D / HRTF.
+On failure, restore the streamed stub and return false (caller keeps 2D).
+==============
+*/
+static qboolean S_OMAHA_TryPromoteCombatVo(sfx_t *pSfx)
+{
+    if (!pSfx || !(pSfx->iFlags & SFX_FLAG_STREAMED)) {
+        return qtrue;
+    }
+    if (pSfx->iFlags & SFX_FLAG_MP3) {
+        return qfalse;
+    }
+    if (!s_pain_hrtf || !s_pain_hrtf->integer) {
+        return qfalse;
+    }
+    if (pSfx->iFlags & SFX_FLAG_PROMOTE_FAILED) {
+        return qfalse;
+    }
+    if (!S_OMAHA_IsCombatVoSfx(pSfx)) {
+        return qfalse;
+    }
+
+    pSfx->iFlags &= ~SFX_FLAG_STREAMED;
+    if (S_LoadSound(pSfx->name, pSfx, 0, qtrue) && pSfx->data) {
+        pSfx->iFlags &= ~SFX_FLAG_STREAMED;
+        pSfx->iFlags |= SFX_FLAG_PROMOTE_DONE;
+        if (s_show_sounds && s_show_sounds->integer > 0) {
+            Com_DPrintf("Omaha: combat VO force-loaded for 3D/HRTF - %s\n", pSfx->name);
+        }
+        return qtrue;
+    }
+
+    /* Fallback: keep retail streamed 2D rather than dropping the cue. Never retried for this sfx. */
+    Com_DPrintf("Omaha: combat VO force-load failed; keeping streamed 2D - %s\n", pSfx->name);
+    S_LoadSound(pSfx->name, pSfx, 1, qfalse);
+    pSfx->iFlags |= SFX_FLAG_PROMOTE_FAILED;
+    return qfalse;
+}
+
+/*
+==============
+S_OMAHA_StartSound
+==============
+*/
+void S_OMAHA_StartSound(
+    const vec3_t vOrigin,
+    int          iEntNum,
+    int          iEntChannel,
+    sfxHandle_t  sfxHandle,
+    float        fVolume,
+    float        fMinDist,
+    float        fPitch,
+    float        fMaxDist,
+    qboolean     bStreamed
+)
+{
+    int             iChannel;
+    omaha_channel *pChannel;
+    sfx_info_t     *pSfxInfo;
+    sfx_t          *pSfx;
+    bool            bSupportWaitTillSoundDone;
+    sndCategory_t   cat;
+    float           fOverlap;
+    float           fOverlapGain;
+    float           fPocket;
+    float           fPocketGain;
+    bool            bPocket;
+
+    pSfx = &s_knownSfx[sfxHandle];
+    if (bStreamed && !((pSfx->iFlags & SFX_FLAG_PROMOTE_DONE) && pSfx->data)) {
+        pSfx->iFlags |= SFX_FLAG_STREAMED;
+    }
+
+    /* Added in Omaha: pain/death VO → resident 3D when possible (else streamed 2D). */
+    if ((pSfx->iFlags & SFX_FLAG_STREAMED) && iEntChannel != CHAN_MENU && iEntChannel != CHAN_LOCAL) {
+        S_OMAHA_TryPromoteCombatVo(pSfx);
+    }
+
+    if ((pSfx->iFlags & (SFX_FLAG_NO_OFFSET) || pSfx->iFlags & (SFX_FLAG_STREAMED | SFX_FLAG_MP3))
+        || iEntChannel == CHAN_MENU || iEntChannel == CHAN_LOCAL) {
+        S_OMAHA_Start2DSound(vOrigin, iEntNum, iEntChannel, pSfx, fVolume, fMinDist, fPitch, fMaxDist);
+        return;
+    }
+
+    bSupportWaitTillSoundDone = (iEntNum & S_FLAG_DO_CALLBACK) != 0;
+    iEntNum &= ~S_FLAG_DO_CALLBACK;
+
+    pSfxInfo = &sfx_infos[pSfx->sfx_info_index];
+    if (pSfx->iFlags & SFX_FLAG_STREAMED) {
+        Com_DPrintf("Omaha: 3D sounds not supported - couldn't play '%s'\n", pSfx->name);
+        return;
+    }
+
+    /* Changed in Omaha: resolve distances, volume and category before picking a voice (overlap ducking can drop). */
+    if (fMinDist < 0.0) {
+        fMinDist = 200.0;
+        fMaxDist = 12800.0;
+    }
+    if (fMaxDist < 0.0) {
+        fMaxDist = fMinDist * 64;
+    }
+
+    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. */
+    fVolume = S_OMAHA_ClampContentVolume(fVolume);
+
+    /* Added in Omaha: category mix multipliers (local/other for FIRE). */
+    cat = S_OMAHA_ResolveCategory(pSfx, iEntChannel);
+    fVolume *= S_OMAHA_CategoryGainScale(cat, iEntNum);
+
+    /* Added in Omaha: pocket ducking for other players' fire and explosions (never drops). */
+    fPocket     = 0.f;
+    fPocketGain = 1.f;
+    bPocket     = pSfxInfo->loop_start == -1
+          && (cat == SND_CAT_EXPLOSIONS || (cat == SND_CAT_FIRE && !S_OMAHA_IsLocalEntity(iEntNum)));
+    if (bPocket && OM_POCKET_ENABLE) {
+        const float *pPocketOrigin = vOrigin;
+
+        if (!pPocketOrigin && iEntNum != ENTITYNUM_NONE && iEntNum >= 0 && iEntNum < MAX_GENTITIES) {
+            pPocketOrigin = s_entity[iEntNum].position;
+        }
+        if (pPocketOrigin) {
+            fPocketGain = S_OMAHA_PocketGain(cat, iEntNum, pPocketOrigin, S_OMAHA_GetBaseVolume() * fVolume, fMinDist, &fPocket);
+            fVolume *= fPocketGain;
+        }
+    }
+
+    /*
+     * Added in Omaha: overlap ducking for entity-less one-shots. cgame plays
+     * footsteps, landings and bodyfalls entity-less at the trace point; they
+     * belong to a body, so they are not overlap-ducked.
+     */
+    fOverlap     = 0.f;
+    fOverlapGain = 1.f;
+    if (!bPocket && OM_OVERLAP_ENABLE && iEntNum == ENTITYNUM_NONE && vOrigin && pSfxInfo->loop_start == -1
+        && cat != SND_CAT_EXPLOSIONS && cat != SND_CAT_FOOTSTEPS && cat != SND_CAT_BODYFALLS && cat != SND_CAT_AUTO
+        && cat != SND_CAT_NONE) {
+        fOverlapGain = S_OMAHA_OverlapGain(cat, vOrigin, S_OMAHA_GetBaseVolume() * fVolume, fMinDist, &fOverlap);
+        if (fOverlapGain < OM_OVERLAP_FLOOR) {
+            if (s_show_sounds->integer > 0) {
+                Com_DPrintf(
+                    "Omaha: %d - %s dropped (overlap %f, g %f)\n", cl.serverTime, pSfx->name, fOverlap, fOverlapGain
+                );
+            }
+            return;
+        }
+        fVolume *= fOverlapGain;
+    }
+
+    iChannel = S_OMAHA_PickChannel3D(iEntNum, iEntChannel);
+    if (iChannel < 0) {
+        Com_DPrintf(
+            "Omaha: Couldn't play %s sound '%s' for entity %i on channel %s\n",
+            (pSfx->iFlags & SFX_FLAG_STREAMED) ? "3Dstreamed" : "3D",
+            pSfx->name,
+            iEntNum,
+            S_ChannelNumToName(iEntChannel)
+        );
+        return;
+    }
+
+    if (bSupportWaitTillSoundDone) {
+        S_OMAHA_callbackServer(iEntNum, iChannel, pSfx->name);
+    }
+
+    pChannel = S_OMAHA_GetPosChannel(iChannel);
+    if (!pChannel) {
+        return;
+    }
+    pChannel->fNewPitchMult = fPitch;
+    pChannel->iEntChannel   = iEntChannel;
+
+    pChannel->stop();
+    pChannel->iFlags &= ~(CHANNEL_FLAG_LOOPING | CHANNEL_FLAG_PAUSED | CHANNEL_FLAG_LOCAL_LISTENER | CHANNEL_FLAG_LOOP_OWNED);
+    if (!pChannel->set_sfx(pSfx)) {
+        Com_DPrintf("Omaha: Set sample error - %s\n", pSfx->name);
+        return;
+    }
+
+    pChannel->fMinDist  = fMinDist;
+    pChannel->fMaxDist  = fMaxDist;
+    pChannel->iCategory = (int)cat;
+    pChannel->fVolume   = S_OMAHA_GetBaseVolume() * fVolume;
+
+    // Fixed in OPM
+    //  Setup the channel for 3D
+    pChannel->set_3d();
+    pChannel->set_gain(pChannel->fVolume);
+
+    if (s_show_sounds->integer > 0) {
+        Com_DPrintf(
+            "Omaha: %d (#%i) - %s (vol %f, mindist %f, maxdist %f, overlap %f, g %f, pocket %f, pg %f)\n",
+            cl.serverTime,
+            iChannel,
+            pSfx->name,
+            pChannel->fVolume,
+            fMinDist,
+            fMaxDist,
+            fOverlap,
+            fOverlapGain,
+            fPocket,
+            fPocketGain
+        );
+    }
+
+    pChannel->set_velocity(0, 0, 0);
+    if (iEntNum == ENTITYNUM_NONE) {
+        if (vOrigin) {
+            VectorCopy(vOrigin, pChannel->vOrigin);
+        } else {
+            //VectorClear(vOrigin);
+            // Fixed in OPM
+            //  Tiny mistake found in original where the vOrigin parameter is set to 0
+            VectorClear(pChannel->vOrigin);
+        }
+
+        pChannel->set_position(pChannel->vOrigin[0], pChannel->vOrigin[1], pChannel->vOrigin[2]);
+        pChannel->iFlags |= CHANNEL_FLAG_NO_ENTITY;
+        pChannel->iEntNum = ENTITYNUM_NONE;
+    } else {
+        pChannel->iFlags &= ~CHANNEL_FLAG_NO_ENTITY;
+        pChannel->iEntNum = iEntNum;
+        if (vOrigin) {
+            VectorCopy(vOrigin, pChannel->vOrigin);
+
+            bSupportWaitTillSoundDone = cl.serverTime - 1 < 0;
+            pChannel->iTime           = cl.serverTime - 1;
+            if (bSupportWaitTillSoundDone) {
+                pChannel->iTime = 0;
+            }
+
+            if (iEntNum < 0 || iEntNum >= MAX_GENTITIES || s_entity[iEntNum].time < pChannel->iTime) {
+                // Fixed in OPM
+                //  Not sure if it's the real solution, but script_origin entities are usually
+                //  never sent to client so the sound will immediately get stopped
+                pChannel->iFlags |= CHANNEL_FLAG_MISSING_ENT;
+            }
+        } else {
+            VectorClear(pChannel->vOrigin);
+            pChannel->iTime = 0;
+        }
+        pChannel->set_position(pChannel->vOrigin[0], pChannel->vOrigin[1], pChannel->vOrigin[2]);
+    }
+
+    if (pSfxInfo->loop_start != -1) {
+        pChannel->set_sample_loop_block(
+            S_OMAHA_SfxLoopPoint(pSfx, pSfxInfo->loop_start), S_OMAHA_SfxLoopPoint(pSfx, pSfxInfo->loop_end)
+        );
+        pChannel->set_sample_loop_count(0);
+
+        pChannel->iFlags |= CHANNEL_FLAG_LOOPING;
+        if (s_show_sounds->integer) {
+            Com_DPrintf("Omaha: loopblock - %d to %d\n", pSfxInfo->loop_start, pSfxInfo->loop_end);
+        }
+    } else {
+        pChannel->set_sample_loop_count(1);
+    }
+
+    if (S_OMAHA_ShouldStart(pChannel->vOrigin, pChannel->fMinDist, pChannel->fMaxDist)) {
+        // Fixed in OPM
+        //  Make sure to set the pitch before playing the sound
+        pChannel->iBaseRate = pSfx->info.rate;
+        pChannel->set_sample_playback_rate(pChannel->iBaseRate * pChannel->fNewPitchMult);
+        pChannel->fNewPitchMult = 0;
+
+        /* Added in Omaha: start at the right obstruction instead of the previous sound's. */
+        S_OMAHA_UpdateObstruction(pChannel, s_vObstructionListener, pChannel->vOrigin, true, true);
+
+        pChannel->play();
+        pChannel->iEndTime   = cl.serverTime + (int)pChannel->pSfx->time_length + 250;
+        pChannel->iStartTime = cl.serverTime;
+    }
+}
+
+/*
+==============
+S_OMAHA_GrowLoopSounds
+Added in Omaha: expand loop list past the old 64-slot cap.
+==============
+*/
+static int S_OMAHA_GrowLoopSounds(void)
+{
+    int                  newCap;
+    omaha_loop_sound_t *neu;
+
+    newCap = omaha.loop_sounds_capacity + SOUNDSYSTEM_VOICE_GROW_CHUNK;
+    neu    = (omaha_loop_sound_t *)Z_Malloc(newCap * sizeof(*neu));
+    if (omaha.loop_sounds) {
+        memcpy(neu, omaha.loop_sounds, omaha.loop_sounds_count * sizeof(*neu));
+        Z_Free(omaha.loop_sounds);
+    }
+    memset(neu + omaha.loop_sounds_count, 0, (newCap - omaha.loop_sounds_count) * sizeof(*neu));
+    omaha.loop_sounds          = neu;
+    omaha.loop_sounds_capacity = newCap;
+    omaha.loop_sounds_count    = newCap;
+    return omaha.loop_sounds_count - SOUNDSYSTEM_VOICE_GROW_CHUNK;
+}
+
+/*
+==============
+S_OMAHA_AddLoopingSound
+==============
+*/
+void S_OMAHA_AddLoopingSound(
+    const vec3_t vOrigin,
+    const vec3_t vVelocity,
+    sfxHandle_t  sfxHandle,
+    float        fVolume,
+    float        fMinDist,
+    float        fMaxDist,
+    float        fPitch,
+    int          iFlags
+)
+{
+    int                  i;
+    int                  iFreeLoopSound;
+    sfx_t               *pSfx;
+    omaha_loop_sound_t *pLoopSound;
+
+    iFreeLoopSound = -1;
+    pSfx           = &s_knownSfx[sfxHandle];
+    if (!pSfx || !pSfx->length) {
+        return;
+    }
+
+    for (i = 0; i < omaha.loop_sounds_count; i++) {
+        pLoopSound = &omaha.loop_sounds[i];
+        if (pLoopSound->pSfx == pSfx && !pLoopSound->bInUse) {
+            iFreeLoopSound = i;
+            break;
+        }
+    }
+
+    if (iFreeLoopSound < 0) {
+        for (i = 0; i < omaha.loop_sounds_count; i++) {
+            pLoopSound = &omaha.loop_sounds[i];
+            if (!pLoopSound->pSfx && !pLoopSound->bInUse) {
+                iFreeLoopSound       = i;
+                pLoopSound->bPlaying = false;
+                break;
+            }
+        }
+    }
+
+    /* Changed in Omaha: grow past the baseline instead of dropping when full. */
+    if (iFreeLoopSound < 0) {
+        iFreeLoopSound = S_OMAHA_GrowLoopSounds();
+        if (iFreeLoopSound < 0) {
+            return;
+        }
+    }
+
+    pLoopSound = &omaha.loop_sounds[iFreeLoopSound];
+    VectorCopy(vOrigin, pLoopSound->vOrigin);
+    VectorCopy(vVelocity, pLoopSound->vVelocity);
+    pLoopSound->pSfx       = pSfx;
+    pLoopSound->bInUse     = true;
+    pLoopSound->iStartTime = cls.realtime;
+    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling) before category mix on loops. */
+    fVolume = S_OMAHA_ClampContentVolume(fVolume);
+    /* Added in Omaha: category mix on loops. */
+    fVolume *= S_OMAHA_CategoryGainScale(S_OMAHA_ResolveCategory(pSfx, CHAN_AUTO), ENTITYNUM_NONE);
+    pLoopSound->fBaseVolume = fVolume;
+    pLoopSound->fMinDist    = fMinDist;
+    pLoopSound->fMaxDist    = fMaxDist;
+    pLoopSound->fPitch      = fPitch;
+    pLoopSound->iFlags      = iFlags;
+}
+
+/*
+==============
+S_OMAHA_LoopChannel
+
+Added in Omaha: the voice a playing loop slot still owns, or NULL once the
+voice was taken over by another sound.
+==============
+*/
+static omaha_channel *S_OMAHA_LoopChannel(const omaha_loop_sound_t *pLoopSound)
+{
+    omaha_channel *pChannel;
+
+    if (!pLoopSound->bPlaying) {
+        return NULL;
+    }
+    pChannel = S_OMAHA_GetPosChannel(pLoopSound->iChannel);
+    if (!pChannel || pChannel->pSfx != pLoopSound->pSfx || !(pChannel->iFlags & CHANNEL_FLAG_LOOP_OWNED)) {
+        return NULL;
+    }
+    return pChannel;
+}
+
+/*
+==============
+S_OMAHA_StopLoopingSound
+
+Changed in Omaha: always releases the slot, also when it never started playing.
+==============
+*/
+void S_OMAHA_StopLoopingSound(omaha_loop_sound_t *pLoopSound)
+{
+    omaha_channel *pChannel;
+
+    pChannel = S_OMAHA_LoopChannel(pLoopSound);
+    if (pChannel) {
+        if (s_show_sounds->integer > 0 && pChannel->pSfx) {
+            Com_DPrintf(
+                "Omaha: %d (#%i) - stopped loop - %s\n",
+                cl.serverTime,
+                pLoopSound->iChannel,
+                pChannel->pSfx->name
+            );
+        }
+        pChannel->force_free();
+    }
+    pLoopSound->pSfx     = NULL;
+    pLoopSound->bPlaying = false;
+}
+
+/*
+==============
+S_OMAHA_ClearLoopingSounds
+==============
+*/
+void S_OMAHA_ClearLoopingSounds()
+{
+    int i;
+
+    for (i = 0; i < omaha.loop_sounds_count; i++) {
+        omaha.loop_sounds[i].bInUse = false;
+    }
+}
+
+/*
+==============
+S_OMAHA_StopLoopingSounds
+==============
+*/
+void S_OMAHA_StopLoopingSounds()
+{
+    int i;
+
+    for (i = 0; i < omaha.loop_sounds_count; i++) {
+        omaha.loop_sounds[i].bInUse = false;
+        S_OMAHA_StopLoopingSound(&omaha.loop_sounds[i]);
+    }
+}
+
+/*
+==============
+S_OMAHA_StopSound
+==============
+*/
+void S_OMAHA_StopSound(int iEntNum, int iEntChannel)
+{
+    int             i;
+    const int       posCount = omaha.position_channel_count > 0 ? omaha.position_channel_count
+                                                                 : MAX_SOUNDSYSTEM_POSITION_CHANNELS;
+
+    for (i = 0; i < posCount; i++) {
+        omaha_channel *pChannel = S_OMAHA_GetPosChannel(i);
+        if (pChannel && !pChannel->is_free() && pChannel->iEntNum == iEntNum
+            && pChannel->iEntChannel == iEntChannel) {
+            pChannel->end_sample();
+            break;
+        }
+    }
+}
+
+/*
+==============
+S_OMAHA_StopAllSounds
+==============
+*/
+void S_OMAHA_StopAllSounds(qboolean bStopMusic)
+{
+    int i;
+
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    S_OMAHA_StopLoopingSounds();
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS; i++) {
+        omaha_channel *pChannel = omaha.channel[i];
+        if (pChannel) {
+            pChannel->force_free();
+        }
+    }
+    for (i = 0; i < omaha.channel_extra_count; i++) {
+        if (omaha.channel_extra[i]) {
+            omaha.channel_extra[i]->force_free();
+        }
+    }
+    memset(s_restoredFrom, 0, sizeof(s_restoredFrom));
+
+    if (bStopMusic) {
+        S_OMAHA_MUSIC_FreeAllSongs();
+        S_OMAHA_TriggeredMusic_Stop();
+        /* Fixed in Omaha: the mp3 and movie streams were left running. */
+        omaha.chan_mp3.force_free();
+        omaha.chan_movie.force_free();
+    }
+}
+
+/*
+==============
+S_OMAHA_LoopPhase
+
+Added in Omaha: sample frame a restarted loop resumes at, so it stays in phase
+with the time the slot was added.
+==============
+*/
+static U32 S_OMAHA_LoopPhase(const omaha_loop_sound_t *pLoopSound)
+{
+    const sfx_t    *pSfx    = pLoopSound->pSfx;
+    const long long elapsed = (long long)cls.realtime - pLoopSound->iStartTime;
+
+    if (pSfx->length <= 0 || pSfx->info.rate <= 0.f || elapsed <= 0) {
+        return 0;
+    }
+    return (U32)((elapsed * (long long)pSfx->info.rate / 1000) % pSfx->length);
+}
+
+/*
+==============
+S_OMAHA_SfxLoopPoint
+
+Added in Omaha: sfx_info loop points count frames of the file as shipped;
+DownSampleWav may have lowered the rate since.
+==============
+*/
+static int S_OMAHA_SfxLoopPoint(const sfx_t *pSfx, int frame)
+{
+    if (frame <= 0 || pSfx->info.srcrate <= 0.f || pSfx->info.srcrate == pSfx->info.rate) {
+        return frame;
+    }
+    return (int)((long long)frame * (long long)pSfx->info.rate / (long long)pSfx->info.srcrate);
+}
+
+/*
+==============
+S_OMAHA_Start2DLoopSound
+==============
+*/
+static int S_OMAHA_Start2DLoopSound(
+    omaha_loop_sound_t *pLoopSound, float fVolume, float fVolumeToPlay, float fMinDistance, const vec3_t vLoopOrigin
+)
+{
+    int             iChannel;
+    omaha_channel *pChannel;
+
+    if (pLoopSound->pSfx->iFlags & SFX_FLAG_STREAMED) {
+        iChannel = S_OMAHA_PickChannel2DStreamed(ENTITYNUM_NONE, 0);
+    } else {
+        iChannel = S_OMAHA_PickChannel2D(ENTITYNUM_NONE, 0);
+    }
+
+    if (iChannel < 0) {
+        Com_DPrintf("Omaha: Could not find a free 2D sound channel\n");
+        return iChannel;
+    }
+
+    pChannel = S_OMAHA_GetPosChannel(iChannel);
+    if (!pChannel) {
+        return -1;
+    }
+    pChannel->force_free();
+    pChannel->fVolume = fVolume;
+
+    if (pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN) {
+        pChannel->iFlags |= CHANNEL_FLAG_LOCAL_LISTENER;
+    } else {
+        pChannel->iFlags &= ~CHANNEL_FLAG_LOCAL_LISTENER;
+    }
+    pChannel->fMinDist = fMinDistance;
+
+    if (!pChannel->set_sfx(pLoopSound->pSfx)) {
+        Com_DPrintf("Omaha: Set sample error (loopsound) - %s\n", pLoopSound->pSfx->name);
+        pChannel->iFlags &= ~CHANNEL_FLAG_PLAY_DEFERRED;
+        return -1;
+    }
+
+    pChannel->iEntNum     = ENTITYNUM_NONE;
+    pChannel->iEntChannel = 0;
+    pChannel->pSfx        = pLoopSound->pSfx;
+    pChannel->iCategory   = (int)S_OMAHA_ResolveCategory(pLoopSound->pSfx, CHAN_AUTO);
+    pChannel->iStartTime  = cl.serverTime;
+    pChannel->iFlags |= CHANNEL_FLAG_PAUSED | CHANNEL_FLAG_NO_ENTITY | CHANNEL_FLAG_LOOP_OWNED;
+    pChannel->iBaseRate = pChannel->sample_playback_rate();
+    VectorCopy(vLoopOrigin, pChannel->vOrigin);
+
+    pChannel->set_sample_offset(S_OMAHA_LoopPhase(pLoopSound));
+    pChannel->set_sample_loop_count(0);
+    pChannel->fVolume = fVolumeToPlay;
+    pChannel->set_gain(fVolumeToPlay);
+    /* Added in Omaha: omaha obstruction before the loop starts. */
+    S_OMAHA_UpdateObstruction(
+        pChannel, s_vObstructionListener, vLoopOrigin, !(pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN), true
+    );
+    pChannel->start_sample();
+    if (s_show_sounds->integer > 0) {
+        Com_DPrintf(
+            "Omaha: %d (#%i) - %s (vol %f)\n", cl.serverTime, pLoopSound->iChannel, pLoopSound->pSfx->name, fVolume
+        );
+    }
+
+    return iChannel;
+}
+
+/*
+==============
+S_OMAHA_Start3DLoopSound
+==============
+*/
+static int S_OMAHA_Start3DLoopSound(
+    omaha_loop_sound_t *pLoopSound,
+    float                fVolumeToPlay,
+    float                fMinDistance,
+    float                fMaxDistance,
+    const vec3_t         vLoopOrigin,
+    const vec3_t         vListenerOrigin
+)
+{
+    int             iChannel;
+    omaha_channel *pChan3D;
+
+    if (pLoopSound->pSfx->iFlags & SFX_FLAG_STREAMED) {
+        return -1;
+    }
+
+    if (!pLoopSound->pSfx->data || !pLoopSound->pSfx->length) {
+        return -1;
+    }
+
+    iChannel = S_OMAHA_PickChannel3D(ENTITYNUM_NONE, 0);
+    if (iChannel < 0) {
+        Com_DPrintf("Omaha: Could not find a free channel\n");
+        return iChannel;
+    }
+
+    pChan3D = S_OMAHA_GetPosChannel(iChannel);
+    if (!pChan3D) {
+        return -1;
+    }
+    pChan3D->force_free();
+    pChan3D->iEntNum     = ENTITYNUM_NONE;
+    pChan3D->iEntChannel = 0;
+    pChan3D->fMinDist    = fMinDistance;
+    pChan3D->fMaxDist    = fMaxDistance;
+    pChan3D->set_3d();
+
+    if (!pChan3D->set_sfx(pLoopSound->pSfx)) {
+        Com_DPrintf("Omaha: Set sample error - %s\n", pLoopSound->pSfx->name);
+        return -1;
+    }
+
+    pChan3D->set_position(vLoopOrigin[0], vLoopOrigin[1], vLoopOrigin[2]);
+    VectorScale(pLoopSound->vVelocity, s_fVelocityScale, pLoopSound->vVelocity);
+    pChan3D->set_velocity(pLoopSound->vVelocity[0], pLoopSound->vVelocity[1], pLoopSound->vVelocity[2]);
+    pChan3D->pSfx       = pLoopSound->pSfx;
+    pChan3D->iCategory  = (int)S_OMAHA_ResolveCategory(pLoopSound->pSfx, CHAN_AUTO);
+    pChan3D->iStartTime = cl.serverTime;
+    VectorCopy(vLoopOrigin, pChan3D->vOrigin);
+    pChan3D->iFlags |= CHANNEL_FLAG_PAUSED | CHANNEL_FLAG_NO_ENTITY | CHANNEL_FLAG_LOOP_OWNED;
+    pChan3D->iBaseRate = pChan3D->sample_playback_rate();
+
+    pChan3D->set_sample_offset(S_OMAHA_LoopPhase(pLoopSound));
+    pChan3D->set_sample_loop_count(0);
+    pChan3D->fVolume = fVolumeToPlay;
+    pChan3D->set_gain(fVolumeToPlay);
+    /* Added in Omaha: omaha obstruction before the loop starts. */
+    S_OMAHA_UpdateObstruction(
+        pChan3D, s_vObstructionListener, vLoopOrigin, !(pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN), true
+    );
+    pChan3D->play();
+
+    return iChannel;
+}
+
+/*
+==============
+S_OMAHA_UpdateLoopSound
+==============
+*/
+static bool S_OMAHA_UpdateLoopSound(
+    omaha_loop_sound_t *pLoopSound,
+    float                fVolumeToPlay,
+    float                fMinDistance,
+    float                fMaxDistance,
+    const vec3_t         vListenerOrigin,
+    const vec3_t         vTempAxis,
+    const vec3_t         vLoopOrigin
+)
+{
+    omaha_channel *pChannel;
+    float           fVolume;
+    float           fMaxVolume;
+    vec3_t          vDir;
+    float           fDistance;
+
+    pChannel = S_OMAHA_LoopChannel(pLoopSound);
+    if (!pChannel) {
+        pLoopSound->bPlaying = 0;
+        return false;
+    }
+
+    if (pLoopSound->pSfx->iFlags & (SFX_FLAG_NO_OFFSET) || pLoopSound->pSfx->iFlags & (SFX_FLAG_STREAMED | SFX_FLAG_MP3)
+        || (pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN)) {
+        vec3_t vOrigin;
+        int    iPan;
+
+        pChannel->fVolume = fVolumeToPlay / s_fVolumeGain;
+        fVolume           = S_OMAHA_GetBaseVolume() * pChannel->fVolume;
+        fMaxVolume        = fVolume;
+
+        if (pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN) {
+            // Center the sound
+            iPan = 64;
+        } else {
+            VectorCopy(vLoopOrigin, vOrigin);
+            iPan = S_OMAHA_SpatializeStereoSound(vListenerOrigin, vTempAxis, vOrigin);
+
+            VectorSubtract(vListenerOrigin, vOrigin, vDir);
+            // Clamp the volume by distance
+            fDistance = VectorLength(vDir);
+            if (pChannel->fMinDist >= fDistance) {
+                fVolume = fMaxVolume;
+            } else {
+                fVolume = pChannel->fMinDist / fDistance * fMaxVolume;
+            }
+        }
+
+        pChannel->set_gain(fVolume);
+        pChannel->set_sample_pan(iPan);
+    } else {
+        VectorCopy(vLoopOrigin, pChannel->vOrigin);
+        pChannel->set_position(vLoopOrigin[0], vLoopOrigin[1], vLoopOrigin[2]);
+        pChannel->fVolume = fVolumeToPlay;
+        pChannel->set_gain(fVolumeToPlay);
+    }
+
+    /* Added in Omaha: omaha obstruction (centered loops stay clear). */
+    S_OMAHA_UpdateObstruction(
+        pChannel, vListenerOrigin, vLoopOrigin, !(pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN), false
+    );
+
+    return true;
+}
+
+/*
+==============
+S_OMAHA_AddLoopSounds
+==============
+*/
+void S_OMAHA_AddLoopSounds(const vec3_t vTempAxis)
+{
+    int                  i;
+    float                fDistance;
+    int                  iChannel;
+    vec3_t               vListenerOrigin;
+    vec3_t               vLoopOrigin;
+    omaha_loop_sound_t *pLoopSound;
+    float                fTotalVolume;
+    float                fMinDistance, fMaxDistance;
+    float                fVolume;
+    float                fMaxVolume, fMaxFactor;
+    omaha_channel      *pChannel;
+    vec3_t               alvec;
+
+    g_sndRenderer->GetListenerPosition(alvec);
+    VectorCopy(alvec, vListenerOrigin);
+
+    for (i = 0; i < omaha.loop_sounds_count; i++) {
+        vec3_t vDir;
+
+        pLoopSound = &omaha.loop_sounds[i];
+        if (!pLoopSound->pSfx || !pLoopSound->bInUse) {
+            continue;
+        }
+        pChannel = S_OMAHA_LoopChannel(pLoopSound);
+        if (pLoopSound->bPlaying && !pChannel) {
+            // the voice was taken over by another sound; start a new one below
+            pLoopSound->bPlaying = false;
+        }
+
+        fMinDistance = pLoopSound->fMinDist;
+        if (fMinDistance < 0) {
+            fMinDistance = 200;
+        }
+
+        fMaxDistance = pLoopSound->fMaxDist;
+        if (fMaxDistance < 0) {
+            fMaxDistance = fMinDistance * 64;
+        }
+
+        fVolume = pLoopSound->fBaseVolume;
+        if (fVolume < 0) {
+            fVolume = 1;
+        }
+        fVolume = fVolume * s_fAmbientVolume;
+
+        fTotalVolume = 0.0;
+        fMaxVolume   = 0.0;
+
+        if (pChannel) {
+            pChannel->fNewPitchMult = pLoopSound->fPitch;
+        }
+
+        VectorSubtract(pLoopSound->vOrigin, vListenerOrigin, vDir);
+        VectorCopy(vDir, pLoopSound->vRelativeOrigin);
+        fDistance = VectorLength(pLoopSound->vRelativeOrigin);
+
+        if (fDistance <= fMinDistance) {
+            fTotalVolume = fVolume;
+        } else if (fDistance >= fMaxDistance) {
+            fTotalVolume = 0;
+        } else {
+            fTotalVolume = fMinDistance * fMinDistance * fVolume / (fDistance * fDistance);
+        }
+        pLoopSound->fVolume = fTotalVolume;
+        fMaxVolume          = fTotalVolume;
+
+        fMaxFactor = sfx_infos[pLoopSound->pSfx->sfx_info_index].max_factor;
+        if (fMaxFactor >= 1 && fMaxVolume * fMaxFactor < fTotalVolume) {
+            fTotalVolume = fMaxVolume * fMaxFactor;
+        }
+
+        if (fTotalVolume <= 0 && !(pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN)) {
+            if (pChannel) {
+                if (s_show_sounds->integer > 0 && pChannel->pSfx) {
+                    Com_DPrintf(
+                        "Omaha: %d (#%i) - stopped loop - %s\n",
+                        cl.serverTime,
+                        pLoopSound->iChannel,
+                        pChannel->pSfx->name
+                    );
+                }
+
+                pChannel->stop();
+            }
+            pLoopSound->bPlaying = false;
+
+            continue;
+        }
+
+        VectorCopy(pLoopSound->vOrigin, vLoopOrigin);
+
+        if (pLoopSound->bPlaying) {
+            S_OMAHA_UpdateLoopSound(
+                pLoopSound,
+                S_OMAHA_GetBaseVolume() * s_fVolumeGain * fTotalVolume,
+                fMinDistance,
+                fMaxDistance,
+                vListenerOrigin,
+                vTempAxis,
+                vLoopOrigin
+            );
+
+            continue;
+        }
+
+        if (s_show_sounds->integer > 0) {
+            Com_DPrintf(
+                "Omaha: %d (#%i) - started loop - %s\n", cl.serverTime, pLoopSound->iChannel, pLoopSound->pSfx->name
+            );
+        }
+
+        if (pLoopSound->pSfx->iFlags & (SFX_FLAG_NO_OFFSET)
+            || pLoopSound->pSfx->iFlags & (SFX_FLAG_STREAMED | SFX_FLAG_MP3)
+            || (pLoopSound->iFlags & LOOPSOUND_FLAG_NO_PAN)) {
+            iChannel = S_OMAHA_Start2DLoopSound(
+                pLoopSound, fVolume, S_OMAHA_GetBaseVolume() * s_fVolumeGain * fTotalVolume, fMinDistance, vLoopOrigin
+            );
+        } else {
+            iChannel = S_OMAHA_Start3DLoopSound(
+                pLoopSound,
+                S_OMAHA_GetBaseVolume() * s_fVolumeGain * fTotalVolume,
+                fMinDistance,
+                fMaxDistance,
+                vLoopOrigin,
+                vListenerOrigin
+            );
+        }
+
+        if (iChannel < 0) {
+            continue;
+        }
+
+        pLoopSound->bPlaying = true;
+        pLoopSound->iChannel = iChannel;
+
+        pChannel = S_OMAHA_GetPosChannel(iChannel);
+        if (pChannel) {
+            pChannel->fNewPitchMult = pLoopSound->fPitch;
+        }
+    }
+}
+
+/*
+==============
+S_OMAHA_Respatialize
+==============
+*/
+void S_OMAHA_Respatialize(int iEntNum, const vec3_t vHeadPos, const vec3_t vAxis[3])
+{
+    int             i;
+    vec3_t          vOrigin;
+    vec3_t          vVelocity;
+    vec3_t          vEntOrigin;
+    vec3_t          vEntVelocity;
+    vec3_t          vDir;
+    vec3_t          vListenerOrigin;
+    int             iPan;
+    vec3_t          vTempAxis;
+    float           fMaxVolume;
+    float           fVolume;
+    float           fDist;
+    omaha_channel *pChannel;
+    vec3_t          vRight;
+    vec3_t          vLeft;
+    vec3_t          alorientation[2];
+
+    if (cls.no_menus) {
+        return;
+    }
+
+    s_iListenerNumber = iEntNum;
+
+    VectorCopy(vHeadPos, vListenerOrigin);
+    VectorCopy(vAxis[0], alorientation[0]);
+    VectorCopy(vAxis[2], alorientation[1]);
+    CrossProduct(alorientation[0], alorientation[1], vRight);
+    VectorScale(vRight, -1.f, vLeft);
+    VectorClear(vVelocity);
+    if (iEntNum >= 0 && iEntNum < MAX_GENTITIES) {
+        VectorCopy(s_entity[iEntNum].velocity, vVelocity);
+        VectorScale(vVelocity, s_fVelocityScale, vVelocity);
+    }
+    g_sndRenderer->SetListener(vListenerOrigin, vVelocity, alorientation[0], vLeft, alorientation[1]);
+
+    VectorCopy(vAxis[1], vTempAxis);
+    VectorCopy(vListenerOrigin, s_vObstructionListener); // Added in Omaha
+
+    fVolume = 1;
+    iPan    = 64;
+
+    {
+    const int posCount = omaha.position_channel_count > 0 ? omaha.position_channel_count
+                                                           : MAX_SOUNDSYSTEM_POSITION_CHANNELS;
+    for (i = 0; i < posCount; i++) {
+        pChannel = S_OMAHA_GetPosChannel(i);
+        if (!pChannel) {
+            continue;
+        }
+        fMaxVolume = S_OMAHA_GetBaseVolume() * pChannel->fVolume;
+
+        if (!pChannel->is_playing()) {
+            continue;
+        }
+
+        if (pChannel->iFlags & CHANNEL_FLAG_PAUSED) {
+            continue;
+        }
+
+        if ((pChannel->iFlags & CHANNEL_FLAG_NO_ENTITY) || pChannel->iEntNum == ENTITYNUM_NONE
+            || pChannel->iEntNum < 0 || pChannel->iEntNum >= MAX_GENTITIES) {
+            VectorCopy(pChannel->vOrigin, vOrigin);
+
+            if (pChannel->iFlags & CHANNEL_FLAG_LOCAL_LISTENER) {
+                VectorCopy(vListenerOrigin, vOrigin);
+                /* Fixed in Omaha: classify by voiceKind — overflow 3D indices are >= 32. */
+                if (pChannel->voiceKind != 0) {
+                    fVolume = fMaxVolume;
+                    iPan    = 64;
+                } else {
+                    pChannel->set_position(vOrigin[0], vOrigin[1], vOrigin[2]);
+                }
+            } else {
+                if (pChannel->voiceKind != 0) {
+                    iPan = S_OMAHA_SpatializeStereoSound(vListenerOrigin, vTempAxis, vOrigin);
+                    VectorSubtract(vListenerOrigin, vOrigin, vDir);
+
+                    fDist = VectorLength(vDir);
+                    if (fDist <= pChannel->fMinDist + 0.001f) {
+                        fVolume = fMaxVolume;
+                    } else if (fDist >= pChannel->fMaxDist - 0.001f) {
+                        fVolume = 0;
+                    } else {
+                        fVolume = (1.0 - (fDist - pChannel->fMinDist) / (pChannel->fMaxDist - pChannel->fMinDist))
+                                * fMaxVolume;
+                    }
+                } else {
+                    pChannel->set_position(vOrigin[0], vOrigin[1], vOrigin[2]);
+                }
+            }
+        } else if (pChannel->iFlags & CHANNEL_FLAG_LOCAL_LISTENER) {
+            VectorCopy(vListenerOrigin, vOrigin);
+            if (pChannel->voiceKind != 0) {
+                fVolume = fMaxVolume;
+                iPan    = 64;
+            } else {
+                pChannel->set_position(vOrigin[0], vOrigin[1], vOrigin[2]);
+            }
+        } else {
+            /* Added in Omaha: a looping one-shot ends once its entity left the snapshot for a while. */
+            if ((pChannel->iFlags & CHANNEL_FLAG_LOOPING) && !(pChannel->iFlags & CHANNEL_FLAG_MISSING_ENT)
+                && pChannel->iEntNum != s_iListenerNumber && !S_OMAHA_IsLocalEntity(pChannel->iEntNum)
+                && cl.serverTime - s_entity[pChannel->iEntNum].time > OM_LOOP_STALE_ENT_MS) {
+                pChannel->end_sample();
+                continue;
+            }
+
+            if (s_entity[pChannel->iEntNum].time < pChannel->iTime) {
+                VectorCopy(pChannel->vOrigin, vOrigin);
+                if (!(pChannel->iFlags & CHANNEL_FLAG_LOOPING) && !(pChannel->iFlags & (CHANNEL_FLAG_MISSING_ENT))) {
+                    pChannel->end_sample();
+                    continue;
+                }
+            } else {
+                pChannel->iFlags &= ~CHANNEL_FLAG_MISSING_ENT;
+
+                VectorCopy(s_entity[pChannel->iEntNum].position, vEntOrigin);
+                VectorCopy(vEntOrigin, vOrigin);
+                VectorCopy(vOrigin, pChannel->vOrigin);
+                pChannel->iTime = s_entity[pChannel->iEntNum].time;
+            }
+
+            if (s_entity[pChannel->iEntNum].use_listener) {
+                VectorCopy(vListenerOrigin, vOrigin);
+            }
+
+            if (pChannel->iEntNum == s_iListenerNumber) {
+                if (vListenerOrigin[0] == vOrigin[0] && vListenerOrigin[2] == vOrigin[2]) {
+                    float fDelta = vListenerOrigin[1] - vOrigin[1];
+
+                    if (fDelta > 89.9f && fDelta < 90.09f) {
+                        VectorCopy(vListenerOrigin, vOrigin);
+                    }
+                }
+            }
+
+            if (pChannel->voiceKind != 0) {
+                iPan = S_OMAHA_SpatializeStereoSound(vListenerOrigin, vTempAxis, vOrigin);
+                VectorSubtract(vListenerOrigin, vOrigin, vDir);
+                fDist = VectorLength(vDir);
+                if (fDist <= pChannel->fMinDist + 0.001f) {
+                    fVolume = fMaxVolume;
+                } else if (fDist >= pChannel->fMaxDist - 0.001f) {
+                    fVolume = 0;
+                } else {
+                    fVolume =
+                        (1.0 - (fDist - pChannel->fMinDist) / (pChannel->fMaxDist - pChannel->fMinDist)) * fMaxVolume;
+                }
+            } else {
+                pChannel->set_position(vOrigin[0], vOrigin[1], vOrigin[2]);
+                VectorCopy(s_entity[pChannel->iEntNum].velocity, vEntVelocity);
+                VectorCopy(vEntVelocity, vVelocity);
+                VectorScale(vVelocity, s_fVelocityScale, vVelocity);
+                pChannel->set_velocity(vVelocity[0], vVelocity[1], vVelocity[2]);
+            }
+        }
+
+        if (pChannel->voiceKind != 0) {
+            pChannel->set_gain(fVolume);
+            /* Fixed in Omaha: do not spatialize LOCAL_LISTENER (set_sample_pan at z=1 colors dry UI clicks). */
+            if (!(pChannel->iFlags & CHANNEL_FLAG_LOCAL_LISTENER)) {
+                pChannel->set_sample_pan(iPan);
+            }
+        }
+
+        /* Added in Omaha: omaha obstruction for world sounds. */
+        S_OMAHA_UpdateObstruction(
+            pChannel,
+            vListenerOrigin,
+            vOrigin,
+            pChannel->voiceKind == 0 && !(pChannel->iFlags & CHANNEL_FLAG_LOCAL_LISTENER),
+            false
+        );
+    }
+    } /* posCount scope — Added in Omaha */
+
+    S_OMAHA_AddLoopSounds(vTempAxis);
+}
+
+/*
+==============
+S_OMAHA_SpatializeStereoSound
+==============
+*/
+static int S_OMAHA_SpatializeStereoSound(const vec3_t listener_origin, const vec3_t listener_left, const vec3_t origin)
+{
+    vec3_t source_vec;
+    float  pan;
+
+    VectorSubtract(origin, listener_origin, source_vec);
+    VectorNormalize(source_vec);
+
+    pan = s_separation->value + (1.f - s_separation->value) * -DotProduct(listener_left, source_vec);
+
+    if (pan < 0) {
+        pan = 0;
+    }
+
+    return ceilf(pan * 127);
+}
+
+/*
+==============
+S_OMAHA_SetReverb
+
+The snapshot still delivers reverb_type and reverb_level. Retail maps leave
+them at generic / 0, and nothing in the mixer consumes them.
+==============
+*/
+void S_OMAHA_SetReverb(int iType, float fLevel)
+{
+    (void)iType;
+    (void)fLevel;
+}
+
+/*
+==============
+S_OMAHA_Update
+==============
+*/
+void S_OMAHA_Update()
+{
+    int             i;
+    omaha_channel *pChannel;
+    bool            bPaused;
+
+    if (g_sndRenderer) {
+        g_sndRenderer->Update();
+    }
+
+    if (cl.snap.ps.stats[STAT_CINEMATIC]) {
+        S_SetGlobalAmbientVolumeLevel(0.5f);
+    } else {
+        S_SetGlobalAmbientVolumeLevel(1.f);
+    }
+
+    // Changed in OPM
+    //  Also pause with a paused demo
+    bPaused = paused->integer || (clc.demoplaying && cl_freezeDemo->integer);
+
+    if (bPaused && !s_bSoundPaused) {
+        S_OMAHA_PauseSound();
+    } else if (!bPaused && s_bSoundPaused) {
+        S_OMAHA_UnpauseSound();
+    }
+
+    if (s_bFading) {
+        s_fFadeVolume = 1.f - (cls.realtime - s_fFadeStartTime) / (s_fFadeStopTime - s_fFadeStartTime);
+        if (s_fFadeVolume < 0) {
+            s_fFadeVolume = 0;
+        }
+        music_volume_changed = true;
+    }
+
+    if (s_volume->modified) {
+        if (s_volume->value > 1) {
+            Cvar_Set("s_volume", "1.0");
+        } else if (s_volume->value < 0) {
+            Cvar_Set("s_volume", "0.0");
+        }
+
+        music_volume_changed = true;
+        s_volume->modified   = 0;
+        S_OMAHA_ApplyListenerGain(qtrue);
+    }
+
+    /* Added in Omaha: fades move the post-limiter master (no-op when unchanged). */
+    S_OMAHA_ApplyListenerGain(qfalse);
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS; i++) {
+        pChannel = omaha.channel[i];
+        if (!pChannel) {
+            continue;
+        }
+
+        if (!pChannel->is_playing()) {
+            continue;
+        }
+
+        if (pChannel->fNewPitchMult <= 0) {
+            continue;
+        }
+
+        pChannel->set_sample_playback_rate(pChannel->iBaseRate * pChannel->fNewPitchMult);
+        pChannel->fNewPitchMult = 0;
+    }
+    for (i = 0; i < omaha.channel_extra_count; i++) {
+        pChannel = omaha.channel_extra[i];
+        if (!pChannel || !pChannel->is_playing() || pChannel->fNewPitchMult <= 0) {
+            continue;
+        }
+        pChannel->set_sample_playback_rate(pChannel->iBaseRate * pChannel->fNewPitchMult);
+        pChannel->fNewPitchMult = 0;
+    }
+
+    if (s_speaker_type->modified) {
+        Cbuf_AddText("snd_restart\n");
+        s_speaker_type->modified = false;
+    }
+
+    if (s_show_num_active_sounds->integer == 1) {
+        int num = 0;
+
+        for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS; i++) {
+            pChannel = omaha.channel[i];
+            if (pChannel && pChannel->is_playing()) {
+                ++num;
+            }
+        }
+        for (i = 0; i < omaha.channel_extra_count; i++) {
+            pChannel = omaha.channel_extra[i];
+            if (pChannel && pChannel->is_playing()) {
+                ++num;
+            }
+        }
+        Com_DPrintf("Omaha: Number of active sounds = %d\n", num);
+    }
+
+    S_OMAHA_Music_Update();
+
+    for (i = 0; i < omaha.loop_sounds_count; i++) {
+        if (!omaha.loop_sounds[i].bInUse) {
+            S_OMAHA_StopLoopingSound(&omaha.loop_sounds[i]);
+        }
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_CHANNELS; i++) {
+        omaha.channel[i]->update();
+    }
+    for (i = 0; i < omaha.channel_extra_count; i++) {
+        if (omaha.channel_extra[i]) {
+            omaha.channel_extra[i]->update();
+        }
+    }
+
+    // the streams released while the worker still read them
+    S_AsyncStream_Update();
+}
+
+/*
+==============
+S_OMAHA_GetMusicFilename
+==============
+*/
+const char *S_OMAHA_GetMusicFilename()
+{
+    // Don't call into the channel if the sound system did not initialise.
+    if (!s_soundReady) {
+        return "";
+    }
+
+    if (!omaha.chan_trig_music.is_playing() && !omaha.chan_trig_music.is_paused()) {
+        return "";
+    }
+
+    return omaha.tm_filename;
+}
+
+/*
+==============
+S_OMAHA_GetMusicLoopCount
+==============
+*/
+int S_OMAHA_GetMusicLoopCount()
+{
+    return omaha.tm_loopcount;
+}
+
+/*
+==============
+S_OMAHA_GetMusicOffset
+==============
+*/
+unsigned int S_OMAHA_GetMusicOffset()
+{
+    return omaha.chan_trig_music.sample_offset();
+}
+
+/*
+==============
+S_OMAHA_IsSoundPlaying
+==============
+*/
+qboolean S_OMAHA_IsSoundPlaying(int channel_number, const char *sfxName)
+{
+    omaha_channel *pChannel;
+    int            i;
+
+    /* Added in Omaha: an overflow voice restored from a save lives in another slot now. */
+    if (channel_number >= MAX_SOUNDSYSTEM_POSITION_CHANNELS) {
+        for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS; i++) {
+            if (s_restoredFrom[i] == channel_number + 1) {
+                channel_number = i;
+                break;
+            }
+        }
+    }
+
+    pChannel = S_OMAHA_GetPosChannel(channel_number);
+    if (!pChannel && channel_number >= 0 && channel_number < MAX_SOUNDSYSTEM_CHANNELS) {
+        pChannel = omaha.channel[channel_number];
+    }
+    if (!pChannel) {
+        return false;
+    }
+
+    if (s_bSoundPaused) {
+        return false;
+    }
+
+    if (!pChannel->is_playing()) {
+        return false;
+    }
+
+    if (!pChannel->pSfx) {
+        return false;
+    }
+
+    if (strcmp(sfxName, pChannel->pSfx->name)) {
+        return false;
+    }
+
+    return true;
+}
+
+/*
+==============
+S_StoreBase
+==============
+*/
+static void S_StoreBase(channelbasesavegame_t *pBase, omaha_channel *pChannel)
+{
+    if (!pChannel) {
+        return;
+    }
+
+    /* Changed in Omaha: loop-owned voices are rebuilt by the loop list, not restored. */
+    if (pChannel->iEntChannel == CHAN_MENU || pChannel->is_free() || !pChannel->pSfx
+        || (pChannel->iFlags & CHANNEL_FLAG_LOOP_OWNED)) {
+        pBase->bPlaying      = false;
+        pBase->iOffset       = 0;
+        pBase->iLoopCount    = 0;
+        pBase->sfx.szName[0] = 0;
+        pBase->sfx.iFlags    = 0;
+        pBase->fNewPitchMult = 1.f;
+        pBase->iBaseRate     = pChannel->iBaseRate;
+        pBase->iStatus       = 0;
+    } else {
+        pBase->bPlaying   = true;
+        pBase->iOffset    = pChannel->sample_offset();
+        pBase->iLoopCount = pChannel->sample_loop_count();
+        memcpy(pBase->sfx.szName, pChannel->pSfx->name, sizeof(pBase->sfx.szName));
+        pBase->sfx.iFlags    = pChannel->pSfx->iFlags;
+        pBase->iBaseRate     = pChannel->iBaseRate;
+        pBase->iStatus       = 0;
+        /* Fixed in Omaha: the multiplier is played rate over base rate (was inverted). */
+        pBase->fNewPitchMult =
+            pBase->iBaseRate > 0 ? (float)pChannel->sample_playback_rate() / (float)pBase->iBaseRate : 1.f;
+    }
+
+    pBase->iStartTime                = pChannel->iStartTime - cl.serverTime;
+    pBase->iEndTime                  = pChannel->iEndTime - cl.serverTime;
+    pBase->iEntChannel               = pChannel->iEntChannel;
+    pBase->iEntNum                   = pChannel->iEntNum;
+    pBase->iFlags                    = pChannel->iFlags;
+    pBase->fMaxDist                  = pChannel->fMaxDist;
+    pBase->fMinDist                  = pChannel->fMinDist;
+    pBase->iNextCheckObstructionTime = 0;
+    VectorCopy(pChannel->vOrigin, pBase->vOrigin);
+    pBase->iTime   = pChannel->iTime - cl.serverTime;
+    pBase->fVolume = pChannel->fVolume;
+}
+
+/*
+==============
+S_StartSoundFromBase
+==============
+*/
+static void
+S_StartSoundFromBase(channelbasesavegame_t *pBase, omaha_channel *pChannel, sfx_t *pSfx, bool bStartUnpaused)
+{
+    if (!pChannel->set_sfx(pSfx)) {
+        Com_DPrintf("Omaha: Set sample error - %s\n", pSfx->name);
+        pChannel->iFlags &= ~CHANNEL_FLAG_PLAY_DEFERRED;
+        return;
+    }
+
+    pChannel->iBaseRate = pChannel->sample_playback_rate();
+
+    /* Fixed in Omaha: rebuild the voice mode the sound was started with. */
+    pChannel->iCategory = (int)S_OMAHA_ResolveCategory(pSfx, pChannel->iEntChannel);
+    if (pChannel->voiceKind == 0) {
+        pChannel->set_3d();
+        pChannel->set_position(pChannel->vOrigin[0], pChannel->vOrigin[1], pChannel->vOrigin[2]);
+    } else {
+        pChannel->set_no_3d();
+        if (pChannel->iFlags & CHANNEL_FLAG_LOCAL_LISTENER) {
+            pChannel->set_no_virtualization();
+        } else {
+            pChannel->set_virtualization();
+        }
+    }
+
+    if (sfx_infos[pSfx->sfx_info_index].loop_start != -1) {
+        pChannel->set_sample_loop_block(
+            S_OMAHA_SfxLoopPoint(pSfx, sfx_infos[pSfx->sfx_info_index].loop_start),
+            S_OMAHA_SfxLoopPoint(pSfx, sfx_infos[pSfx->sfx_info_index].loop_end)
+        );
+        /* Fixed in Omaha: 0 loops forever, as the live start does. */
+        pChannel->set_sample_loop_count(0);
+        pChannel->iFlags |= CHANNEL_FLAG_LOOPING;
+        if (s_show_sounds->integer > 0) {
+            Com_DPrintf(
+                "Omaha: loopblock - %d to %d\n",
+                sfx_infos[pSfx->sfx_info_index].loop_start,
+                sfx_infos[pSfx->sfx_info_index].loop_end
+            );
+        }
+    } else {
+        pChannel->set_sample_loop_count(1);
+    }
+
+    pChannel->set_gain(pChannel->fVolume);
+    pChannel->set_sample_offset(pBase->iOffset);
+    pChannel->set_sample_playback_rate(pChannel->iBaseRate * pBase->fNewPitchMult);
+
+    if (bStartUnpaused) {
+        pChannel->resume_sample();
+    } else {
+        pChannel->iFlags |= CHANNEL_FLAG_PLAY_DEFERRED;
+    }
+
+    if (!(pChannel->iFlags & CHANNEL_FLAG_NO_ENTITY) && pChannel->iEntNum != ENTITYNUM_NONE
+        && pChannel->iEntNum >= 0 && pChannel->iEntNum < MAX_GENTITIES) {
+        s_entity[pChannel->iEntNum].time = pChannel->iTime;
+        VectorCopy(pChannel->vOrigin, s_entity[pChannel->iEntNum].position);
+    }
+}
+
+/*
+==============
+S_LoadBase
+==============
+*/
+static void S_LoadBase(channelbasesavegame_t *pBase, omaha_channel *pChannel, bool bStartUnpaused)
+{
+    sfxHandle_t handle;
+
+    if (!pChannel) {
+        return;
+    }
+
+    if (!pBase->bPlaying) {
+        return;
+    }
+
+    if (strstr(pBase->sfx.szName, "null.wav")) {
+        return;
+    }
+
+    handle = S_RegisterSound(pBase->sfx.szName, (pBase->sfx.iFlags & SFX_FLAG_STREAMED), false);
+    if (!handle) {
+        return;
+    }
+
+    pChannel->force_free();
+    pChannel->iBaseRate     = pBase->iBaseRate;
+    pChannel->iStartTime    = pBase->iStartTime;
+    pChannel->iEndTime      = pBase->iEndTime;
+    pChannel->iEntChannel   = pBase->iEntChannel;
+    pChannel->iEntNum       = pBase->iEntNum;
+    pChannel->iFlags        = pBase->iFlags;
+    pChannel->fMaxDist      = pBase->fMaxDist;
+    pChannel->fMinDist      = pBase->fMinDist;
+    pChannel->fNewPitchMult = pBase->fNewPitchMult;
+    VectorCopy(pBase->vOrigin, pChannel->vOrigin);
+    pChannel->iTime   = pBase->iTime;
+    pChannel->fVolume = pBase->fVolume;
+    pChannel->pSfx    = &s_knownSfx[handle];
+
+    /* Added in Omaha: older saves stored entity-less voices as entity 0. */
+    if (pChannel->iFlags & CHANNEL_FLAG_NO_ENTITY) {
+        pChannel->iEntNum = ENTITYNUM_NONE;
+    }
+
+    S_StartSoundFromBase(pBase, pChannel, &s_knownSfx[handle], bStartUnpaused);
+}
+
+/*
+==============
+S_OMAHA_SaveData
+==============
+*/
+void S_OMAHA_SaveData(soundsystemsavegame_t *pSave)
+{
+    int  i;
+    bool bSoundWasUnpaused;
+
+    bSoundWasUnpaused = !s_bSoundPaused;
+    if (!s_bSoundPaused) {
+        S_OMAHA_PauseSound();
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS; i++) {
+        S_StoreBase(&pSave->Channels[i], omaha.channel[i]);
+    }
+
+    /* Added in Omaha: overflow voices fill free slots of their own kind; extras are dropped. */
+    for (i = 0; i < omaha.channel_extra_count; i++) {
+        omaha_channel *pChannel = omaha.channel_extra[i];
+        int             first, last, j;
+
+        if (!pChannel || !pChannel->pSfx || pChannel->iEntChannel == CHAN_MENU || pChannel->is_free()
+            || (pChannel->iFlags & CHANNEL_FLAG_LOOP_OWNED)) {
+            continue;
+        }
+
+        if (pChannel->voiceKind == 2) {
+            first = MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D;
+            last  = MAX_SOUNDSYSTEM_POSITION_CHANNELS;
+        } else if (pChannel->voiceKind == 1) {
+            first = MAX_SOUNDSYSTEM_CHANNELS_3D;
+            last  = MAX_SOUNDSYSTEM_CHANNELS_3D + MAX_SOUNDSYSTEM_CHANNELS_2D;
+        } else {
+            first = 0;
+            last  = MAX_SOUNDSYSTEM_CHANNELS_3D;
+        }
+
+        for (j = first; j < last; j++) {
+            if (!pSave->Channels[j].bPlaying) {
+                S_StoreBase(&pSave->Channels[j], pChannel);
+                /* iStatus is otherwise unused: it carries the index scripts know this voice by. */
+                pSave->Channels[j].iStatus = MAX_SOUNDSYSTEM_POSITION_CHANNELS + i + 1;
+                break;
+            }
+        }
+    }
+
+    if (bSoundWasUnpaused) {
+        S_OMAHA_UnpauseSound();
+    }
+}
+
+/*
+==============
+S_OMAHA_ReLoad
+==============
+*/
+void S_OMAHA_ReLoad(soundsystemsavegame_t *pSave)
+{
+    int  i;
+    bool bSoundWasUnpaused;
+
+    bSoundWasUnpaused = !s_bSoundPaused;
+    if (!s_bSoundPaused) {
+        S_OMAHA_PauseSound();
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS; i++) {
+        S_LoadBase(&pSave->Channels[i], omaha.channel[i], bSoundWasUnpaused);
+        s_restoredFrom[i] = pSave->Channels[i].bPlaying ? pSave->Channels[i].iStatus : 0;
+    }
+
+    if (bSoundWasUnpaused) {
+        S_OMAHA_UnpauseSound();
+    }
+}
+
+/*
+==============
+S_InitBase
+==============
+*/
+static void S_InitBase(channelbasesavegame_t *pBase)
+{
+    if (!pBase->bPlaying) {
+        return;
+    }
+
+    if (strstr(pBase->sfx.szName, "null.wav")) {
+        return;
+    }
+
+    SV_AddSvsTimeFixup(&pBase->iStartTime);
+    SV_AddSvsTimeFixup(&pBase->iEndTime);
+    SV_AddSvsTimeFixup(&pBase->iTime);
+}
+
+/*
+==============
+S_OMAHA_LoadData
+==============
+*/
+void S_OMAHA_LoadData(soundsystemsavegame_t *pSave)
+{
+    int i;
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_POSITION_CHANNELS; i++) {
+        S_InitBase(&pSave->Channels[i]);
+    }
+}
+
+/*
+==============
+omaha_channel::flush_params
+==============
+*/
+void omaha_channel::flush_params()
+{
+    if (!g_sndRenderer || voiceId == OM_VOICE_NONE) {
+        return;
+    }
+    if (sentOk && !memcmp(&sent, &cur, sizeof(cur))) {
+        return;
+    }
+    g_sndRenderer->UpdateVoice(voiceId, &cur);
+    sent   = cur;
+    sentOk = qtrue;
+}
+
+/*
+==============
+omaha_channel::set_velocity
+Changed in Omaha: stored on the voice. The mixer applies it as Doppler for mono 3D.
+==============
+*/
+void omaha_channel::set_velocity(float v0, float v1, float v2)
+{
+    cur.vel[0] = v0;
+    cur.vel[1] = v1;
+    cur.vel[2] = v2;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::set_position
+==============
+*/
+void omaha_channel::set_position(float v0, float v1, float v2)
+{
+    cur.pos[0] = v0;
+    cur.pos[1] = v1;
+    cur.pos[2] = v2;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::set_gain
+==============
+*/
+void omaha_channel::set_gain(float gain)
+{
+    cur.gain = gain;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::set_no_3d
+==============
+*/
+void omaha_channel::set_no_3d()
+{
+    cur.flags |= OM_FLAG_2D;
+    cur.flags &= ~(OM_FLAG_PAN | OM_FLAG_LOOP);
+    cur.vel[0] = 0.f;
+    cur.vel[1] = 0.f;
+    cur.vel[2] = 0.f;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::set_3d
+==============
+*/
+void omaha_channel::set_3d()
+{
+    /* Changed in Omaha: distances and 3D flags only. Gain stays with the caller. */
+    cur.flags &= ~(OM_FLAG_2D | OM_FLAG_PAN | OM_FLAG_FLAT | OM_FLAG_LOOP);
+    cur.minDist = fMinDist > 0.f ? fMinDist : 200.f;
+    cur.maxDist = fMaxDist > 0.f ? fMaxDist : 12800.f;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::play
+==============
+*/
+void omaha_channel::play()
+{
+    int state;
+
+    if (!g_sndRenderer) {
+        return;
+    }
+    /* Streams have no resident sound. Resume the open stream voice. */
+    if (bufferId == OM_SOUND_NONE) {
+        if (voiceId == OM_VOICE_NONE) {
+            return;
+        }
+        flush_params();
+        if (g_sndRenderer->VoiceState(voiceId) != OM_VOICE_PLAYING) {
+            g_sndRenderer->ResumeVoice(voiceId);
+        }
+        return;
+    }
+    state = voiceId == OM_VOICE_NONE ? OM_VOICE_STOPPED : g_sndRenderer->VoiceState(voiceId);
+    if (voiceId != OM_VOICE_NONE && state == OM_VOICE_PAUSED) {
+        flush_params();
+        g_sndRenderer->ResumeVoice(voiceId);
+        return;
+    }
+    if (voiceId != OM_VOICE_NONE && state == OM_VOICE_PLAYING) {
+        flush_params();
+        return;
+    }
+    if (voiceId != OM_VOICE_NONE) {
+        g_sndRenderer->DestroyVoice(voiceId);
+        voiceId = OM_VOICE_NONE;
+    }
+    voiceId     = g_sndRenderer->PlayVoice(bufferId, &cur, startOffset);
+    startOffset = 0;
+    sent        = cur;
+    sentOk      = voiceId != OM_VOICE_NONE ? qtrue : qfalse;
+}
+
+/*
+==============
+omaha_channel::set_no_virtualization
+==============
+*/
+void omaha_channel::set_no_virtualization()
+{
+    cur.flags |= OM_FLAG_FLAT;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::set_virtualization
+==============
+*/
+void omaha_channel::set_virtualization()
+{
+    cur.flags &= ~OM_FLAG_FLAT;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::pause
+==============
+*/
+void omaha_channel::pause()
+{
+    if (!g_sndRenderer || voiceId == OM_VOICE_NONE) {
+        return;
+    }
+    g_sndRenderer->PauseVoice(voiceId);
+}
+
+/*
+==============
+omaha_channel::stop
+==============
+*/
+void omaha_channel::stop()
+{
+    if (g_sndRenderer && voiceId != OM_VOICE_NONE) {
+        g_sndRenderer->StopVoice(voiceId);
+    }
+    voiceId = OM_VOICE_NONE;
+    sentOk  = qfalse;
+}
+
+/*
+==============
+omaha_channel::is_free
+==============
+*/
+bool omaha_channel::is_free()
+{
+    U32 state = sample_status();
+
+    return state == OM_VOICE_STOPPED || state == OM_VOICE_INITIAL;
+}
+
+/*
+==============
+omaha_channel::is_paused
+==============
+*/
+bool omaha_channel::is_paused()
+{
+    return sample_status() == OM_VOICE_PAUSED;
+}
+
+/*
+==============
+omaha_channel::is_playing
+==============
+*/
+bool omaha_channel::is_playing()
+{
+    return sample_status() == OM_VOICE_PLAYING;
+}
+
+/*
+==============
+omaha_channel::force_free
+==============
+*/
+void omaha_channel::force_free()
+{
+    stop();
+    iFlags = 0;
+
+    // Added in Omaha: nothing of the previous sound may follow a reused voice
+    iCategory      = (int)SND_CAT_NONE;
+    loopBlockStart = 0;
+    loopBlockEnd   = -1;
+    cur.flags &= ~(OM_FLAG_FLAT | OM_FLAG_LOOP);
+    cur.loopStart = 0;
+    cur.loopEnd   = -1;
+}
+
+/*
+==============
+S_OMAHA_LoadSfxSound
+
+The sound's renderer sound, with its samples decoded to the mixer's format:
+made on its first play (omaha_channel::set_sfx), or when the registration
+ends (S_OMAHA_PreloadSfx, s_loadBuffers). pSfx->buffer holds the renderer
+sound index + 1; 0 = not uploaded yet.
+==============
+*/
+static bool S_OMAHA_LoadSfxSound(sfx_t *pSfx)
+{
+    omSoundId_t bid;
+
+    bid = g_sndRenderer->CreateSound();
+    if (bid == OM_SOUND_NONE) {
+        return false;
+    }
+
+    if (pSfx->iFlags & SFX_FLAG_MP3) {
+        snd_info_t info;
+        void      *data = S_CodecLoad(pSfx->name, &info);
+        qboolean   ok;
+
+        if (!data) {
+            g_sndRenderer->DestroySound(bid);
+            Com_DPrintf("Sound: Failed to load MP3.\n");
+            return false;
+        }
+        if (info.size == 0) {
+            byte dummyData[2] = {0};
+            ok = g_sndRenderer->UploadSound(bid, OM_FMT_MONO16, dummyData, 2, 22050, 0, 0);
+        } else {
+            ok = g_sndRenderer->UploadSound(
+                bid,
+                S_SndFmtFromWidthChannels(info.width, info.channels),
+                data,
+                info.size,
+                info.rate,
+                info.dataalign,
+                0
+            );
+        }
+        Hunk_FreeTempMemory(data);
+        if (!ok) {
+            g_sndRenderer->DestroySound(bid);
+            Com_DPrintf("Sound: Failed to load MP3.\n");
+            return false;
+        }
+    } else if (!g_sndRenderer->UploadSound(
+                   bid,
+                   S_SndFmtFromWidthChannels(pSfx->info.width, pSfx->info.channels),
+                   &pSfx->data[pSfx->info.dataofs],
+                   pSfx->info.datasize - pSfx->info.dataofs,
+                   pSfx->info.rate,
+                   pSfx->info.dataalign,
+                   pSfx->info.width == 0.5f ? pSfx->info.samples : 0
+               )) {
+        g_sndRenderer->DestroySound(bid);
+        Com_Printf(
+            "Sound: Bad Wave file (%d channels, %d bits) [%s].\n",
+            pSfx->info.channels,
+            (int)(pSfx->info.width * 8),
+            pSfx->name
+        );
+        return false;
+    }
+    pSfx->buffer = (unsigned int)(bid + 1);
+    return true;
+}
+
+/*
+==============
+S_OMAHA_PreloadSfx
+
+The renderer sound of a sound the registration loaded, before its first
+play: the samples' decode and copy (0.2 to 0.6 ms for a weapon's or an
+explosion's sound) is no longer made in the frame of the match that first
+plays it. Not for the streamed sounds and the mp3 files, which are decoded
+on their first play
+==============
+*/
+static int s_preloadSequence;
+
+static void S_OMAHA_PreloadSfx(sfx_t *pSfx)
+{
+    if (!s_soundReady || !g_sndRenderer) {
+        return;
+    }
+
+    if (pSfx->registration_sequence > s_preloadSequence) {
+        // a new registration: the aliases are read again, every sound classified again
+        s_preloadSequence = pSfx->registration_sequence;
+        s_aliasFilesCount = -1;
+        memset(s_sfxCategory, 0, sizeof(s_sfxCategory));
+    }
+
+    // classified now (one walk of the aliases for all), not on its first play
+    S_OMAHA_ResolveCategory(pSfx, CHAN_AUTO);
+
+    // pain/death VO loaded for 3D now, not on its first play
+    if ((pSfx->iFlags & SFX_FLAG_STREAMED) && !(pSfx->iFlags & SFX_FLAG_DEFAULT_SOUND)) {
+        S_OMAHA_TryPromoteCombatVo(pSfx);
+    }
+
+    if (!pSfx->data || !pSfx->length || pSfx->buffer) {
+        return;
+    }
+
+    if (pSfx->iFlags & (SFX_FLAG_STREAMED | SFX_FLAG_MP3 | SFX_FLAG_DEFAULT_SOUND)) {
+        return;
+    }
+
+    S_OMAHA_LoadSfxSound(pSfx);
+}
+
+/*
+==============
+omaha_channel::set_sfx
+==============
+*/
+bool omaha_channel::set_sfx(sfx_t *pSfx)
+{
+    omSoundId_t bid;
+
+    assert(pSfx->length);
+
+    this->pSfx = pSfx;
+
+    if (!g_sndRenderer) {
+        return false;
+    }
+
+    if (!pSfx->buffer && !S_OMAHA_LoadSfxSound(pSfx)) {
+        return false;
+    }
+    bid = (omSoundId_t)(pSfx->buffer - 1);
+
+    bufferId    = bid;
+    cur.pitch   = 1.f;
+    sentOk      = qfalse;
+    startOffset = 0;
+    iBaseRate   = g_sndRenderer->SoundRate(bid);
+    return true;
+}
+
+/*
+==============
+omaha_channel::start_sample
+==============
+*/
+void omaha_channel::start_sample()
+{
+    play();
+}
+
+/*
+==============
+omaha_channel::stop_sample
+==============
+*/
+void omaha_channel::stop_sample()
+{
+    pause();
+}
+
+/*
+==============
+omaha_channel::resume_sample
+==============
+*/
+void omaha_channel::resume_sample()
+{
+    play();
+}
+
+/*
+==============
+omaha_channel::end_sample
+==============
+*/
+void omaha_channel::end_sample()
+{
+    stop();
+}
+
+/*
+==============
+omaha_channel::set_sample_pan
+==============
+*/
+void omaha_channel::set_sample_pan(S32 pan)
+{
+    cur.flags |= OM_FLAG_2D | OM_FLAG_PAN;
+    cur.pan = (pan - 64) / 127.f;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::set_sample_playback_rate
+==============
+*/
+void omaha_channel::set_sample_playback_rate(S32 rate)
+{
+    cur.pitch = rate / (float)(iBaseRate > 0 ? iBaseRate : (rate > 0 ? rate : 1));
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::sample_playback_rate
+==============
+*/
+S32 omaha_channel::sample_playback_rate()
+{
+    float pitch = cur.pitch > 0.f ? cur.pitch : 1.f;
+    return (S32)(buffer_frequency() * pitch);
+}
+
+/*
+==============
+omaha_channel::buffer_frequency
+==============
+*/
+U32 omaha_channel::buffer_frequency() const
+{
+    if (!g_sndRenderer) {
+        return 22050;
+    }
+    if (bufferId != OM_SOUND_NONE) {
+        return (U32)g_sndRenderer->SoundRate(bufferId);
+    }
+    if (pSfx && pSfx->buffer) {
+        return (U32)g_sndRenderer->SoundRate((omSoundId_t)(pSfx->buffer - 1));
+    }
+    return 22050;
+}
+
+/*
+==============
+omaha_channel::sample_volume
+==============
+*/
+S32 omaha_channel::sample_volume()
+{
+    float base = S_OMAHA_GetBaseVolume();
+    if (base <= 0.f) {
+        return 0;
+    }
+    return (S32)((cur.gain / base) * 100);
+}
+
+/*
+==============
+omaha_channel::sample_offset
+==============
+*/
+U32 omaha_channel::sample_offset()
+{
+    if (!g_sndRenderer || voiceId == OM_VOICE_NONE) {
+        return 0;
+    }
+    return g_sndRenderer->VoiceOffset(voiceId);
+}
+
+/*
+==============
+omaha_channel::sample_ms_offset
+==============
+*/
+U32 omaha_channel::sample_ms_offset()
+{
+    U32 rate;
+
+    if (!is_playing()) {
+        return 0;
+    }
+
+    rate = sample_playback_rate();
+    if (!rate) {
+        return 0;
+    }
+    return (U32)(sample_offset() * 1000ull / rate);
+}
+
+/*
+==============
+omaha_channel::sample_loop_count
+==============
+*/
+U32 omaha_channel::sample_loop_count()
+{
+    S32 left;
+
+    if (!g_sndRenderer || voiceId == OM_VOICE_NONE) {
+        return 0;
+    }
+
+    left = g_sndRenderer->StreamQueued(voiceId) - g_sndRenderer->StreamProcessed(voiceId) - 1;
+    return left < 0 ? 0 : left;
+}
+
+/*
+==============
+omaha_channel::set_sample_offset
+==============
+*/
+void omaha_channel::set_sample_offset(U32 offset)
+{
+    U32 state = sample_status();
+
+    if (!g_sndRenderer) {
+        return;
+    }
+    if (state != OM_VOICE_PLAYING && state != OM_VOICE_PAUSED) {
+        startOffset = offset;
+        return;
+    }
+    g_sndRenderer->SetVoiceOffset(voiceId, offset);
+}
+
+/*
+==============
+omaha_channel::set_sample_ms_offset
+==============
+*/
+void omaha_channel::set_sample_ms_offset(U32 offset)
+{
+    /* Fixed in Omaha: 64-bit product; ms * rate passes 2^32 after about 97 s at 44.1 kHz. */
+    set_sample_offset((U32)((unsigned long long)offset * sample_playback_rate() / 1000ull));
+}
+
+/*
+==============
+omaha_channel::set_sample_loop_count
+==============
+*/
+void omaha_channel::set_sample_loop_count(S32 count)
+{
+    if (count == 0) {
+        cur.flags |= OM_FLAG_LOOP;
+    } else {
+        cur.flags &= ~OM_FLAG_LOOP;
+    }
+    cur.loopStart = loopBlockStart;
+    cur.loopEnd   = loopBlockEnd;
+    /* Fixed in Omaha: stopping here silenced a same-sample update, which does not call play(). */
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::set_sample_loop_block
+==============
+*/
+void omaha_channel::set_sample_loop_block(S32 start_offset, S32 end_offset)
+{
+    loopBlockStart = start_offset;
+    loopBlockEnd   = end_offset;
+    cur.loopStart  = start_offset;
+    cur.loopEnd    = end_offset;
+    flush_params();
+}
+
+/*
+==============
+omaha_channel::sample_status
+==============
+*/
+U32 omaha_channel::sample_status()
+{
+    if (!g_sndRenderer || voiceId == OM_VOICE_NONE) {
+        return OM_VOICE_INITIAL;
+    }
+    return (U32)g_sndRenderer->VoiceState(voiceId);
+}
+
+/*
+==============
+MUSIC_SoundtrackText
+
+The text of a soundtrack file, NULL when there is none. A round restart sets
+the soundtrack again (CS_MUSIC "none", then the same file) and its frame read
+the file from the pk3 (40 to 70 us): with s_soundtrackCache 1 the last file's
+text is kept until the next map load (MUSIC_FlushCaches). *data is what to
+free with FS_FreeFile.
+==============
+*/
+static const char *MUSIC_SoundtrackText(const char *path, byte **data)
+{
+    size_t length;
+
+    *data = NULL;
+    if (s_soundtrackCache->integer && music_text && !Q_stricmp(music_textName, path)) {
+        return music_text;
+    }
+
+    FS_ReadFile(path, (void **)data);
+    if (!*data) {
+        return NULL;
+    }
+
+    if (s_soundtrackCache->integer) {
+        length = strlen((char *)*data) + 1;
+        if (music_text) {
+            Z_Free(music_text);
+        }
+        music_text = (char *)Z_Malloc(length);
+        memcpy(music_text, *data, length);
+        Q_strncpyz(music_textName, path, sizeof(music_textName));
+    }
+
+    return (const char *)*data;
+}
+
+/*
+==============
+MUSIC_FlushCaches
+
+A map loads: the soundtrack is read again (S_BeginRegistration).
+==============
+*/
+void MUSIC_FlushCaches()
+{
+    if (music_text) {
+        Z_Free(music_text);
+        music_text = NULL;
+    }
+    music_textName[0] = 0;
+
+    S_StreamMemory_Flush();
+}
+
+/*
+==============
+S_OMAHA_MUSIC_LoadSoundtrackFile
+==============
+*/
+qboolean S_OMAHA_MUSIC_LoadSoundtrackFile(const char *filename)
+{
+    song_t *psong = NULL;
+    char    args[MAX_MUSIC_SONGS][MAX_RES_NAME];
+    int     numargs;
+    char    com_token[MAX_STRING_CHARS];
+    char    alias[128];
+    char    file[128];
+    char    load_path[128];
+    char   *buffer;
+    char    path[MAX_RES_NAME];
+    int     i;
+    byte   *data;
+
+    if (strrchr(filename, '.')) {
+        Com_sprintf(path, sizeof(path), "%s", filename);
+    } else {
+        Com_sprintf(path, sizeof(path), "%s.mus", filename);
+    }
+
+    music_numsongs = 0;
+
+    // COM_GetToken only reads the text
+    buffer = (char *)MUSIC_SoundtrackText(path, &data);
+    if (!buffer) {
+        Com_DPrintf("Omaha: Couldn't load %s\n", path);
+        return false;
+    }
+    Com_DPrintf("SOUNDTRACK: Loading %s\n", path);
+
+    S_OMAHA_MUSIC_StopAllSongs();
+
+    load_path[0] = 0;
+
+    while (1) {
+        Q_strncpyz(com_token, COM_GetToken(&buffer, true), sizeof(com_token));
+        if (!com_token[0]) {
+            break;
+        }
+
+        if (strlen(com_token) >= MAX_RES_NAME) {
+            Com_Printf("S_OMAHA_MUSIC_LoadSoundtrackFile: argument too long, truncating in %s\n", path);
+            com_token[MAX_RES_NAME - 1] = 0;
+        }
+
+        numargs = 1;
+        Q_strncpyz(args[0], com_token, sizeof(args[0]));
+
+        while (1) {
+            Q_strncpyz(com_token, COM_GetToken(&buffer, false), sizeof(com_token));
+            if (!com_token[0]) {
+                break;
+            }
+
+            if (numargs >= MAX_MUSIC_SONGS) {
+                // the rest of the line has no meaning to any command
+                continue;
+            }
+
+            if (strlen(com_token) >= MAX_RES_NAME) {
+                Com_Printf("S_OMAHA_MUSIC_LoadSoundtrackFile: argument too long, truncating in %s\n", path);
+                com_token[MAX_RES_NAME - 1] = 0;
+            }
+
+            Q_strncpyz(args[numargs], com_token, sizeof(args[numargs]));
+            numargs++;
+        }
+
+        if (!Q_stricmp(args[0], "path")) {
+            if (numargs < 2 || !args[1][0]) {
+                Com_Printf("S_OMAHA_MUSIC_LoadSoundtrackFile: path without a directory in %s\n", path);
+                continue;
+            }
+            Q_strncpyz(load_path, args[1], sizeof(load_path));
+            if (load_path[strlen(load_path) - 1] != '/' && load_path[strlen(load_path) - 1] != '\\') {
+                Q_strcat(load_path, sizeof(load_path), "/");
+            }
+        } else if (args[0][0] == '!') {
+            if (numargs < 2) {
+                Com_Printf("S_OMAHA_MUSIC_LoadSoundtrackFile: missing command for song %s in %s.\n", &args[0][1], path);
+                continue;
+            }
+            for (i = 0; i < music_numsongs; i++) {
+                psong = &music_songs[i];
+                if (!Q_stricmp(psong->alias, &args[0][1])) {
+                    break;
+                }
+            }
+
+            if (i == music_numsongs) {
+                Com_Printf("S_OMAHA_MUSIC_LoadSoundtrackFile: song %s not found, command skipped in %s.\n", &args[0][1], path);
+                continue;
+            }
+
+            if (!Q_stricmp(args[1], "volume") && numargs >= 3) {
+                psong->volume = atof(args[2]);
+            } else if (!Q_stricmp(args[1], "fadetime") && numargs >= 3) {
+                psong->fadetime = atof(args[2]);
+            } else if (!Q_stricmp(args[1], "loop")) {
+                psong->flags |= 1;
+            } else if (!Q_stricmp(args[1], "restart")) {
+                psong->flags |= 2;
+            } else if (!Q_stricmp(args[1], "interrupt")) {
+                psong->fadetime = 0;
+                psong->flags |= 4 | 2;
+            } else {
+                Com_Printf(
+                    "S_OMAHA_MUSIC_LoadSoundtrackFile: unknown command %s for song %s in %s.\n", args[1], &args[0][1], path
+                );
+            }
+        } else {
+            if (numargs > 1) {
+                Q_strncpyz(alias, args[0], sizeof(alias));
+                Q_strncpyz(file, load_path, sizeof(file));
+                Q_strcat(file, sizeof(file), args[1]);
+            } else {
+                size_t len;
+
+                Q_strncpyz(file, load_path, sizeof(file));
+                Q_strcat(file, sizeof(file), args[0]);
+
+                // the alias is the file name without its extension
+                len = strlen(args[0]);
+                if (len > 4) {
+                    Q_strncpyz(alias, args[0], Q_min(len - 3, sizeof(alias)));
+                } else {
+                    alias[0] = 0;
+                }
+            }
+
+            if (music_numsongs >= MAX_MUSIC_SONGS) {
+                Com_Printf("S_OMAHA_MUSIC_LoadSoundtrackFile: Too many songs in %s, skipping %s.\n", path, alias);
+                continue;
+            }
+
+            psong = &music_songs[music_numsongs];
+            Q_strncpyz(psong->alias, alias, sizeof(psong->alias));
+            Q_strncpyz(psong->path, file, sizeof(psong->path));
+            music_songs[music_numsongs].fadetime    = 1.0;
+            music_songs[music_numsongs].volume      = 1.0;
+            music_songs[music_numsongs].flags       = 0;
+            music_songs[music_numsongs].current_pos = 0;
+            music_songs[music_numsongs].mood_num    = MusicMood_NameToNum(alias);
+            music_numsongs++;
+
+            // read into memory and scanned (s_soundtrackCache); with
+            // s_ambientvolume 0 no song is opened (S_OMAHA_MUSIC_AmbientOff)
+            if (s_ambientVolume->value > 0) {
+                S_StreamMemory_Prefetch(psong->path);
+            }
+        }
+    }
+
+    if (data) {
+        FS_FreeFile(data);
+    }
+
+    if (!music_numsongs) {
+        Com_Printf("S_OMAHA_MUSIC_LoadSoundtrackFile: could not load %s, no songs defined.\n", path);
+        return false;
+    }
+
+    music_currentsong = -1;
+
+    if (music_current_mood == mood_none) {
+        S_OMAHA_MUSIC_UpdateMood(mood_normal, mood_normal);
+    }
+
+    return true;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_SongValid
+==============
+*/
+qboolean S_OMAHA_MUSIC_SongValid(const char *mood)
+{
+    return S_OMAHA_MUSIC_FindSong(mood) != -1;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_Loaded
+==============
+*/
+qboolean S_OMAHA_MUSIC_Loaded()
+{
+    return music_loaded;
+}
+
+static float S_OMAHA_UpdateMusicDuck(void);
+static void  S_OMAHA_TriggeredMusic_UpdateGain(void);
+static void  S_OMAHA_MUSIC_UpdateSongs(void);
+
+/*
+==============
+S_OMAHA_MUSIC_AmbientOff
+
+Added in MoHAA Reloaded (the user's, as on the metal branch): s_ambientvolume 0
+plays no song of the soundtrack (the mood music and the amb_stereo ambiences):
+none is opened, decoded or mixed. The songs playing, fading or paused stop and
+free their streams, and the files read into memory at the load
+(s_soundtrackCache) are dropped. Raised again, the mood's song starts
+(music_currentsong -1: not playing) where it stopped; the triggered music
+(s_musicvolume) isn't the soundtrack and plays on.
+==============
+*/
+static qboolean S_OMAHA_MUSIC_AmbientOff(void)
+{
+    int i;
+
+    if (s_ambientVolume->value > 0) {
+        music_ambientOff = qfalse;
+        return qfalse;
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        if (omaha.chan_song[i].is_playing() || omaha.chan_song[i].is_paused()) {
+            S_OMAHA_MUSIC_StopChannel(i);
+        }
+    }
+    music_currentsong = -1;
+
+    if (!music_ambientOff) {
+        S_StreamMemory_Flush();
+        music_ambientOff = qtrue;
+    }
+
+    return qtrue;
+}
+
+/*
+==============
+S_OMAHA_Music_Update
+==============
+*/
+void S_OMAHA_Music_Update()
+{
+    float duck;
+
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    /* Changed in Omaha: duck and triggered music run even when no soundtrack is active. */
+    duck             = S_OMAHA_UpdateMusicDuck();
+    s_musicDuckMoved = fabsf(duck - s_musicDuckSent) > 0.0005f ? qtrue : qfalse;
+    s_musicDuckSent  = duck;
+
+    S_OMAHA_MUSIC_UpdateSongs();
+    S_OMAHA_TriggeredMusic_UpdateGain();
+    music_volume_changed = false;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_UpdateSongs
+==============
+*/
+static void S_OMAHA_MUSIC_UpdateSongs(void)
+{
+    int currentsong;
+
+    if (!music_active) {
+        return;
+    }
+
+    if (s_bSoundPaused) {
+        return;
+    }
+
+    S_OMAHA_MUSIC_CheckForStoppedSongs();
+
+    if (!S_OMAHA_MUSIC_Loaded() && music_active && strlen(current_soundtrack)) {
+        S_OMAHA_MUSIC_LoadSoundtrackFile(current_soundtrack);
+        music_loaded = true;
+    }
+
+    if (S_OMAHA_MUSIC_AmbientOff()) {
+        return;
+    }
+
+    if (music_currentsong >= 0) {
+        currentsong = music_songs[music_currentsong].mood_num;
+    } else {
+        currentsong = -1;
+    }
+
+    if (music_current_mood == mood_none) {
+        if (S_OMAHA_MUSIC_Playing()) {
+            S_OMAHA_MUSIC_StopAllSongs();
+        }
+    } else if (music_current_mood != currentsong) {
+        const char *mood = MusicMood_NumToName(music_current_mood);
+        if (S_OMAHA_MUSIC_SongValid(mood) && S_OMAHA_MUSIC_Loaded() && strlen(current_soundtrack)) {
+            Com_DebugPrintf("Playing %s.\n", mood);
+            S_OMAHA_MUSIC_PlaySong(mood);
+        }
+    }
+
+    if (new_music_volume != music_volume) {
+        if (music_volume_fade_time > 0) {
+            if (music_volume_direction == 0) {
+                music_volume = (cls.realtime - music_volume_start_time) * (new_music_volume - old_music_volume)
+                                 / (music_volume_fade_time * 1000.f)
+                             + old_music_volume;
+
+                if (music_volume > new_music_volume) {
+                    music_volume         = new_music_volume;
+                    music_volume_changed = 1;
+                } else {
+                    music_volume_changed = 1;
+                }
+            } else if (music_volume_direction == 1) {
+                /* Fixed in Omaha: the fade down starts at the old volume, not at 1. */
+                music_volume = old_music_volume
+                             - (cls.realtime - music_volume_start_time) * (old_music_volume - new_music_volume)
+                                   / (music_volume_fade_time * 1000.f);
+
+                if (music_volume >= new_music_volume) {
+                    music_volume_changed = true;
+                } else {
+                    music_volume         = new_music_volume;
+                    music_volume_changed = true;
+                }
+            } else {
+                music_volume_changed = true;
+            }
+        } else {
+            music_volume         = new_music_volume;
+            music_volume_changed = true;
+        }
+    }
+
+    S_OMAHA_MUSIC_UpdateMusicVolumes();
+}
+
+/*
+==============
+S_OMAHA_MUSIC_SongEnded
+==============
+*/
+void S_OMAHA_MUSIC_SongEnded()
+{
+    Com_DPrintf(
+        "MUSIC: Song ended, changing from [ %s ] to [ %s ]\n",
+        MusicMood_NumToName(music_current_mood),
+        MusicMood_NumToName(music_fallback_mood)
+    );
+    music_current_mood = music_fallback_mood;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_NewSoundtrack
+==============
+*/
+void S_OMAHA_MUSIC_NewSoundtrack(const char *name)
+{
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    if (!Q_stricmp(name, current_soundtrack)) {
+        return;
+    }
+
+    // Fixed in OPM
+    //  Make sure to not get past the end of the buffer
+    //strcpy(current_soundtrack, name);
+    Q_strncpyz(current_soundtrack, name, sizeof(current_soundtrack));
+
+    if (!Q_stricmp(current_soundtrack, "none") || !Q_stricmp(current_soundtrack, "")) {
+        music_active = qfalse;
+        if (S_OMAHA_MUSIC_Playing()) {
+            S_OMAHA_MUSIC_StopAllSongs();
+        }
+    } else {
+        music_active = qtrue;
+        S_OMAHA_MUSIC_LoadSoundtrackFile(name);
+        music_loaded = qtrue;
+    }
+}
+
+/*
+==============
+S_OMAHA_MUSIC_UpdateMood
+==============
+*/
+void S_OMAHA_MUSIC_UpdateMood(int current, int fallback)
+{
+    static int last_current_mood  = -1;
+    static int last_fallback_mood = -1;
+    static int current_mood       = -1;
+    static int fallback_mood      = -1;
+    qboolean   was_action;
+
+    if (current == current_mood && fallback == fallback_mood) {
+        return;
+    }
+
+    was_action          = current == last_current_mood && fallback == last_fallback_mood && current_mood == mood_action;
+    last_current_mood   = current_mood;
+    last_fallback_mood  = fallback_mood;
+    current_mood        = current;
+    music_current_mood  = current;
+    fallback_mood       = fallback;
+    music_fallback_mood = fallback;
+    music_active        = qtrue;
+
+    Com_DPrintf(
+        "MUSIC: changing from [ %s | %s ] to [ %s | %s ]\n",
+        MusicMood_NumToName(last_current_mood),
+        MusicMood_NumToName(last_fallback_mood),
+        MusicMood_NumToName(current_mood),
+        MusicMood_NumToName(fallback)
+    );
+
+    if (was_action) {
+        int songnum = S_OMAHA_MUSIC_FindSong(MusicMood_NumToName(current_mood));
+
+        if (songnum != -1 && (music_songs[songnum].flags & 4)) {
+            Com_DPrintf(
+                "MUSIC: restoring music from action state, skipping [ %s ] for [ %s ]\n",
+                MusicMood_NumToName(current_mood),
+                MusicMood_NumToName(fallback_mood)
+            );
+            music_current_mood = music_fallback_mood;
+        }
+    }
+}
+
+/*
+==============
+S_OMAHA_MUSIC_UpdateVolume
+==============
+*/
+void S_OMAHA_MUSIC_UpdateVolume(float volume, float fade_time)
+{
+    if (new_music_volume == volume && music_volume_fade_time == fade_time) {
+        return;
+    }
+
+    old_music_volume        = music_volume;
+    new_music_volume        = volume;
+    music_volume_fade_time  = fade_time;
+    music_volume_start_time = cls.realtime;
+
+    if (volume > music_volume) {
+        music_volume_direction = 0;
+    } else if (volume < music_volume) {
+        music_volume_direction = 1;
+    }
+}
+
+/*
+==============
+S_OMAHA_MUSIC_StopAllSongs
+==============
+*/
+void S_OMAHA_MUSIC_StopAllSongs()
+{
+    for (int i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        S_OMAHA_MUSIC_StopChannel(i);
+    }
+
+    music_currentsong = -1;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_FreeAllSongs
+==============
+*/
+void S_OMAHA_MUSIC_FreeAllSongs()
+{
+    S_OMAHA_MUSIC_StopAllSongs();
+    S_OMAHA_MUSIC_UpdateMood(mood_none, mood_none);
+    current_soundtrack[0] = 0;
+    music_loaded          = false;
+
+    // Added in OPM
+    //  Clear the list of songs so the songs from previous maps
+    //  won't get played
+    music_numsongs = 0;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_Playing
+==============
+*/
+qboolean S_OMAHA_MUSIC_Playing()
+{
+    return S_OMAHA_MUSIC_CurrentSongChannel() != -1;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_FindSong
+==============
+*/
+int S_OMAHA_MUSIC_FindSong(const char *name)
+{
+    int i;
+
+    for (i = 0; i < music_numsongs; i++) {
+        if (!Q_stricmp(music_songs[i].alias, name)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+/*
+==============
+S_OMAHA_loadsoundtrack
+==============
+*/
+void S_OMAHA_loadsoundtrack()
+{
+    if (Cmd_Argc() != 2) {
+        Com_Printf("loadsoundtrack <sound track file>\n");
+        return;
+    }
+
+    S_OMAHA_MUSIC_LoadSoundtrackFile(Cmd_Argv(1));
+    music_loaded = true;
+    Q_strncpyz(current_soundtrack, Cmd_Argv(1), sizeof(current_soundtrack));
+}
+
+/*
+==============
+S_OMAHA_CurrentSoundtrack
+==============
+*/
+const char *S_OMAHA_CurrentSoundtrack()
+{
+    return current_soundtrack;
+}
+
+/*
+==============
+S_OMAHA_PlaySong
+==============
+*/
+void S_OMAHA_PlaySong()
+{
+    if (Cmd_Argc() != 2) {
+        Com_Printf("playsong <song alias>\n");
+        return;
+    }
+
+    S_OMAHA_MUSIC_PlaySong(Cmd_Argv(1));
+    music_active = true;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_CurrentSongChannel
+==============
+*/
+int S_OMAHA_MUSIC_CurrentSongChannel()
+{
+    int channel_number = -1;
+    int ch_idx         = 0;
+
+    for (ch_idx = 0; ch_idx < MAX_SOUNDSYSTEM_SONGS; ch_idx++) {
+        if (omaha.chan_song[ch_idx].is_playing() && omaha.chan_song[ch_idx].song_number == music_currentsong) {
+            channel_number = ch_idx;
+        }
+    }
+
+    return channel_number;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_StopChannel
+==============
+*/
+void S_OMAHA_MUSIC_StopChannel(int channel_number)
+{
+    omaha_channel *channel = &omaha.chan_song[channel_number];
+
+    /* Fixed in Omaha: read the position while the song still plays; a paused voice reports 0. */
+    if (music_songs[channel->song_number].flags & 2) {
+        music_songs[channel->song_number].current_pos = 0;
+    } else {
+        music_songs[channel->song_number].current_pos = channel->sample_ms_offset();
+    }
+    channel->pause();
+
+    channel->stop();
+    channel->fading = FADE_NONE;
+}
+
+/*
+==============
+S_OMAHA_SongGain
+
+Added in Omaha: the one gain expression for a song channel. fade is 0..1.
+==============
+*/
+static float S_OMAHA_SongGain(int songnum, float fade)
+{
+    return S_OMAHA_GetBaseVolume() * music_songs[songnum].volume * s_ambientVolume->value * s_fVolumeGain
+         * music_volume * s_musicDuck * fade;
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusicGain
+
+Added in Omaha: the one gain expression for triggered music.
+==============
+*/
+static float S_OMAHA_TriggeredMusicGain(void)
+{
+    return S_OMAHA_GetBaseVolume() * omaha.chan_trig_music.fVolume * s_musicVolume->value * s_fVolumeGain
+         * s_musicDuck;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_PlaySong
+==============
+*/
+qboolean S_OMAHA_MUSIC_PlaySong(const char *alias)
+{
+    int                          channel_number;
+    song_t                      *song;
+    int                          songnum;
+    int                          channel_to_play_on;
+    int                          fading_song;
+    omaha_channel_two_d_stream *song_channel;
+    int                          rate;
+
+    fading_song = 0;
+    songnum     = S_OMAHA_MUSIC_FindSong(alias);
+
+    if (songnum == -1) {
+        return true;
+    }
+
+    song = &music_songs[songnum];
+
+    // Added in MoHAA Reloaded: s_ambientvolume 0, no song, and not taken as
+    // the current one (S_OMAHA_MUSIC_AmbientOff)
+    if (s_ambientVolume->value <= 0) {
+        return true;
+    }
+
+    if (S_OMAHA_MUSIC_Playing() && songnum == music_currentsong) {
+        return true;
+    }
+
+    channel_number    = S_OMAHA_MUSIC_CurrentSongChannel();
+    music_currentsong = songnum;
+
+    if (channel_number != -1) {
+        if (song->flags & 4) {
+            S_OMAHA_MUSIC_StopChannel(channel_number);
+        } else {
+            song_channel                  = &omaha.chan_song[channel_number];
+            song_channel->fading          = FADE_OUT;
+            song_channel->fade_time       = (int)(song->fadetime * 1000.f);
+            song_channel->fade_start_time = cls.realtime;
+            fading_song                   = true;
+        }
+    }
+    channel_to_play_on = (fading_song != 0) && (channel_number == 0);
+    song_channel       = &omaha.chan_song[channel_to_play_on];
+
+    if (song_channel->is_playing() || song_channel->is_paused()) {
+        S_OMAHA_MUSIC_StopChannel(channel_to_play_on);
+    }
+
+    if (!song_channel->queue_stream(song->path)) {
+        Com_DPrintf("Could not start music file '%s'!", song->path);
+        return false;
+    }
+
+    rate = song_channel->sample_playback_rate();
+
+    song_channel->song_number = songnum;
+    if (song->current_pos) {
+        song_channel->set_sample_ms_offset(song->current_pos);
+    } else {
+        song_channel->set_sample_offset(rate * 0.063f);
+    }
+
+    if (song->flags & 1) {
+        song_channel->set_sample_loop_count(0);
+        song_channel->set_sample_loop_block(rate * 0.063f, -1);
+    } else {
+        song_channel->set_sample_loop_count(1);
+    }
+
+    if (fading_song) {
+        song_channel->fading    = FADE_IN;
+        song_channel->fade_time = (int)(song->fadetime * 1000.f);
+        song_channel->set_gain(0.0);
+        song_channel->fade_start_time = cls.realtime;
+    } else {
+        song_channel->fading = FADE_NONE;
+        song_channel->set_gain(S_OMAHA_SongGain(songnum, 1.f));
+    }
+
+    song_channel->play();
+
+    return true;
+}
+
+/*
+==============
+S_OMAHA_VoiceAudibleGain
+
+Added in Omaha: gain the mixer actually plays. 2D voices are already at level.
+3D voices get the inverse distance scale.
+==============
+*/
+static float S_OMAHA_VoiceAudibleGain(const omaha_channel *pChannel, const vec3_t vListener)
+{
+    float  g, dist, minDist, maxDist, clamped;
+    vec3_t delta;
+
+    g = pChannel->cur.gain;
+    if (g <= 0.f) {
+        return 0.f;
+    }
+    if (pChannel->cur.flags & OM_FLAG_2D) {
+        return g;
+    }
+    minDist = pChannel->cur.minDist;
+    if (minDist <= 0.f) {
+        return g;
+    }
+    VectorSubtract(pChannel->cur.pos, vListener, delta);
+    dist    = VectorLength(delta);
+    maxDist = pChannel->cur.maxDist;
+    clamped = dist;
+    if (clamped < minDist) {
+        clamped = minDist;
+    }
+    if (maxDist > minDist && clamped > maxDist) {
+        clamped = maxDist;
+    }
+    return g * (minDist / clamped);
+}
+
+/*
+==============
+S_OMAHA_UpdateMusicDuck
+
+Added in Omaha: loudest voice dips music. -24 dB is a 2 dB dip, 0 dB is 10 dB.
+Attack 20 ms, hold 200 ms, release 600 ms. s_mix 0 leaves music alone.
+==============
+*/
+static float S_OMAHA_UpdateMusicDuck(void)
+{
+    float   key, ref, db, dipDb, desired, dt, tau, coeff;
+    int     i, now, posCount;
+    vec3_t  vListener;
+
+    now = cls.realtime;
+    dt  = s_musicDuckTime > 0 ? (now - s_musicDuckTime) * 0.001f : 0.f;
+    if (dt < 0.f) {
+        dt = 0.f;
+    }
+    if (dt > 0.1f) {
+        dt = 0.1f;
+    }
+    s_musicDuckTime = now;
+
+    if (!s_mix || !s_mix->integer) {
+        s_musicDuck     = 1.f;
+        s_musicDuckHeld = 1.f;
+        return 1.f;
+    }
+
+    key = 0.f;
+    if (g_sndRenderer) {
+        g_sndRenderer->GetListenerPosition(vListener);
+        posCount = omaha.position_channel_count > 0 ? omaha.position_channel_count
+                                                     : MAX_SOUNDSYSTEM_POSITION_CHANNELS;
+        for (i = 0; i < posCount; i++) {
+            omaha_channel *pChannel = S_OMAHA_GetPosChannel(i);
+            float           audible;
+
+            if (!pChannel || pChannel->iCategory != (int)SND_CAT_VOICE || !pChannel->is_playing()) {
+                continue;
+            }
+            audible = S_OMAHA_VoiceAudibleGain(pChannel, vListener);
+            if (audible > key) {
+                key = audible;
+            }
+        }
+    }
+
+    desired = 1.f;
+    ref     = S_OMAHA_GetBaseVolume() * OM_MIX_VOICE;
+    if (ref > 0.0001f && key > 0.f) {
+        db = 20.f * log10f(key / ref);
+        if (db >= 0.f) {
+            dipDb = 10.f;
+        } else if (db > -24.f) {
+            dipDb = 2.f + ((db + 24.f) / 24.f) * 8.f;
+        } else {
+            dipDb = 0.f;
+        }
+        desired = powf(10.f, -dipDb / 20.f);
+    }
+
+    if (desired < s_musicDuckHeld) {
+        s_musicDuckHeld      = desired;
+        s_musicDuckHoldUntil = now + 200;
+    } else if (now >= s_musicDuckHoldUntil) {
+        s_musicDuckHeld = desired;
+        if (desired < 1.f) {
+            s_musicDuckHoldUntil = now + 200;
+        }
+    }
+
+    tau   = s_musicDuckHeld < s_musicDuck ? 0.020f : 0.600f;
+    coeff = tau > 0.f ? (1.f - expf(-dt / tau)) : 1.f;
+    s_musicDuck += (s_musicDuckHeld - s_musicDuck) * coeff;
+    if (fabsf(s_musicDuck - s_musicDuckHeld) < 0.0005f) {
+        s_musicDuck = s_musicDuckHeld;
+    }
+    if (s_musicDuck > 1.f) {
+        s_musicDuck = 1.f;
+    }
+    if (s_musicDuck < 0.f) {
+        s_musicDuck = 0.f;
+    }
+    return s_musicDuck;
+}
+
+/*
+==============
+S_OMAHA_MUSIC_UpdateMusicVolumes
+==============
+*/
+void S_OMAHA_MUSIC_UpdateMusicVolumes()
+{
+    int   i;
+    float fade;
+
+    if (s_ambientVolume->modified || music_volume_changed || s_musicDuckMoved) {
+        s_ambientVolume->modified = false;
+
+        for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+            if (!omaha.chan_song[i].is_playing() && !omaha.chan_song[i].is_paused()) {
+                continue;
+            }
+
+            if (omaha.chan_song[i].fading != FADE_NONE) {
+                continue;
+            }
+
+            omaha.chan_song[i].set_gain(S_OMAHA_SongGain(omaha.chan_song[i].song_number, 1.f));
+        }
+    }
+
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        omaha_channel_two_d_stream *chan = &omaha.chan_song[i];
+
+        if (!chan->is_playing() && !chan->is_paused()) {
+            continue;
+        }
+
+        /* Fixed in Omaha: fade_time is in ms; zero or less means an instant change. */
+        if (chan->fading == FADE_NONE) {
+            continue;
+        }
+        if (chan->fade_time > 0) {
+            fade = (float)(cls.realtime - chan->fade_start_time) / (float)chan->fade_time;
+        } else {
+            fade = 1.f;
+        }
+        fade = Q_clamp_float(fade, 0.f, 1.f);
+
+        switch (chan->fading) {
+        case fade_t::FADE_IN:
+            chan->set_gain(S_OMAHA_SongGain(chan->song_number, fade));
+            if (fade >= 1.f) {
+                chan->fading = FADE_NONE;
+            }
+            break;
+        case fade_t::FADE_OUT:
+            /* Fixed in Omaha: ramps down from full to silence (it ramped up). */
+            if (fade < 1.f) {
+                chan->set_gain(S_OMAHA_SongGain(chan->song_number, 1.f - fade));
+            } else {
+                S_OMAHA_MUSIC_StopChannel(i);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_UpdateGain
+
+Added in Omaha: runs every frame, also while no soundtrack is active (menu theme).
+==============
+*/
+static void S_OMAHA_TriggeredMusic_UpdateGain(void)
+{
+    if (s_musicVolume->modified || music_volume_changed || s_musicDuckMoved) {
+        s_musicVolume->modified = false;
+        if (omaha.chan_trig_music.is_playing() || omaha.chan_trig_music.is_paused()) {
+            omaha.chan_trig_music.set_gain(S_OMAHA_TriggeredMusicGain());
+        }
+    }
+}
+
+/*
+==============
+S_OMAHA_MUSIC_CheckForStoppedSongs
+==============
+*/
+void S_OMAHA_MUSIC_CheckForStoppedSongs()
+{
+    int i;
+
+    /*
+     * Fixed in Omaha: the old test needed a channel that was playing and stopped at
+     * once, so SongEnded never ran. The stream flags the end when its last loop
+     * has played out; only the current song moves the mood to the fallback.
+     */
+    for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+        if (!omaha.chan_song[i].songEnded) {
+            continue;
+        }
+
+        omaha.chan_song[i].songEnded = false;
+        if (omaha.chan_song[i].song_number == music_currentsong) {
+            S_OMAHA_MUSIC_SongEnded();
+        }
+    }
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_SetupHandle
+==============
+*/
+void S_OMAHA_TriggeredMusic_SetupHandle(const char *pszName, int iLoopCount, int iOffset, qboolean autostart)
+{
+    const char      *pszRealName;
+    float            fVolume     = 1.0;
+    AliasListNode_t *pSoundAlias = NULL;
+
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    if (omaha.chan_trig_music.is_playing() || omaha.chan_trig_music.is_paused()) {
+        Com_DPrintf("Didn't start new triggered music because some was already playing\n");
+        return;
+    }
+
+    omaha.chan_trig_music.stop();
+    // Fixed in OPM
+    //  Use strncpy instead
+    //strcpy(omaha.tm_filename, pszName);
+    Q_strncpyz(omaha.tm_filename, pszName, sizeof(omaha.tm_filename));
+
+    omaha.tm_loopcount = iLoopCount;
+    omaha.chan_trig_music.set_sample_loop_count(iLoopCount);
+    pszRealName = Alias_FindRandom(pszName, &pSoundAlias);
+
+    if (!pszRealName) {
+        pszRealName = pszName;
+    } else if (pSoundAlias) {
+        fVolume = random() * pSoundAlias->volumeMod + pSoundAlias->volume;
+    }
+
+    if (!omaha.chan_trig_music.queue_stream(pszRealName)) {
+        /* Fixed in Omaha: release the old renderer voice before re-creating the channel. */
+        if (g_sndRenderer && omaha.chan_trig_music.voiceId != OM_VOICE_NONE) {
+            g_sndRenderer->DestroyVoice(omaha.chan_trig_music.voiceId);
+            omaha.chan_trig_music.voiceId = OM_VOICE_NONE;
+        }
+        S_OMAHA_InitChannel(SOUNDSYSTEM_CHANNEL_TRIGGER_MUSIC_ID, &omaha.chan_trig_music);
+        Com_DPrintf("Could not start triggered music '%s'\n", pszName);
+        return;
+    }
+
+    omaha.chan_trig_music.fVolume = fVolume;
+    omaha.chan_trig_music.set_gain(S_OMAHA_TriggeredMusicGain());
+    omaha.chan_trig_music.set_sample_loop_count(iLoopCount);
+    omaha.chan_trig_music.set_sample_offset(iOffset);
+
+    /* Changed in Omaha: the voice is already open. Pause holds it; play starts it. */
+    if (autostart) {
+        omaha.chan_trig_music.play();
+    } else {
+        omaha.chan_trig_music.pause();
+    }
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_Start
+==============
+*/
+void S_OMAHA_TriggeredMusic_Start()
+{
+    if (Cmd_Argc() != 2) {
+        Com_Printf("tmstart <sound file>\n");
+        return;
+    }
+
+    S_OMAHA_TriggeredMusic_SetupHandle(Cmd_Argv(1), 1, 0, true);
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_StartLoop
+==============
+*/
+void S_OMAHA_TriggeredMusic_StartLoop()
+{
+    if (Cmd_Argc() != 2) {
+        Com_Printf("tmstartloop <sound file>\n");
+        return;
+    }
+
+    S_OMAHA_TriggeredMusic_SetupHandle(Cmd_Argv(1), 0, 0, true);
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_Stop
+==============
+*/
+void S_OMAHA_TriggeredMusic_Stop()
+{
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    omaha.chan_trig_music.stop();
+    // Fixed in OPM
+    //  Make sure to clear the triggered music in case snd_restart is called
+    omaha.tm_filename[0] = 0;
+    omaha.tm_loopcount   = 0;
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_Volume
+
+Added in 2.0
+==============
+*/
+void S_OMAHA_TriggeredMusic_Volume()
+{
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    if (Cmd_Argc() != 2) {
+        Com_Printf("tmvolume <0-1>\n\n");
+        return;
+    }
+
+    omaha.chan_trig_music.fVolume = atof(Cmd_Argv(1));
+    music_volume_changed           = true;
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_Pause
+==============
+*/
+void S_OMAHA_TriggeredMusic_Pause()
+{
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    if (omaha.chan_trig_music.is_playing()) {
+        omaha.chan_trig_music.pause();
+    }
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_Unpause
+==============
+*/
+void S_OMAHA_TriggeredMusic_Unpause()
+{
+    if (!s_bSoundStarted) {
+        return;
+    }
+
+    if (omaha.chan_trig_music.is_paused()) {
+        omaha.chan_trig_music.play();
+    }
+
+    omaha.chan_trig_music.set_gain(S_OMAHA_TriggeredMusicGain());
+}
+
+/*
+==============
+S_OMAHA_TriggeredMusic_PlayIntroMusic
+==============
+*/
+void S_OMAHA_TriggeredMusic_PlayIntroMusic()
+{
+    S_OMAHA_TriggeredMusic_SetupHandle("sound/music/mus_MainTheme.mp3", 0, 0, true);
+}
+
+/*
+==============
+S_OMAHA_StopMovieAudio
+==============
+*/
+void S_OMAHA_StopMovieAudio()
+{
+    omaha.chan_movie.stop();
+}
+
+/*
+==============
+S_OMAHA_SetupMovieAudio
+==============
+*/
+void S_OMAHA_SetupMovieAudio(const char *pszMovieName)
+{
+    char filename[MAX_QPATH];
+
+    S_OMAHA_StopMovieAudio();
+
+    COM_StripExtension(pszMovieName, filename, sizeof(filename));
+    Q_strcat(filename, sizeof(filename), ".mp3");
+
+    if (!omaha.chan_movie.queue_stream(filename)) {
+        COM_StripExtension(pszMovieName, filename, sizeof(filename));
+        Q_strcat(filename, sizeof(filename), ".wav");
+
+        if (!omaha.chan_movie.queue_stream(filename)) {
+            Com_DPrintf("Can't find any matching audio file for movie: %s\n", pszMovieName);
+            return;
+        }
+    }
+
+    omaha.chan_movie.set_gain(S_OMAHA_GetBaseVolume() * 1.5f);
+    omaha.chan_movie.play();
+
+    Com_DPrintf("Movie Audio setup: %s\n", filename);
+}
+
+/*
+==============
+S_OMAHA_CurrentMoviePosition
+==============
+*/
+int S_OMAHA_CurrentMoviePosition()
+{
+    return omaha.chan_movie.sample_ms_offset();
+}
+
+/*
+==============
+omaha_channel::update
+==============
+*/
+void omaha_channel::update() {}
+
+/*
+==============
+S_SndFmtFromWidthChannels
+Added in Omaha: map codec width/channels to renderer sample format.
+==============
+*/
+static omSampleFormat_t S_SndFmtFromWidthChannels(float width, int channels)
+{
+    if (width == 0.5f) {
+        return channels <= 1 ? OM_FMT_MONO_IMA4 : OM_FMT_STEREO_IMA4;
+    }
+    if (channels <= 1) {
+        return (width <= 1) ? OM_FMT_MONO8 : OM_FMT_MONO16;
+    }
+    return (width <= 1) ? OM_FMT_STEREO8 : OM_FMT_STEREO16;
+}
+
+/*
+==============
+S_StreamEnsureVoice
+Added in Omaha: stream channels need a renderer voice before queueing PCM.
+==============
+*/
+static qboolean S_StreamEnsureVoice(omaha_channel *chan)
+{
+    if (chan->voiceId == OM_VOICE_NONE) {
+        chan->cur.flags |= OM_FLAG_2D | OM_FLAG_FLAT;
+        chan->cur.pitch = chan->cur.pitch > 0.f ? chan->cur.pitch : 1.f;
+        chan->voiceId   = g_sndRenderer->OpenStream(&chan->cur);
+        if (chan->voiceId == OM_VOICE_NONE) {
+            return qfalse;
+        }
+        chan->sent   = chan->cur;
+        chan->sentOk = qtrue;
+    }
+    return qtrue;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::queueChunk
+Added in Omaha: queue one decoded chunk on the renderer voice and remember its size.
+==============
+*/
+bool omaha_channel_two_d_stream::queueChunk(const void *data, unsigned int size, const void *handle)
+{
+    const snd_stream_t *stream = (const snd_stream_t *)handle;
+
+    if (!g_sndRenderer->QueueStream(
+            voiceId,
+            data,
+            (int)size,
+            S_SndFmtFromWidthChannels(stream->info.width, stream->info.channels),
+            stream->info.rate,
+            stream->info.dataalign
+        )) {
+        return false;
+    }
+    bufferSizes[currentBuf] = size;
+    lastBitsPerSample       = (unsigned int)(stream->info.width * 8 * stream->info.channels);
+    currentBuf              = (currentBuf + 1) % MAX_STREAM_BUFFERS;
+    return true;
+}
+
+/*
+==============
+S_StreamBlockBytes
+Added in Omaha: bytes of one decodable unit, a whole IMA ADPCM block or one PCM frame.
+==============
+*/
+static unsigned int S_StreamBlockBytes(const snd_stream_t *stream)
+{
+    if (stream->info.channels < 1) {
+        return 1;
+    }
+    if (stream->info.width == 0.5f && stream->info.dataalign > 1) {
+        return (unsigned int)(stream->info.channels * (4 + (stream->info.dataalign - 1) / 2));
+    }
+    if (stream->info.width >= 1.f) {
+        return (unsigned int)(stream->info.width * stream->info.channels);
+    }
+    return 1;
+}
+
+/*
+==============
+S_StreamChunkBytes
+Added in Omaha: read size for one stream chunk, whole ADPCM blocks only, at most cap.
+==============
+*/
+static unsigned int S_StreamChunkBytes(const snd_stream_t *stream, unsigned int cap)
+{
+    unsigned int bytes, block;
+
+    bytes = (unsigned int)(MAX_BUFFER_SAMPLES * stream->info.width * stream->info.channels);
+    block = S_StreamBlockBytes(stream);
+    if (bytes > cap) {
+        bytes = cap;
+    }
+    if (block > 1 && block <= cap) {
+        bytes = (bytes / block) * block;
+        if (!bytes) {
+            bytes = block;
+        }
+    }
+    return bytes;
+}
+
+/*
+==============
+S_StreamSkipBytes
+Added in Omaha: codec bytes to skip for a frame offset, rounded down to whole blocks.
+==============
+*/
+static unsigned int S_StreamSkipBytes(const snd_stream_t *stream, unsigned int frames)
+{
+    if (stream->info.width == 0.5f && stream->info.dataalign > 1) {
+        return (frames / (unsigned int)stream->info.dataalign) * S_StreamBlockBytes(stream);
+    }
+    return (unsigned int)(frames * stream->info.width * stream->info.channels);
+}
+
+/*
+==============
+omaha_channel_two_d_stream::attachAsync
+Added in Omaha: hand the open stream to the decode-ahead worker (renderer path only).
+==============
+*/
+void omaha_channel_two_d_stream::attachAsync()
+{
+    snd_stream_t *stream = (snd_stream_t *)streamHandle;
+    unsigned int  chunkBytes;
+
+    if (asyncJob || !stream || !g_sndRenderer || voiceId == OM_VOICE_NONE) {
+        return;
+    }
+
+    chunkBytes = S_StreamChunkBytes(stream, MAX_BUFFER_SAMPLES * 2 * 2);
+    asyncJob   = S_AsyncStream_Attach(stream, chunkBytes, 0);
+}
+
+/*
+==============
+omaha_channel_two_d_stream::close_stream
+
+Changed: the codec stream is closed, through the worker when it has it: once
+its read is done, never waited for (detaching waited for the worker's decode,
+which every song start, seek and loop end did in the frame).
+==============
+*/
+void omaha_channel_two_d_stream::close_stream()
+{
+    if (asyncJob) {
+        S_AsyncStream_Release(asyncJob);
+        asyncJob = NULL;
+    } else if (streamHandle) {
+        S_CodecCloseStream((snd_stream_t *)streamHandle);
+    }
+    streamHandle = NULL;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::stop
+==============
+*/
+void omaha_channel_two_d_stream::stop()
+{
+    /* Changed in Omaha: clear_stream destroys the stream voice; a plain stop would only rewind it. */
+    clear_stream();
+}
+
+/*
+==============
+omaha_channel_two_d_stream::set_sfx
+==============
+*/
+bool omaha_channel_two_d_stream::set_sfx(sfx_t *pSfx)
+{
+    snd_stream_t     *stream;
+    unsigned int      bytesToRead, bytesRead;
+    char              rawData[MAX_BUFFER_SAMPLES * 2 * 2];
+
+    stop();
+
+    sampleLoopCount = 1;
+
+    songEnded  = false;
+    this->pSfx = pSfx;
+    Q_strncpyz(this->fileName, pSfx->name, sizeof(this->fileName));
+
+    streamHandle = S_CodecLoad(pSfx->name, NULL);
+    if (!streamHandle) {
+        Com_DPrintf("Sound: Failed to load sound file.\n");
+        return false;
+    }
+
+    stream              = (snd_stream_t *)streamHandle;
+    pSfx->info.channels = stream->info.channels;
+    pSfx->info.dataofs  = stream->info.dataofs;
+    pSfx->info.datasize = stream->info.size;
+    pSfx->info.rate     = stream->info.rate;
+    pSfx->info.samples  = stream->info.samples;
+    pSfx->info.width    = stream->info.width;
+
+    if (!S_StreamEnsureVoice(this)) {
+        S_CodecCloseStream(stream);
+        streamHandle = NULL;
+        return false;
+    }
+
+    bytesToRead = S_StreamChunkBytes(stream, sizeof(rawData));
+    /* Changed in Omaha: prefill several chunks at open so Update can drip-refill. */
+    {
+        int prefill, got;
+        streamNextOffset = 0;
+        for (prefill = 0; prefill < 16; prefill++) {
+            got = S_CodecReadStream(stream, bytesToRead, rawData);
+            if (got <= 0) {
+                break;
+            }
+            bytesRead = (unsigned int)got;
+            streamNextOffset += bytesRead;
+            if (!queueChunk(rawData, bytesRead, stream)) {
+                break;
+            }
+        }
+        if (prefill == 0) {
+            S_CodecCloseStream(stream);
+            streamHandle = NULL;
+            return true;
+        }
+    }
+    iBaseRate = stream->info.rate;
+    streaming = true;
+    attachAsync();
+    return true;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::set_sample_loop_count
+==============
+*/
+void omaha_channel_two_d_stream::set_sample_loop_count(S32 count)
+{
+    sampleLoopCount = count;
+    sampleLooped    = 0;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::omaha_channel_two_d_stream
+==============
+*/
+omaha_channel_two_d_stream::omaha_channel_two_d_stream()
+{
+    int i;
+
+    streamHandle = NULL;
+    for (i = 0; i < MAX_STREAM_BUFFERS; i++) {
+        bufferSizes[i] = 0;
+    }
+    lastBitsPerSample = 16;
+    currentBuf       = 0;
+    sampleLoopCount  = 0;
+    sampleLooped     = 0;
+    streamNextOffset = 0;
+    streaming        = false;
+    asyncJob         = NULL;
+    songEnded        = false;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::omaha_channel_two_d_stream
+==============
+*/
+omaha_channel_two_d_stream::~omaha_channel_two_d_stream()
+{
+    clear_stream();
+}
+
+/*
+==============
+omaha_channel_two_d_stream::update
+==============
+*/
+int omaha_channel_two_d_stream::fetchChunk(char *rawData, unsigned int cap)
+{
+    snd_stream_t *stream = (snd_stream_t *)streamHandle;
+    unsigned int  bytesRead;
+    int           got;
+
+    if (!stream) {
+        return -1;
+    }
+
+    /* Changed in Omaha: take a chunk the worker decoded ahead; decode inline only
+     * when async is off. End of stream returns the handle for the loop logic. */
+    if (asyncJob) {
+        got = S_AsyncStream_Pop(asyncJob, rawData, cap);
+        if (!got) {
+            return 0;
+        }
+        if (got < 0) {
+            got = 0;
+        }
+    } else {
+        got = S_CodecReadStream(stream, S_StreamChunkBytes(stream, cap), rawData);
+    }
+    bytesRead = got > 0 ? (unsigned int)got : 0;
+    streamNextOffset += bytesRead;
+
+    if (!bytesRead) {
+        close_stream();
+
+        sampleLooped++;
+        if (sampleLoopCount && sampleLooped >= sampleLoopCount) {
+            return -1;
+        }
+
+        streamHandle = S_CodecLoad(this->fileName, NULL);
+        if (!streamHandle) {
+            return -2;
+        }
+
+        stream           = (snd_stream_t *)streamHandle;
+        streamNextOffset = 0;
+        /* Added in Omaha: restart loops at loopBlockStart (Miles sample_loop_block). */
+        if (loopBlockStart > 0 && stream->info.width > 0 && stream->info.channels > 0) {
+            unsigned int skip = S_StreamSkipBytes(stream, (unsigned int)loopBlockStart);
+            while (skip) {
+                unsigned int chunk = Q_min(skip, S_StreamChunkBytes(stream, cap));
+                int          read  = S_CodecReadStream(stream, chunk, rawData);
+                if (read <= 0) {
+                    break;
+                }
+                skip -= Q_min(skip, (unsigned int)read);
+                streamNextOffset += (unsigned int)read;
+            }
+        }
+        got       = S_CodecReadStream(stream, S_StreamChunkBytes(stream, cap), rawData);
+        bytesRead = got > 0 ? (unsigned int)got : 0;
+        streamNextOffset += bytesRead;
+        if (!bytesRead) {
+            S_CodecCloseStream(stream);
+            streamHandle = NULL;
+            return -1;
+        }
+    }
+
+    /* A refused chunk is dropped; streamNextOffset still matches the codec position. */
+    queueChunk(rawData, bytesRead, stream);
+    attachAsync();
+    return 1;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::update
+==============
+*/
+void omaha_channel_two_d_stream::update()
+{
+    int          numProcessedBuffers, numQueuedBuffers, chunks, fetched;
+    unsigned int bitsPerSample, targetBytes;
+    bool         queued = false;
+    // 2 channels with a width of 2
+    char rawData[MAX_BUFFER_SAMPLES * 2 * 2];
+
+    if (!streaming || is_paused() || voiceId == OM_VOICE_NONE) {
+        return;
+    }
+    /* Fixed in Omaha: only a never-played stream waits; a stopped one ran dry and needs refilling. */
+    if (sample_status() == OM_VOICE_INITIAL) {
+        return;
+    }
+
+    /* Changed in Omaha: release every played chunk; the refill below is capped per tick. */
+    numProcessedBuffers = g_sndRenderer->StreamProcessed(voiceId);
+    if (numProcessedBuffers > 0) {
+        g_sndRenderer->UnqueueStream(voiceId, numProcessedBuffers);
+    }
+    numQueuedBuffers = g_sndRenderer->StreamQueued(voiceId);
+
+    if (sampleLoopCount && sampleLooped >= sampleLoopCount) {
+        if (!is_playing()) {
+            clear_stream();
+            songEnded = true;
+        }
+        return;
+    }
+
+    /*
+     * Changed in Omaha: top the queue up to about OM_STREAM_AHEAD_MS of audio.
+     * Changed: what the worker hasn't decoded yet is queued in a later frame (the
+     * first chunk waited for it when the voice was about to run dry, also right
+     * after a start); a stream opened by queue_stream goes to the worker here.
+     */
+    attachAsync();
+    bitsPerSample = getBitsPerSample();
+    targetBytes   = (unsigned int)((unsigned long long)iBaseRate * bitsPerSample / 8 * OM_STREAM_AHEAD_MS / 1000);
+    for (chunks = 0; chunks < OM_STREAM_REFILL_MAX; chunks++) {
+        if (numQueuedBuffers >= MAX_STREAM_BUFFERS) {
+            break;
+        }
+        if (targetBytes ? getQueueLength() >= targetBytes : chunks > 0) {
+            break;
+        }
+
+        fetched = fetchChunk(rawData, sizeof(rawData));
+        if (fetched == -2) {
+            clear_stream();
+            return;
+        }
+        if (fetched <= 0) {
+            break;
+        }
+        queued = true;
+        numQueuedBuffers = g_sndRenderer->StreamQueued(voiceId);
+    }
+
+    if (queued && !is_playing()) {
+        play();
+    }
+}
+
+/*
+==============
+omaha_channel_two_d_stream::sample_offset
+==============
+*/
+U32 omaha_channel_two_d_stream::sample_offset()
+{
+    snd_stream_t *stream              = (snd_stream_t *)streamHandle;
+    unsigned int  playerByteOffset    = 0;
+    unsigned int  totalQueueLength    = 0;
+    unsigned int  bitsPerSample       = 0;
+    unsigned int  offset              = 0;
+
+    if (!streaming) {
+        // no stream
+        return 0;
+    }
+
+    totalQueueLength = getQueueLength();
+    bitsPerSample    = getBitsPerSample();
+    if (!bitsPerSample) {
+        return 0;
+    }
+
+    // Get the byte offset in the queue
+    /* Changed in Omaha: the renderer reports a sample offset; convert to bytes. */
+    if (voiceId != OM_VOICE_NONE) {
+        playerByteOffset =
+            (unsigned int)((unsigned long long)g_sndRenderer->VoiceOffset(voiceId) * bitsPerSample / 8);
+    }
+
+    assert(playerByteOffset < totalQueueLength);
+    assert(streamNextOffset >= totalQueueLength || stream);
+
+    if (streamNextOffset >= totalQueueLength) {
+        offset = streamNextOffset - totalQueueLength + playerByteOffset;
+    } else if (stream) {
+        // it probably means the sound is looped and will restart from the beginning
+        if (streamNextOffset + playerByteOffset <= totalQueueLength) {
+            // near the end of the stream
+            if (stream->info.size > totalQueueLength) {
+                offset = stream->info.size + streamNextOffset - totalQueueLength + playerByteOffset;
+            } else {
+                // the buffer is really small
+                offset = (streamNextOffset - totalQueueLength + playerByteOffset) % stream->info.size;
+            }
+        } else {
+            // it is past end of stream
+            // so, start from the beginning of the stream
+            offset = streamNextOffset + playerByteOffset - totalQueueLength;
+        }
+
+        assert(offset < stream->info.size);
+    } else {
+        offset = totalQueueLength - streamNextOffset + playerByteOffset;
+    }
+
+    return offset * 8 / bitsPerSample;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::buffer_frequency
+==============
+*/
+U32 omaha_channel_two_d_stream::buffer_frequency() const
+{
+    return (U32)iBaseRate;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::set_sample_offset
+==============
+*/
+void omaha_channel_two_d_stream::set_sample_offset(U32 offset)
+{
+    snd_stream_t     *stream;
+    unsigned int      bytesToRead, bytesRead;
+    unsigned int      byteOffset;
+    unsigned int      bitsPerSample;
+    unsigned int      streamPosition;
+    bool              bWasPlaying;
+    char              rawData[MAX_BUFFER_SAMPLES * 2 * 2];
+
+    if (!streaming || voiceId == OM_VOICE_NONE) {
+        return;
+    }
+
+    stream         = (snd_stream_t *)streamHandle;
+    streamPosition = getCurrentStreamPosition();
+    bitsPerSample  = getBitsPerSample();
+    byteOffset     = offset * bitsPerSample / 8;
+    if (!bitsPerSample) {
+        return;
+    }
+
+    if (byteOffset >= streamPosition && byteOffset < streamNextOffset) {
+        //
+        // Sample is in the currently streamed data
+        //
+        /* Changed in Omaha: the byte offset expressed as a sample offset for the renderer. */
+        g_sndRenderer->SetVoiceOffset(voiceId, (byteOffset - streamPosition) * 8 / bitsPerSample);
+        return;
+    }
+
+    bWasPlaying = is_playing();
+
+    /* Added in Omaha: decoded-ahead data moved the codec past streamNextOffset;
+     * reopen so the forward read below starts from a known position. */
+    if (asyncJob) {
+        close_stream();
+        stream = NULL;
+    }
+
+    if (stream) {
+        if (byteOffset < streamPosition) {
+            //
+            // New offset is before the current offset,
+            // reload the stream from the beginning
+            //
+            S_CodecCloseStream(stream);
+            streamHandle = NULL;
+        } else if (byteOffset >= stream->info.size) {
+            //
+            // This shouldn't happen unless the file is different
+            // from the one used while saving
+            //
+            byteOffset %= stream->info.size;
+            S_CodecCloseStream(stream);
+            streamHandle = NULL;
+        }
+    }
+
+    if (!streamHandle) {
+        streamHandle = S_CodecLoad(this->fileName, NULL);
+        if (!streamHandle) {
+            clear_stream();
+            return;
+        }
+
+        stream           = (snd_stream_t *)streamHandle;
+        streamNextOffset = 0;
+    }
+
+    bytesRead = 0;
+    while (streamNextOffset <= byteOffset) {
+        int got;
+
+        streamPosition = streamNextOffset;
+
+        bytesToRead = S_StreamChunkBytes(stream, sizeof(rawData));
+        got         = S_CodecReadStream(stream, bytesToRead, rawData);
+        if (got <= 0) {
+            clear_stream();
+            return;
+        }
+        bytesRead = (unsigned int)got;
+
+        streamNextOffset += bytesRead;
+    }
+
+    /* Changed in Omaha: stop, drop the queue, requeue the chunk through the renderer. */
+    g_sndRenderer->StopVoice(voiceId);
+    g_sndRenderer->UnqueueStream(voiceId, g_sndRenderer->StreamQueued(voiceId));
+    if (queueChunk(rawData, bytesRead, stream)) {
+        g_sndRenderer->SetVoiceOffset(voiceId, (byteOffset - streamPosition) * 8 / bitsPerSample);
+    }
+    attachAsync();
+    if (bWasPlaying) {
+        play();
+    }
+}
+
+/*
+==============
+omaha_channel_two_d_stream::queue_stream
+==============
+*/
+bool omaha_channel_two_d_stream::queue_stream(const char *fileName)
+{
+    snd_stream_t *stream;
+    unsigned int  bytesToRead, bytesRead;
+    char          rawData[MAX_BUFFER_SAMPLES * 2 * 2];
+
+    /* Fixed in Omaha: clear first; clear_stream wipes fileName on a channel that was streaming. */
+    clear_stream();
+    songEnded = false;
+    // Store the filename so it can be looped later
+    Q_strncpyz(this->fileName, fileName, sizeof(this->fileName));
+
+    sampleLoopCount = 1;
+
+    //
+    // Load the file
+    //
+    streamHandle = S_CodecLoad(this->fileName, NULL);
+    if (!streamHandle) {
+        return false;
+    }
+    stream = (snd_stream_t *)streamHandle;
+
+    iStartTime = cl.serverTime;
+    iEndTime   = stream->info.rate > 0
+                   ? (int)(cl.serverTime + ((float)stream->info.samples / stream->info.rate * 1000.f))
+                   : cl.serverTime;
+    iBaseRate  = stream->info.rate;
+
+    if (!S_StreamEnsureVoice(this)) {
+        S_CodecCloseStream(stream);
+        streamHandle = NULL;
+        return false;
+    }
+
+    // Read a smaller sample
+    bytesToRead = S_StreamChunkBytes(stream, sizeof(rawData));
+    {
+        int got = S_CodecReadStream(stream, bytesToRead, rawData);
+        bytesRead = got > 0 ? (unsigned int)got : 0;
+    }
+    if (!bytesRead) {
+        // Valid stream but no data?
+        /* Fixed in Omaha: nothing will read this handle again, so close it. */
+        S_CodecCloseStream(stream);
+        streamHandle = NULL;
+        return true;
+    }
+
+    streamNextOffset = bytesRead;
+    queueChunk(rawData, bytesRead, stream);
+    streaming = true;
+    // Changed: handed to the worker by the first update, after the start offset
+    // (set_sample_offset), so the offset is read on without opening the file again
+    return true;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::clear_stream
+==============
+*/
+void omaha_channel_two_d_stream::clear_stream()
+{
+    close_stream(); // Changed: also when nothing streamed (no handle then)
+
+    /* Changed in Omaha: the voice goes even when nothing streamed, or it would leak. */
+    if (voiceId != OM_VOICE_NONE && g_sndRenderer) {
+        g_sndRenderer->DestroyVoice(voiceId);
+        voiceId = OM_VOICE_NONE;
+        sentOk  = qfalse;
+    }
+
+    if (!streaming) {
+        return;
+    }
+
+    fileName[0]  = 0;
+
+    currentBuf       = 0;
+    streamNextOffset = 0;
+    streaming        = false;
+    sampleLooped     = 0;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::getQueueLength
+
+Return the total length of all buffers being streamed.
+==============
+*/
+unsigned int omaha_channel_two_d_stream::getQueueLength() const
+{
+    int          numQueuedBuffers;
+    unsigned int totalQueueLength = 0;
+    unsigned int bufferId;
+    unsigned int i;
+
+    if (voiceId == OM_VOICE_NONE) {
+        return 0;
+    }
+
+    /* Changed in Omaha: renderer queues keep their chunk sizes in bufferSizes[]. */
+    numQueuedBuffers = g_sndRenderer->StreamQueued(voiceId);
+    for (i = 0; i < (unsigned int)numQueuedBuffers; i++) {
+        bufferId = (currentBuf - i - 1) % MAX_STREAM_BUFFERS;
+        totalQueueLength += bufferSizes[bufferId];
+    }
+    return totalQueueLength;
+}
+
+/*
+==============
+omaha_channel_two_d_stream::getCurrentStreamPosition
+
+Return the current position in the sound being streamed.
+==============
+*/
+unsigned int omaha_channel_two_d_stream::getCurrentStreamPosition() const
+{
+    unsigned int queueLength = getQueueLength();
+
+    if (streamNextOffset >= queueLength) {
+        return streamNextOffset - queueLength;
+    } else if (streamHandle) {
+        snd_stream_t *stream = (snd_stream_t *)streamHandle;
+        return (stream->info.size + streamNextOffset - queueLength) % stream->info.size;
+    } else {
+        return queueLength - streamNextOffset;
+    }
+}
+
+/*
+==============
+omaha_channel_two_d_stream::getBitsPerSample
+
+Return the number of bytes per sample.
+It assumes that all pending buffers have the same channels and bits.
+==============
+*/
+unsigned int omaha_channel_two_d_stream::getBitsPerSample() const
+{
+    snd_stream_t *stream = (snd_stream_t *)streamHandle;
+
+    if (stream) {
+        return (unsigned int)(stream->info.width * 8 * stream->info.channels);
+    }
+    return lastBitsPerSample;
+}
+
+/*
+==============
+S_LoopbackRate
+
+Added in OPM
+The sample rate of the sound rendered for videos, 0 if it's played: not
+done with the Omaha mixer yet, videos have no sound
+==============
+*/
+int S_LoopbackRate()
+{
+    return 0;
+}
+
+/*
+==============
+S_RenderLoopback
+
+Added in OPM
+Renders the next samples of 16-bit stereo sound, if it isn't played
+==============
+*/
+qboolean S_RenderLoopback(short *buffer, int samples)
+{
+    return qfalse;
+}
+
+const sndHost_t s_sndHostOmaha = {
+    "omaha",
+
+    S_OMAHA_Init,
+    S_OMAHA_Shutdown,
+    S_OMAHA_StartSound,
+    S_OMAHA_AddLoopingSound,
+    S_OMAHA_ClearLoopingSounds,
+    S_OMAHA_StopSound,
+    S_OMAHA_StopAllSounds,
+    S_OMAHA_Respatialize,
+    S_OMAHA_SetReverb,
+    S_OMAHA_Update,
+    S_OMAHA_GetMusicFilename,
+    S_OMAHA_GetMusicLoopCount,
+    S_OMAHA_GetMusicOffset,
+    S_OMAHA_FreeSfx,
+    S_OMAHA_PreloadSfx,
+
+    S_OMAHA_MUSIC_NewSoundtrack,
+    S_OMAHA_MUSIC_UpdateMood,
+    S_OMAHA_MUSIC_UpdateVolume,
+    S_OMAHA_CurrentSoundtrack,
+    S_OMAHA_FadeSound,
+    S_OMAHA_IsSoundPlaying,
+    S_OMAHA_TriggeredMusic_SetupHandle,
+    S_OMAHA_TriggeredMusic_PlayIntroMusic,
+    S_OMAHA_TriggeredMusic_Stop,
+    S_OMAHA_SetupMovieAudio,
+    S_OMAHA_StopMovieAudio,
+    S_OMAHA_CurrentMoviePosition,
+    S_OMAHA_LoadData,
+    S_OMAHA_SaveData,
+    S_OMAHA_ReLoad,
+    S_OMAHA_NeedFullRestart,
+    S_OMAHA_PrintInfo,
+    S_OMAHA_DumpInfo,
+};

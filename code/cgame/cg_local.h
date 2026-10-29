@@ -191,6 +191,14 @@ extern "C" {
         int   numshaders;
     } crain_t;
 
+    // the ground trace of an entity's shadow (CG_EntityShadow), from the
+    // origin it had
+    typedef struct {
+        qboolean valid;
+        vec3_t   origin;
+        trace_t  trace;
+    } shadowTrace_t;
+
     //======================================================================
 
     // all cg.stepTime, cg.duckTime, cg.landTime, etc are set to cg.time when the action
@@ -345,6 +353,9 @@ extern "C" {
         float        ObjectivesCurrentAlpha;
         int          ObjectivesCurrentIndex;
 
+        // the last shadow trace of each entity
+        shadowTrace_t shadowTraces[MAX_GENTITIES];
+
         // misc
         crain_t      rain;
 		clientInfo_t clientinfo[MAX_CLIENTS];
@@ -444,6 +455,7 @@ extern "C" {
     extern cvar_t *cg_debugAnimWatch;
     extern cvar_t *cg_errorDecay;
     extern cvar_t *cg_nopredict;
+    extern cvar_t *cg_splean;
     extern cvar_t *cg_showmiss;
     extern cvar_t *cg_addMarks;
     extern cvar_t *cg_maxMarks;
@@ -468,6 +480,7 @@ extern "C" {
     extern cvar_t *pmove_fixed;
     extern cvar_t *pmove_msec;
     extern cvar_t *cg_pmove_msec;
+    extern cvar_t *cl_movefps;
     extern cvar_t *dm_playermodel;
     extern cvar_t *dm_playergermanmodel;
     extern cvar_t *cg_forceModel;
@@ -477,9 +490,11 @@ extern "C" {
     extern cvar_t *cg_hud;
     extern cvar_t *cg_huddraw_force;
     extern cvar_t *cg_drawsvlag;
-    extern cvar_t *cg_crosshair;
-    extern cvar_t *cg_crosshair_friend;
     extern cvar_t *ui_crosshair;
+    extern cvar_t *cg_crosshair_length;
+    extern cvar_t *cg_crosshair_gap;
+    extern cvar_t *cg_crosshair_thickness;
+    extern cvar_t *cg_crosshair_color;
     extern cvar_t *vm_offset_max;
     extern cvar_t *vm_offset_speed;
     extern cvar_t *vm_sway_front;
@@ -515,6 +530,9 @@ extern "C" {
     extern cvar_t *cg_cheats;
     extern cvar_t *cg_followplayer;
     extern cvar_t *cg_followcamera;
+    extern cvar_t *cg_precache;
+    extern cvar_t *cg_tauntsounds;
+    extern cvar_t *cg_csAppend;
 
     //
     // cg_main.c
@@ -635,6 +653,7 @@ extern "C" {
     void CG_HudDrawElements();
     void CG_InitializeObjectives();
     void CG_DrawObjectives();
+    void CG_UpdateCrosshair(void);
     void CG_Draw2D(void);
 
     //

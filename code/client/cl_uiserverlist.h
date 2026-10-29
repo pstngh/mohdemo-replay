@@ -57,6 +57,7 @@ private:
     int                    m_iTotalNumPlayers;
     bool                   m_bDoneUpdating[NUM_SERVERLISTS];
     bool                   m_NeedAdditionalLANSearch;
+    bool                   m_bRefreshCancelled;
 
 protected:
     void     SelectServer(Event *ev);

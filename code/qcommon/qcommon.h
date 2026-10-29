@@ -245,7 +245,7 @@ int		NET_StringToAdr ( const char *s, netadr_t *a, netadrtype_t family);
 qboolean	NET_GetLoopPacket (netsrc_t sock, netadr_t *net_from, msg_t *net_message);
 void		NET_JoinMulticast6(void);
 void		NET_LeaveMulticast6(void);
-void		NET_Sleep(int msec);
+void		NET_SleepUs(int64_t usec);
 
 
 #define	MAX_MSGLEN				49152		// max length of a message, which may
@@ -741,6 +741,8 @@ qboolean FS_Initialized( void );
 
 void	FS_InitFilesystem( void );
 void	FS_Shutdown( qboolean closemfp );
+// Optional callback before FS_Shutdown closes handles (async stream worker).
+extern void ( *fs_shutdownHook )( void );
 
 qboolean	FS_ConditionalRestart( int checksumFeed, qboolean disconnect );
 void	FS_Restart( int checksumFeed );
@@ -1091,6 +1093,9 @@ extern	int		time_backend;		// renderer backend time
 extern	int		com_frameTime;
 extern	int		com_frameMsec;
 
+void		Com_LatchRenderFraction( void );
+float		Com_RenderTimeFraction( void );
+
 extern	qboolean	com_errorEntered;
 extern	qboolean	com_fullyInitialized;
 extern	qboolean	com_gotOriginalConfig;
@@ -1208,6 +1213,7 @@ void CL_Disconnect();
 void CL_AbnormalDisconnect();
 void CL_Shutdown(const char *finalmsg, qboolean disconnect, qboolean quit);
 qboolean CL_FinishedIntro(void);
+qboolean CL_CommandPerFrame(void);	// cl_movefps 0: frames of 1 ms or more (Com_Frame)
 void CL_FinishedStartStage(void);
 void CL_SetFrameNumber(int frameNumber);
 void CL_Frame( int msec );
@@ -1296,6 +1302,7 @@ int SV_SendQueuedPackets(void);
 //
 void IN_Init(void *windowData);
 void IN_Frame(void);
+void IN_PumpEvents(void);
 void IN_Shutdown(void);
 void IN_Restart(void);
 void IN_GetMousePosition(int *x, int *y);
@@ -1387,6 +1394,8 @@ void	Sys_Print( const char *msg );
 // Sys_Milliseconds should only be used for profiling purposes,
 // any game related timing information should come from event timestamps
 int		Sys_Milliseconds (void);
+// a monotonic clock in microseconds (the frame limiter's deadlines)
+int64_t	Sys_Microseconds (void);
 
 qboolean Sys_RandomBytes( byte *string, int len );
 

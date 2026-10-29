@@ -44,7 +44,11 @@ private:
 public:
     UILayout();
     UILayout(const char *filename);
+    // a layout from text in memory (menus built into the client), loaded
+    // whole at once; name is what errors call it
+    UILayout(const char *name, const char *buffer, int length);
 
     void Load(const char *filename, bool bFullLoad);
+    void LoadBuffer(const char *name, const char *buffer, int length);
     int  ForceLoad(void);
 };

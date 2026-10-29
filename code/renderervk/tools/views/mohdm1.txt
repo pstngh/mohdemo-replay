@@ -1,0 +1,7 @@
+# dm/mohdm1, no fog: world and lightmaps, trees and bushes (alpha-tested
+# static models with vertex deforms), sky
+map dm/mohdm1
+shot m1_spawn 848 -216 60 0 -180 0
+shot m1_court 400 -216 300 30 -180 0
+shot m1_top 0 0 1500 89 0 0
+shot m1_sky 848 -216 60 -50 -150 0

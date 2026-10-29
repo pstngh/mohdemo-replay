@@ -1,0 +1,9 @@
+# m2l3 (single player) with fog off: decals (polygon offset) and the view
+# weapon (depth range 0..0.3)
+map m2l3
+set r_farplane_nofog 1
+shot m2_posters2 400 6060 -150 0 -90 0
+shot m2_vent 300 5562 -140 0 180 0
+shot m2_drain 703 6787 -190 89 0 0
+set cg_drawviewmodel 2
+shot m2_weapon 703 6787 -190 20 0 0

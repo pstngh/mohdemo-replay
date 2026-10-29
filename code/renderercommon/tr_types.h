@@ -211,14 +211,14 @@ typedef enum {
 /*
 ** glconfig_t
 **
-** Contains variables specific to the OpenGL configuration
-** being run right now.  These are constant once the OpenGL
-** subsystem is initialized.
+** Contains variables specific to the renderer configuration
+** being run right now.  These are constant once the renderer
+** is initialized.  The layout is shared with cgame: never change it.
 */
 typedef enum {
 	TC_NONE,
-	TC_S3TC,  // this is for the GL_S3_s3tc extension.
-	TC_S3TC_ARB  // this is for the GL_EXT_texture_compression_s3tc extension.
+	TC_S3TC,  // this is for the S3_s3tc extension.
+	TC_S3TC_ARB  // BC1-BC3 (EXT_texture_compression_s3tc), what renderer_vulkan sets when the device has them
 } textureCompression_t;
 
 typedef enum {

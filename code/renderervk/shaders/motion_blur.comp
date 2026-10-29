@@ -1,0 +1,170 @@
+/*
+===========================================================================
+Copyright (C) 2026 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+// motion_blur.comp -- the motion blur's passes (r_motionBlur, vk_temporal.c,
+// VK_TemporalMotionBlur), what the composite's gather reads
+// (temporal_composite.frag, MOTION_BLUR); the tiles of McGuire et al., "A
+// Reconstruction Filter for Plausible Motion Blur" (2012):
+//  - without NEIGHBOR, a workgroup a tile of K x K pixels (pc.params.z): each
+//    pixel's blur, the motion of the exposure (pc.params.x, half of it: the
+//    blur reaches as far on each side of the pixel) in pixels, its length no
+//    more than K, and its view distance, into u_mbVelocity; the longest of the
+//    tile into u_tile. The motion: the draw's motion vector where it moves,
+//    less the camera's part that r_motionBlurCamera (pc.params.y) leaves out;
+//    elsewhere the camera's (temporal_common.glsl) times that share. The view
+//    weapon moves with the camera: its own motion vector (recoil, reload) or
+//    none, and its distance scaled far down, so that it is in front of
+//    everything (the depth hack draws it so) and keeps its own order
+//  - with NEIGHBOR, an invocation a tile: the longest of the 3 x 3 tiles
+//    around it into u_neighbor, which reaches every pixel that a blur of K or
+//    less can cover
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "temporal_common.glsl"
+
+#ifdef NEIGHBOR
+#define GROUP	8	// VK_TEMPORAL_MB_NEIGHBOR_GROUP
+#else
+#define GROUP	16
+#endif
+
+layout( local_size_x = GROUP, local_size_y = GROUP ) in;
+
+layout( set = 0, binding = 0 ) uniform sampler2D u_depth;
+layout( set = 0, binding = 1 ) uniform sampler2D u_normal;
+layout( set = 0, binding = 2 ) uniform sampler2D u_velocity;
+layout( set = 0, binding = 3, rgba16f ) uniform writeonly image2D u_mbVelocity;	// the half vector in pixels, the view distance
+layout( set = 0, binding = 4, rg16f ) uniform image2D u_tile;		// the longest half vector of each tile
+layout( set = 0, binding = 5, rg16f ) uniform writeonly image2D u_neighbor;	// and of the 3 x 3 tiles around it
+
+layout( push_constant ) uniform Push {
+	TemporalView	view;
+	ivec4	rect;		// the scene's views: x, y, width, height in framebuffer pixels
+	vec4	params;		// half the exposure (in frames of motion), r_motionBlurCamera, the tile size K, 0
+	ivec4	tiles;		// the tiles across and down
+} pc;
+
+#ifdef NEIGHBOR
+
+void main() {
+	ivec2 t = ivec2( gl_GlobalInvocationID.xy );
+	vec2 best = vec2( 0.0 );
+	float bestLen = 0.0;
+	int x, y;
+
+	if ( any( greaterThanEqual( t, pc.tiles.xy ) ) ) {
+		return;
+	}
+	for ( y = -1; y <= 1; y++ ) {
+		for ( x = -1; x <= 1; x++ ) {
+			vec2 v = imageLoad( u_tile, clamp( t + ivec2( x, y ), ivec2( 0 ), pc.tiles.xy - 1 ) ).xy;
+			float len = dot( v, v );
+
+			if ( len > bestLen ) {
+				bestLen = len;
+				best = v;
+			}
+		}
+	}
+	imageStore( u_neighbor, t, vec4( best, 0.0, 0.0 ) );
+}
+
+#else
+
+shared vec2		s_best[GROUP * GROUP];
+
+// the view weapon's view distances are scaled by this: in front of the world
+const float WEAPON_DISTANCE_SCALE = 1.0 / 1024.0;
+
+void main() {
+	int K = int( pc.params.z );
+	ivec2 origin = ivec2( gl_WorkGroupID.xy ) * K;
+	ivec2 local = ivec2( gl_LocalInvocationID.xy );
+	ivec2 size = imageSize( u_mbVelocity );
+	ivec2 lo = pc.rect.xy;
+	ivec2 hi = pc.rect.xy + pc.rect.zw - 1;
+	float share = pc.params.y;
+	vec2 best = vec2( 0.0 );
+	float bestLen = 0.0;
+	int x, y, i;
+
+	for ( y = local.y; y < K; y += GROUP ) {
+		for ( x = local.x; x < K; x += GROUP ) {
+			ivec2 p = origin + ivec2( x, y );
+			vec2 h = vec2( 0.0 );
+			float d = min( pc.view.depth.w, 65000.0 );
+
+			if ( any( greaterThanEqual( p, size ) ) ) {
+				continue;
+			}
+			if ( all( greaterThanEqual( p, lo ) ) && all( lessThanEqual( p, hi ) ) ) {
+				vec4 n = texelFetch( u_normal, p, 0 );
+				bool weapon = TemporalClass( n ) == TEMPORAL_CLASS_WEAPON;
+				bool moves = ( TemporalFlags( n ) & TEMPORAL_FLAG_MOTION ) != 0u;
+				vec2 motion;
+				float len;
+
+				// the far distance can be more than a half float holds
+				d = min( TemporalViewDistance( pc.view, texelFetch( u_depth, p, 0 ).r, weapon ), 65000.0 );
+				if ( weapon ) {
+					motion = moves ? texelFetch( u_velocity, p, 0 ).rg : vec2( 0.0 );
+					d *= WEAPON_DISTANCE_SCALE;
+				} else {
+					vec2 camera = TemporalCameraMotion( pc.view, vec2( p ) + 0.5, d );
+
+					motion = moves ? texelFetch( u_velocity, p, 0 ).rg - camera * ( 1.0 - share ) : camera * share;
+				}
+				h = motion * vec2( pc.view.rect.zw ) * pc.params.x;
+				len = length( h );
+				if ( len > float( K ) ) {
+					h *= float( K ) / len;
+				}
+			}
+			imageStore( u_mbVelocity, p, vec4( h, d, 0.0 ) );
+			if ( dot( h, h ) > bestLen ) {
+				bestLen = dot( h, h );
+				best = h;
+			}
+		}
+	}
+
+	// the longest of the workgroup
+	i = int( gl_LocalInvocationIndex );
+	s_best[i] = best;
+	barrier();
+	for ( int stride = GROUP * GROUP / 2; stride > 0; stride >>= 1 ) {
+		if ( i < stride ) {
+			vec2 other = s_best[i + stride];
+
+			if ( dot( other, other ) > dot( s_best[i], s_best[i] ) ) {
+				s_best[i] = other;
+			}
+		}
+		barrier();
+	}
+	if ( i == 0 ) {
+		imageStore( u_tile, ivec2( gl_WorkGroupID.xy ), vec4( s_best[0], 0.0, 0.0 ) );
+	}
+}
+
+#endif

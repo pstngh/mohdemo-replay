@@ -12,9 +12,6 @@ set(UI_MODULE ui)
 
 set(WINDOWS_ICON_PATH ${CMAKE_SOURCE_DIR}/misc/windows/openmohaa.ico)
 
-set(MACOS_ICON_PATH ${CMAKE_SOURCE_DIR}/misc/macos/openmohaa.icns)
-set(MACOS_BUNDLE_ID org.openmohaa.${CLIENT_NAME})
-
 set(COPYRIGHT "OpenMoHAA Copyright © 2025 OpenMoHAA Team, Inc. All rights reserved.")
 
 set(CONTACT_EMAIL "")

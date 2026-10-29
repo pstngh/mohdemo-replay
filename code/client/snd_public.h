@@ -140,6 +140,7 @@ void MUSIC_UpdateMood(int current, int fallback);
 void MUSIC_UpdateVolume(float volume, float fade_time);
 void MUSIC_StopAllSongs();
 void MUSIC_FreeAllSongs();
+void MUSIC_FlushCaches();
 qboolean MUSIC_Playing();
 int MUSIC_FindSong(const char* name);
 void S_loadsoundtrack();

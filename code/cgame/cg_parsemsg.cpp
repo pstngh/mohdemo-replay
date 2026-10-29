@@ -1642,6 +1642,7 @@ void CG_ParseCGMessage_ver_15()
         case CGM_VOICE_CHAT:
             {
                 qboolean bLocal;
+                qboolean bPlay;
                 int      iOldEnt;
 
                 vStart[0] = cgi.MSG_ReadCoord();
@@ -1653,11 +1654,15 @@ void CG_ParseCGMessage_ver_15()
 
                 iOldEnt = current_entity_number;
 
-                if (bLocal) {
+                // Added in MoHAA Reloaded (as on the metal branch)
+                //  cg_tauntsounds 0: another player's taunt isn't played (nor its file opened); one's own is
+                bPlay = cg_tauntsounds->integer || (cg.snap && iInfo == cg.snap->ps.clientNum);
+
+                if (bPlay && bLocal) {
                     current_entity_number = iInfo;
 
                     commandManager.PlaySound(szTmp, vStart, CHAN_AUTO, -1, -1, -1, 0);
-                } else if (cg.snap) {
+                } else if (bPlay && cg.snap) {
                     current_entity_number = cg.snap->ps.clientNum;
 
                     commandManager.PlaySound(szTmp, vStart, CHAN_LOCAL, -1, -1, -1, 1);
@@ -2031,7 +2036,8 @@ void CG_ParseCGMessage_ver_6()
 
         case CGM6_VOICE_CHAT:
             {
-                int iOldEnt;
+                int      iOldEnt;
+                qboolean bPlay;
 
                 vStart[0] = cgi.MSG_ReadCoord();
                 vStart[1] = cgi.MSG_ReadCoord();
@@ -2042,11 +2048,15 @@ void CG_ParseCGMessage_ver_6()
 
                 iOldEnt = current_entity_number;
 
-                if (iLarge) {
+                // Added in MoHAA Reloaded (as on the metal branch)
+                //  cg_tauntsounds 0: another player's taunt isn't played (nor its file opened); one's own is
+                bPlay = cg_tauntsounds->integer || (cg.snap && iInfo == cg.snap->ps.clientNum);
+
+                if (bPlay && iLarge) {
                     current_entity_number = iInfo;
 
                     commandManager.PlaySound(szTmp, vStart, CHAN_LOCAL, -1, -1, -1, 0);
-                } else if (cg.snap) {
+                } else if (bPlay && cg.snap) {
                     current_entity_number = cg.snap->ps.clientNum;
 
                     commandManager.PlaySound(szTmp, vStart, CHAN_LOCAL, -1, -1, -1, 1);

@@ -22,6 +22,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "snd_local.h"
 #include "cl_ui.h"
+#include "client.h"
+
+#include <stdio.h>
+#include <string.h>
 
 byte *data_p;
 byte *iff_end;
@@ -254,28 +258,58 @@ wavinfo_t GetWavinfo(const char *name, byte *wav, int wavlength)
         info.width = (float)GetLittleShort() / 8.f;
         data_p += 2;
 
-        FindChunk("data");
-        if (!data_p) {
-            Com_Printf("Missing data chunk\n");
+        if (info.channels < 1 || info.channels > 2 || bytealign < 4 * info.channels + 4 * info.channels
+            || (bytealign % (4 * info.channels)) != 0) {
+            Com_Printf("Sound %s has a bad IMA ADPCM block size\n", name);
             return info;
         }
 
-        data_p += 4;
-        if (info.width >= 1.0) {
-            samples = (int)((float)GetLittleLong() / info.width);
-        } else {
-            samples = (int)((float)GetLittleLong() * info.width);
-        }
+        {
+            int spb       = (bytealign / info.channels - 4) / 4 * 8 + 1;
+            int factCount = -1;
+            int dataLen, blocks, rem;
 
-        if (!info.samples) {
-            info.samples = samples;
-        } else if (samples < info.samples) {
-            Com_Error(ERR_DROP, "Sound %s has a bad loop length", name);
-        }
+            /* Fixed in Omaha: the fact chunk holds the exact frame count when present. */
+            FindChunk("fact");
+            if (data_p && iff_chunk_len >= 4) {
+                data_p += 8;
+                factCount = GetLittleLong();
+            }
 
-        info.dataofs   = data_p - wav;
-        info.datasize  = iff_chunk_len - bytealign + info.dataofs;
-        info.dataalign = (bytealign / info.channels - 4) / 4 * 8 + 1;
+            FindChunk("data");
+            if (!data_p) {
+                Com_Printf("Missing data chunk\n");
+                return info;
+            }
+
+            data_p += 4;
+            dataLen = GetLittleLong();
+            if (dataLen < 0 || dataLen > (int)((byte *)iff_end - data_p)) {
+                dataLen = (int)((byte *)iff_end - data_p);
+            }
+
+            /* Fixed in Omaha: whole blocks plus a truncated last block (it was bytes * width). */
+            blocks  = dataLen / bytealign;
+            rem     = dataLen % bytealign;
+            samples = blocks * spb;
+            if (rem >= 4 * info.channels) {
+                samples += 1 + (rem - 4 * info.channels) / (4 * info.channels) * 8;
+            }
+            if (factCount > 0 && factCount < samples) {
+                samples = factCount;
+            }
+
+            if (!info.samples) {
+                info.samples = samples;
+            } else if (samples < info.samples) {
+                Com_Error(ERR_DROP, "Sound %s has a bad loop length", name);
+            }
+
+            info.dataofs = data_p - wav;
+            /* Fixed in Omaha: datasize is the absolute end offset, as in the PCM branch. */
+            info.datasize  = info.dataofs + dataLen;
+            info.dataalign = spb;
+        }
     } else if (info.format == 1) {
         info.channels = GetLittleShort();
         info.rate     = (float)GetLittleLong();
@@ -299,8 +333,9 @@ wavinfo_t GetWavinfo(const char *name, byte *wav, int wavlength)
             Com_Error(ERR_DROP, "Sound %s has a bad loop length", name);
         }
 
-        info.dataofs   = data_p - wav;
-        info.datasize  = iff_chunk_len;
+        info.dataofs = data_p - wav;
+        /* Fixed in Omaha: datasize must be the absolute end offset so the payload is datasize - dataofs. */
+        info.datasize  = info.dataofs + iff_chunk_len;
         info.dataalign = (bytealign / info.channels - 4) / 4 * 8 + 1;
         // dataalign should always be 1
         assert(info.dataalign == 1);
@@ -436,7 +471,12 @@ qboolean S_LoadSound(const char *fileName, sfx_t *sfx, int streamed, qboolean fo
     char         tempName[MAX_RES_NAME + 1];
     int          realKhz;
 
-    sfx->buffer = 0;
+    // a reload replaces whatever an earlier load left behind
+    S_Driver_FreeSfx(sfx);
+    if (sfx->data) {
+        Z_Free(sfx->data);
+        sfx->data = NULL;
+    }
 
     if (fileName[0] == '*') {
         return qfalse;
@@ -471,7 +511,8 @@ qboolean S_LoadSound(const char *fileName, sfx_t *sfx, int streamed, qboolean fo
 
     FS_Read(sfx->data, size, file_handle);
     FS_FCloseFile(file_handle);
-    sfx->info = GetWavinfo(fileName, sfx->data, size);
+    sfx->info         = GetWavinfo(fileName, sfx->data, size);
+    sfx->info.srcrate = sfx->info.rate;
 
     if (sfx->info.channels != 1 && !streamed) {
         Com_Printf("%s is a stereo wav file\n", fileName);
@@ -494,6 +535,9 @@ qboolean S_LoadSound(const char *fileName, sfx_t *sfx, int streamed, qboolean fo
         break;
     case 44:
         realKhz = 44100;
+        break;
+    case 48:
+        realKhz = 48000;
         break;
     }
 

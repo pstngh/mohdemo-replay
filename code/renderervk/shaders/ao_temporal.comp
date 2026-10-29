@@ -1,0 +1,215 @@
+/*
+===========================================================================
+Copyright (C) 2026 the OpenMoHAA team
+
+This file is part of OpenMoHAA source code.
+
+OpenMoHAA source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+OpenMoHAA source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with OpenMoHAA source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+// ao_temporal.comp -- the ambient occlusion blended over frames and blurred
+// (r_ao, ao_common.glsl), one pass: gtao_main.comp's noise changes every
+// frame, so the mean of the last frames converges where the surface stays.
+//  - the last frame's result is moved by the pixel's motion (the draw's
+//    motion vector where it moves, else the camera's), read bilinear among
+//    the 2 x 2 texels whose last view distance is the surface's (no history
+//    from what was in front or behind; the texels picked here, not by a
+//    gather: the hardware picks a gather's from the coordinate with 8 bits
+//    below the texel, and a point a thousandth of a pixel before a texel
+//    center came back as the texels one further, under weights worked out
+//    for these: the history moved a pixel a frame and the noise streaked),
+//    clamped to the range of this frame's 3 x 3 (a shadow that moved away
+//    leaves no trail). Each pixel counts its frames: the first ones weigh as
+//    much as the rest together (1 / n), up to pc.ao2.z frames (a quarter of
+//    it for what moves). Written to o_history before the blur: the blur
+//    doesn't pile up over frames
+//  - then the blur (AoBlur) into the result (AoResult), or into o_blur for
+//    ao_denoise.comp's second blur (pc.ints.w)
+// 16 x 16 pixels a workgroup. The blur needs the blended values of the
+// pixels around its own: the workgroup loads the raw occlusion and the view
+// distances of its pixels and 2 more around them (20 x 20) into shared
+// memory, blends 18 x 18 (the ring around twice, in the neighbouring
+// workgroups too), then blurs its 16 x 16 from there: the same values as a
+// pass each, without writing the blend out and reading it back (two passes
+// took a sixth longer).
+
+#version 450
+#include "ao_common.glsl"
+
+#define GROUP	16
+#define RT		( GROUP + 4 )	// the raw occlusion's and the view distances' tile
+#define HT		( GROUP + 2 )	// the blended tile
+
+layout( local_size_x = GROUP, local_size_y = GROUP ) in;
+
+shared float	s_raw[RT * RT];
+shared float	s_z[RT * RT];
+shared float	s_vis[HT * HT];
+shared float	s_frames[HT * HT];
+
+// the pixel q blended with the history; r its position in the raw tile
+vec2 Blend( ivec2 q, ivec2 r, ivec2 lo, ivec2 hi ) {
+	vec2 fbSize = vec2( textureSize( u_aoDepth, 0 ) );
+	float vmin = 1.0, vmax = 0.0;
+	float cur = s_raw[r.y * RT + r.x];
+	float sd = s_z[r.y * RT + r.x];
+	float d = abs( sd );
+	bool weapon = sd < 0.0;
+	int x, y;
+
+	for ( y = -1; y <= 1; y++ ) {
+		for ( x = -1; x <= 1; x++ ) {
+			float v = s_raw[( r.y + y ) * RT + r.x + x];
+
+			vmin = min( vmin, v );
+			vmax = max( vmax, v );
+		}
+	}
+
+	if ( AoIsFar( d ) || pc.ao2.y == 0.0 || pc.fogParams.w == 0.0 ) {
+		return vec2( cur, 1.0 );
+	}
+
+	vec2 pixel = vec2( q ) + 0.5;
+	bool moves = ( TemporalFlags( texelFetch( u_normal, q, 0 ) ) & TEMPORAL_FLAG_MOTION ) != 0u;
+	vec2 motion;
+	float expected;		// the last frame's view distance of the surface
+
+	if ( moves ) {
+		motion = texelFetch( u_velocity, q, 0 ).rg;
+		expected = d;
+	} else if ( weapon ) {
+		// a weapon without motion vectors moves with the camera
+		motion = vec2( 0.0 );
+		expected = d;
+	} else {
+		vec4 prevClip = pc.view.reproject * vec4( TemporalViewPosition( pc.view, pixel, d ), 1.0 );
+
+		if ( prevClip.w <= 1e-6 ) {
+			return vec2( cur, 1.0 );
+		}
+		motion = ( TemporalPixelNdc( pc.view, pixel ) - prevClip.xy / prevClip.w ) * vec2( 0.5, -0.5 );
+		expected = prevClip.w;
+	}
+	vec2 prevPixel = pixel - motion * vec2( pc.view.rect.zw );
+
+	if ( any( lessThan( prevPixel, vec2( lo ) ) ) || any( greaterThan( prevPixel, vec2( hi + 1 ) ) ) ) {
+		return vec2( cur, 1.0 );
+	}
+
+	// the 2 x 2 texels around the point, picked here (order (0, 1), (1, 1),
+	// (1, 0), (0, 0))
+	vec2 t = prevPixel - 0.5;
+	ivec2 b0 = ivec2( floor( t ) );
+	vec2 f = t - vec2( b0 );
+	ivec2 maxT = ivec2( fbSize ) - 1;
+	ivec2 q00 = clamp( b0, ivec2( 0 ), maxT ), q11 = clamp( b0 + 1, ivec2( 0 ), maxT );
+	ivec2 q01 = ivec2( q00.x, q11.y ), q10 = ivec2( q11.x, q00.y );
+	vec4 bilinear = vec4( ( 1.0 - f.x ) * f.y, f.x * f.y, f.x * ( 1.0 - f.y ), ( 1.0 - f.x ) * ( 1.0 - f.y ) );
+	vec4 prevD = vec4( texelFetch( u_prevAoDepth, q01, 0 ).r, texelFetch( u_prevAoDepth, q11, 0 ).r,
+		texelFetch( u_prevAoDepth, q10, 0 ).r, texelFetch( u_prevAoDepth, q00, 0 ).r );
+	vec2 h01 = texelFetch( u_history, q01, 0 ).rg, h11 = texelFetch( u_history, q11, 0 ).rg;
+	vec2 h10 = texelFetch( u_history, q10, 0 ).rg, h00 = texelFetch( u_history, q00, 0 ).rg;
+	vec4 histV = vec4( h01.x, h11.x, h10.x, h00.x );
+	vec4 histN = vec4( h01.y, h11.y, h10.y, h00.y );
+	float tolerance = ( moves ? 0.1 : 0.03 ) * expected + 1.0;
+	vec4 match;
+
+	for ( int i = 0; i < 4; i++ ) {
+		float pd = prevD[i];
+
+		match[i] = ( pd < 0.0 ) == weapon && abs( abs( pd ) - expected ) <= tolerance ? 1.0 : 0.0;
+	}
+	vec4 w = bilinear * match;
+	float sum = dot( w, vec4( 1.0 ) );
+
+	if ( sum < 1e-3 ) {
+		return vec2( cur, 1.0 );
+	}
+	float history = dot( w, histV ) / sum;
+	float frames = dot( w, histN ) / sum;
+
+	// what this frame doesn't have around the pixel: not from here
+	history = clamp( history, vmin - 0.05, vmax + 0.05 );
+
+	float maxFrames = moves ? max( pc.ao2.z * 0.25, 2.0 ) : pc.ao2.z;
+	frames = min( frames + 1.0, maxFrames );
+	return vec2( mix( history, cur, 1.0 / frames ), frames );
+}
+
+void main() {
+	ivec2 lo = pc.view.rect.xy;
+	ivec2 hi = pc.view.rect.xy + pc.view.rect.zw - 1;
+	ivec2 origin = lo + ivec2( gl_WorkGroupID.xy ) * GROUP;
+	ivec2 local = ivec2( gl_LocalInvocationID.xy );
+	ivec2 p = origin + local;
+	int i;
+
+	// the raw occlusion and the view distances, the edges repeated
+	for ( i = int( gl_LocalInvocationIndex ); i < RT * RT; i += GROUP * GROUP ) {
+		ivec2 q = clamp( origin - 2 + ivec2( i % RT, i / RT ), lo, hi );
+
+		s_raw[i] = texelFetch( u_raw, q, 0 ).r;
+		s_z[i] = texelFetch( u_aoDepth, q, 0 ).r;
+	}
+	barrier();
+
+	// blended: the workgroup's pixels and the ring around them (a pixel off
+	// the view as its nearest one in it); the workgroup's own to the history
+	for ( i = int( gl_LocalInvocationIndex ); i < HT * HT; i += GROUP * GROUP ) {
+		ivec2 h = ivec2( i % HT, i / HT );
+		ivec2 q = clamp( origin - 1 + h, lo, hi );
+		vec2 b = Blend( q, q - ( origin - 2 ), lo, hi );
+
+		s_vis[i] = b.x;
+		s_frames[i] = b.y;
+		if ( all( greaterThanEqual( h, ivec2( 1 ) ) ) && all( lessThanEqual( h, ivec2( GROUP ) ) ) && all( lessThanEqual( origin - 1 + h, hi ) ) ) {
+			imageStore( o_history, origin - 1 + h, vec4( b, 0.0, 0.0 ) );
+		}
+	}
+	barrier();
+
+	if ( any( greaterThan( p, hi ) ) ) {
+		return;
+	}
+
+	// the blur from the tiles
+	ivec2 hc = local + 1;		// the pixel in the blended tile
+	ivec2 rc = local + 2;		// and in the raw one
+	float v[9], z[13];
+	int x, y;
+
+	for ( y = -1; y <= 1; y++ ) {
+		for ( x = -1; x <= 1; x++ ) {
+			v[( y + 1 ) * 3 + x + 1] = s_vis[( hc.y + y ) * HT + hc.x + x];
+			z[( y + 1 ) * 3 + x + 1] = s_z[( rc.y + y ) * RT + rc.x + x];
+		}
+	}
+	z[9] = s_z[rc.y * RT + rc.x - 2];
+	z[10] = s_z[rc.y * RT + rc.x + 2];
+	z[11] = s_z[( rc.y - 2 ) * RT + rc.x];
+	z[12] = s_z[( rc.y + 2 ) * RT + rc.x];
+
+	float frames = s_frames[hc.y * HT + hc.x];
+	bool final = pc.ints.w == AO_PASS_HISTORY_TO_RESULT;
+	float blurred = AoBlur( v, z, frames, final );
+
+	if ( final ) {
+		imageStore( o_result, p, AoResult( blurred, z[4] ) );
+	} else {
+		imageStore( o_blur, p, vec4( blurred, frames, 0.0, 0.0 ) );
+	}
+}

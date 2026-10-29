@@ -959,8 +959,7 @@ INPUT                  = docs/extras \
                          code/parser \
                          code/qcommon \
                          code/renderercommon \
-                         code/renderergl1 \
-                         code/renderergl2 \
+                         code/renderervk \
                          code/script \
                          code/sdl \
                          code/server \

@@ -6103,6 +6103,16 @@ void ClientGameCommandManager::ArchiveToMemory(MemArchiver& archiver)
     }
 
     if (archiver.IsReading()) {
+        ctempmodel_t *p;
+
+        // AllocateTempModel and FreeTempModel keep the count
+        m_numActiveTempModels = 0;
+        for (p = m_active_tempmodels.prev; p != &m_active_tempmodels; p = p->prev) {
+            m_numActiveTempModels++;
+        }
+    }
+
+    if (archiver.IsReading()) {
         archiver.ArchiveInteger(&num);
         if (m_iAllocatedvsssources != num) {
             m_iAllocatedvsssources = num;

@@ -4,8 +4,9 @@ Rewatch and record **Medal of Honor: Allied Assault** multiplayer demos. A
 small desktop app lists your demos and what happens in them (kills and
 rounds), jumps straight to any moment, and records MP4 videos
 with sound. It runs on a modified [OpenMoHAA](https://github.com/openmoh/openmohaa),
-the open-source engine for the game, which does the work through new console
-commands.
+the open-source engine for the game, here the Vulkan port of
+[MoHAA Reloaded](https://github.com/pstngh/MoHAA-Reloaded/tree/vulkan),
+which does the work through new console commands.
 
 ![The app with a 52-minute demo of The Hunt: the demos where Mako plays, and the multi-kills of this one](replay/screenshot.png)
 
@@ -41,21 +42,28 @@ kills or more by one player, each at most 3 seconds after the one before.
 
 ## Requirements
 
-- Linux (Wayland or X11) or macOS. Not Windows: the app talks to the game
-  through a named pipe, which the game only has on Unix-like systems.
+- Linux (Wayland or X11), with a GPU and a Vulkan 1.1 driver (Mesa's RADV,
+  ANV or NVK, or NVIDIA's). Not Windows: the app talks to the game through
+  a named pipe, which the game only has on Unix-like systems.
 - The game files of Medal of Honor: Allied Assault (the folder with
   `main/Pak0.pk3`), and the files of any custom map the demos use.
 - Allied Assault demos (`.dm3`), recorded while playing or spectating.
   Spearhead and Breakthrough demos aren't supported.
 - Python 3 and PySide6 for the app, FFmpeg to record.
 - To build the game: CMake 3.25 or later, Ninja, a C++ compiler, Flex,
-  Bison, SDL2 and OpenAL Soft.
+  Bison, libcurl, SDL 3 (3.2.0 or later) and the Vulkan headers 1.4.
 
 On Ubuntu or Debian:
 
 ```bash
-sudo apt install cmake ninja-build g++ flex bison libsdl2-dev libopenal-dev python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets ffmpeg
+sudo apt install cmake ninja-build g++ flex bison libcurl4-openssl-dev python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets ffmpeg
 ```
+
+SDL 3 is `libsdl3-dev` on Ubuntu 25.04 and later and Debian 13. Ubuntu 22.04
+and 24.04 have none, and their Vulkan headers are too old: build both as
+[MoHAA Reloaded's README](https://github.com/pstngh/MoHAA-Reloaded/tree/vulkan#building)
+shows, and add `-DSDL3_DIR=...` and `-DVulkanHeaders_DIR=...` to the
+configure line below.
 
 ## Build
 
@@ -67,12 +75,8 @@ cmake --build .cmake
 ```
 
 This makes the game (`openmohaa`) and the demo indexer (`mohdemoindex`) in
-`.cmake/RelWithDebInfo`, where the app looks for them. The sound of videos
-needs OpenAL Soft, the OpenAL of Linux distributions.
-
-macOS builds in CI but hasn't been tried on a Mac yet:
-[shared-build-macos.yml](.github/workflows/shared-build-macos.yml) shows
-how it builds there, with OpenAL Soft.
+`.cmake/RelWithDebInfo`, where the app looks for them. With an SDL 3 built
+by hand, copy its `libSDL3.so.0` there too.
 
 ## Run
 
@@ -140,7 +144,10 @@ with the engine's tests; the demo index is checked on real demos with
 
 ## Credits and license
 
-Built on [OpenMoHAA](https://github.com/openmoh/openmohaa), itself built on
+Built on the `vulkan` branch of
+[MoHAA Reloaded](https://github.com/pstngh/MoHAA-Reloaded) (its Vulkan
+renderer and JayRewd's Omaha sound mixer), itself built on
+[OpenMoHAA](https://github.com/openmoh/openmohaa),
 [ioquake3](https://github.com/ioquake/ioq3) and the F.A.K.K SDK. For the
 game itself (installing it, playing online, running a server), see
 OpenMoHAA and the [documentation](docs/markdown) kept from it.

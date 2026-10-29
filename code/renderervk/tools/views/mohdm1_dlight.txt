@@ -1,0 +1,24 @@
+# dm/mohdm1 dynamic lights: invisible script_models (fx/dummy.tik) given a
+# light (constantLight, added by cgame with R_AddLightToScene). They light the
+# world through the dynamic lightmaps (R_RealDlightFace/Patch, uploaded by
+# R_UploadDlights at the start of each view; r_fastdlights 1 instead projects
+# tr.dlightImage in an extra pass) and models through the light grid.
+# spmap: the `script` console command needs a single player game.
+spmap dm/mohdm1
+set spawn fx/dummy.tik targetname dl1
+set spawn fx/dummy.tik targetname dl2
+set spawn fx/dummy.tik targetname dl3
+set spawn lights/lightbulb_caged_red-lit.tik targetname bulb
+set wait 200
+set script dl1 origin "640 -216 40"
+set script dl1 light 1 0.6 0.3 250
+set script dl2 origin "700 -60 100"
+set script dl2 light 0.3 0.5 1 400
+set script dl3 origin "520 -420 120"
+set script dl3 light 0.2 1 0.2 300
+set script bulb origin "600 -300 60"
+set wait 4000
+shot dl_a 848 -216 60 0 180 0
+shot dl_b 848 -216 60 30 160 0
+shot dl_c 848 -216 200 60 180 0
+shot dl_d 848 -216 60 10 210 0

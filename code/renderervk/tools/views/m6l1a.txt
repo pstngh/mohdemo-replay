@@ -1,0 +1,8 @@
+# m6l1a (single player, snowy forest at night): farplane fog 1500, 2763
+# static models (snow-covered firs), LOD terrain; the snow particles are
+# random and differ between runs
+map m6l1a
+shot m61_forest 6152 -6528 5500 0 135 0
+shot m61_trees 6152 -6528 5500 0 255 0
+shot m61_up 6152 -6528 5500 -40 135 0
+shot m61_slope 2433 558 5861 20 0 0

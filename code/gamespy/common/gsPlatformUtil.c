@@ -86,6 +86,9 @@ typedef struct GSIResolveHostnameInfo
 		{
 			// got the ip
 			handle->ip = *(unsigned int *)hostent->h_addr_list[0];
+			// 0.0.0.0 (a blocked name) would read as GSI_STILL_RESOLVING_HOSTNAME
+			if(handle->ip == GSI_STILL_RESOLVING_HOSTNAME)
+				handle->ip = GSI_ERROR_RESOLVING_HOSTNAME;
 		}
 		else
 		{
@@ -167,6 +170,7 @@ static void *gsiResolveHostnameThread(void * arg)
 //
 // NOTE: The compiler option "-lpthread" must used for this
 #if defined(_UNIX)
+#include <pthread.h>
 ////////////////////////////////////////////////////////////////////////////////
 static void gsiResolveHostnameThread(void * arg)
 {
@@ -175,10 +179,15 @@ static void gsiResolveHostnameThread(void * arg)
 	int error;
 	char *ip;
 
+	// frees the thread's resources when it ends: gsiExitThread(handle->threadID) at the end would
+	// read the handle, which the caller frees as soon as finishedResolving is set
+	pthread_detach(pthread_self());
+
 	SocketStartUp();
 
 	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = PF_UNSPEC;
+	// the callers take IPv4 addresses (the result is read as a sockaddr_in)
+	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 
 	// DNS lookup (works with pthreads)
@@ -194,6 +203,9 @@ static void gsiResolveHostnameThread(void * arg)
 
 		// now convert to unsigned int and store it
 		handle->ip = inet_addr(ip);
+		// 0.0.0.0 (a blocked name) would read as GSI_STILL_RESOLVING_HOSTNAME
+		if(handle->ip == GSI_STILL_RESOLVING_HOSTNAME)
+			handle->ip = GSI_ERROR_RESOLVING_HOSTNAME;
 
 		// free the memory used
 		freeaddrinfo(result);
@@ -206,11 +218,8 @@ static void gsiResolveHostnameThread(void * arg)
 
 	SocketShutDown();
 
-	// finished resolving
+	// finished resolving: the handle may be freed from here on
 	handle->finishedResolving = 1;
-
-	// explicitly exit the thread to free resources
-	gsiExitThread(handle->threadID);
 }
 #endif //_UNIX
 ////////////////////////////////////////////////////////////////////////////////

@@ -1,0 +1,7 @@
+# m1l2a (single player, night town): lanterns, starry africanight sky, alleys
+map m1l2a
+shot m12_court 6984 -5048 100 0 180 0
+shot m12_lamp 6984 -5048 100 0 300 0
+shot m12_stars 6984 -5048 100 -40 180 0
+shot m12_yard 1488 3784 -50 -10 270 0
+shot m12_alley 3000 -1000 100 10 90 0

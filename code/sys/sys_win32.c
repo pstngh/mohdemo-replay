@@ -278,6 +278,27 @@ int Sys_Milliseconds (void)
 
 /*
 ================
+Sys_Microseconds
+================
+*/
+int64_t Sys_Microseconds (void)
+{
+	static LARGE_INTEGER frequency;
+	LARGE_INTEGER counter;
+
+	if (!frequency.QuadPart) {
+		QueryPerformanceFrequency(&frequency);
+	}
+	QueryPerformanceCounter(&counter);
+
+	// whole seconds and the rest apart: counter * 1000000 would overflow
+	// after a few days of uptime
+	return counter.QuadPart / frequency.QuadPart * 1000000
+		+ counter.QuadPart % frequency.QuadPart * 1000000 / frequency.QuadPart;
+}
+
+/*
+================
 Sys_RandomBytes
 ================
 */

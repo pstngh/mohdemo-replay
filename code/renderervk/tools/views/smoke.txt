@@ -1,0 +1,49 @@
+# Debris and smoke in front of the camera, for timing the light grid
+# lookups (README, Performance, Light grid lookups): emitters on the square
+# of dm/mohdm1 below the allied spawn that keep throwing pipes and beams
+# (metaljibs: temporary models that bounce and come to rest, each lit by a
+# light grid lookup every frame, R_GetLightingForSmoke) and volumetric
+# smoke (sprites lit at vss_lighting_fps); about 130 lookups a frame in
+# sm_front. Random content: the debris lands elsewhere in every run.
+spmap dm/mohdm1
+set spawn script_model model emitters/metaljibs_1.tik targetname e1
+set spawn script_model model emitters/metaljibs_1.tik targetname e2
+set spawn script_model model emitters/metaljibs_2.tik targetname e3
+set spawn script_model model emitters/metaljibs_2.tik targetname e4
+set spawn script_model model emitters/metaljibs_1.tik targetname e5
+set spawn script_model model emitters/smoke_airstrike_crater.tik targetname e6
+set spawn script_model model emitters/fireandsmoke.tik targetname e7
+set spawn script_model model emitters/linger_smoke.tik targetname e8
+set spawn script_model model emitters/metaljibs_1.tik targetname e9
+set spawn script_model model emitters/metaljibs_2.tik targetname e10
+set spawn script_model model emitters/metaljibs_1.tik targetname e11
+set spawn script_model model emitters/metaljibs_2.tik targetname e12
+set spawn script_model model emitters/metaljibs_1.tik targetname e13
+set wait 200
+set script e1 origin "720 -120 120"
+set script e2 origin "522 -35 120"
+set script e3 origin "607 -203 120"
+set script e4 origin "396 -256 120"
+set script e5 origin "302 -6 120"
+set script e6 origin "450 -150 40"
+set script e7 origin "600 -100 20"
+set script e8 origin "350 -200 40"
+set script e9 origin "650 -300 120"
+set script e10 origin "480 -80 120"
+set script e11 origin "560 -260 120"
+set script e12 origin "380 -120 120"
+set script e13 origin "700 -20 120"
+set script e1 anim start
+set script e2 anim start
+set script e3 anim start
+set script e4 anim start
+set script e5 anim start
+set script e8 anim start
+set script e9 anim start
+set script e10 anim start
+set script e11 anim start
+set script e12 anim start
+set script e13 anim start
+set wait 8000
+shot sm_front 848 -216 60 0 180 0
+shot sm_down 848 -216 160 30 180 0

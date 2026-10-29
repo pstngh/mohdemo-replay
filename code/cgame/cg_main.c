@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "cg_parsemsg.h"
 #include "cg_archive.h"
 #include "cg_radar.h"
+#include "../corepp/tiki.h"
 
 #ifdef _WIN32
 #    include <windows.h>
@@ -48,6 +49,7 @@ cvar_t *cg_debugAnim;
 cvar_t *cg_debugAnimWatch;
 cvar_t *cg_errorDecay;
 cvar_t *cg_nopredict;
+cvar_t *cg_splean;
 cvar_t *cg_showmiss;
 cvar_t *cg_addMarks;
 cvar_t *cg_maxMarks;
@@ -72,6 +74,7 @@ cvar_t *cg_smoothClientsTime;
 cvar_t *pmove_fixed;
 cvar_t *pmove_msec;
 cvar_t *cg_pmove_msec;
+cvar_t *cl_movefps;
 cvar_t *dm_playermodel;
 cvar_t *dm_playergermanmodel;
 cvar_t *cg_forceModel;
@@ -81,9 +84,11 @@ cvar_t *cg_acidtrip;
 cvar_t *cg_hud;
 cvar_t *cg_huddraw_force;
 cvar_t *cg_drawsvlag;
-cvar_t *cg_crosshair;
-cvar_t *cg_crosshair_friend;
 cvar_t *ui_crosshair;
+cvar_t *cg_crosshair_length;
+cvar_t *cg_crosshair_gap;
+cvar_t *cg_crosshair_thickness;
+cvar_t *cg_crosshair_color;
 cvar_t *vm_offset_max;
 cvar_t *vm_offset_speed;
 cvar_t *vm_sway_front;
@@ -119,6 +124,9 @@ cvar_t *cg_fov;
 cvar_t *cg_cheats;
 cvar_t *cg_followplayer;
 cvar_t *cg_followcamera;
+cvar_t *cg_precache;
+cvar_t *cg_csAppend;
+cvar_t *cg_tauntsounds;
 
 /*
 =================
@@ -138,6 +146,9 @@ void CG_RegisterCvars(void)
     cg_debugAnimWatch             = cgi.Cvar_Get("cg_debuganimwatch", "0", CVAR_CHEAT);
     cg_errorDecay                 = cgi.Cvar_Get("cg_errordecay", "100", 0);
     cg_nopredict                  = cgi.Cvar_Get("cg_nopredict", "0", 0);
+    // Added in OPM
+    //  The game's cvar, for lean prediction
+    cg_splean                     = cgi.Cvar_Get("g_splean", "0", 0);
     cg_showmiss                   = cgi.Cvar_Get("cg_showmiss", "0", 0);
     cg_stats                      = cgi.Cvar_Get("cg_stats", "0", 0);
     cg_hidetempmodels             = cgi.Cvar_Get("cg_hidetempmodels", "0", 0);
@@ -159,6 +170,7 @@ void CG_RegisterCvars(void)
     pmove_fixed                   = cgi.Cvar_Get("pmove_fixed", "0", 0);
     pmove_msec                    = cgi.Cvar_Get("pmove_msec", "8", 0);
     cg_pmove_msec                 = cgi.Cvar_Get("cg_pmove_msec", "8", 0);
+    cl_movefps                    = cgi.Cvar_Get("cl_movefps", "100", 0);
     cg_shadows                    = cgi.Cvar_Get("cg_shadows", "0", CVAR_ARCHIVE);
     cg_shadowscount               = cgi.Cvar_Get("cg_shadowscount", "8", 0);
     cg_shadowdebug                = cgi.Cvar_Get("cg_shadowdebug", "0", 0);
@@ -172,12 +184,12 @@ void CG_RegisterCvars(void)
     cg_hud                        = cgi.Cvar_Get("cg_hud", "0", 0);
     cg_huddraw_force              = cgi.Cvar_Get("cg_huddraw_force", "0", CVAR_SAVEGAME);
     cg_drawsvlag                  = cgi.Cvar_Get("cg_drawsvlag", "1", CVAR_ARCHIVE);
-    cg_crosshair                  = cgi.Cvar_Get("cg_crosshair", "textures/hud/crosshair", CVAR_ARCHIVE);
-
-    // 1.11 and below will fallback to cg_crosshair if the texture doesn't exist
-    // as it doesn't have crosshair_friend texture
-    cg_crosshair_friend = cgi.Cvar_Get("cg_crosshair_friend", "textures/hud/crosshair_friend", CVAR_ARCHIVE);
+    // the crosshair (CG_UpdateCrosshair): by default the stock image's shape, in HUD pixels
     ui_crosshair                  = cgi.Cvar_Get("ui_crosshair", "1", CVAR_ARCHIVE);
+    cg_crosshair_length           = cgi.Cvar_Get("cg_crosshair_length", "4", CVAR_ARCHIVE);
+    cg_crosshair_gap              = cgi.Cvar_Get("cg_crosshair_gap", "3", CVAR_ARCHIVE);
+    cg_crosshair_thickness        = cgi.Cvar_Get("cg_crosshair_thickness", "1", CVAR_ARCHIVE);
+    cg_crosshair_color            = cgi.Cvar_Get("cg_crosshair_color", "FFFFFF", CVAR_ARCHIVE);
     vm_offset_max                 = cgi.Cvar_Get("vm_offset_max", "8.0", 0);
     vm_offset_speed               = cgi.Cvar_Get("vm_offset_speed", "8.0", 0);
     vm_sway_front                 = cgi.Cvar_Get("vm_sway_front", "0.1", 0);
@@ -217,6 +229,12 @@ void CG_RegisterCvars(void)
     cg_cheats = cgi.Cvar_Get("cheats", "0", CVAR_USERINFO | CVAR_SERVERINFO | CVAR_LATCH);
     cg_followplayer = cgi.Cvar_Get("cg_followplayer", "", CVAR_ARCHIVE);
     cg_followcamera = cgi.Cvar_Get("cg_followcamera", "1", CVAR_ARCHIVE);
+    cg_precache = cgi.Cvar_Get("cg_precache", "7", CVAR_ARCHIVE);
+    // changed configstrings copied one by one (CG_ConfigStringModified)
+    cg_csAppend = cgi.Cvar_Get("cg_csAppend", "1", 0);
+    // 0: other players' taunts (the instant messages' voices) aren't played; their radar icon and text stay
+    // (MoHAA Reloaded, as on the metal branch)
+    cg_tauntsounds = cgi.Cvar_Get("cg_tauntsounds", "1", CVAR_ARCHIVE);
 }
 /*
 ===============
@@ -539,6 +557,324 @@ void CG_ProcessConfigString(int num, qboolean modelOnly)
 
 /*
 =================
+CG_PrecacheModel
+
+A model the server may announce during the match, registered now as one of
+cgame's own: it stays when the server frees its configstring. The stock
+precache script names models the game data hasn't, which would print an
+error. Then what the server makes of it: the models its server init commands
+name (a weapon's projectile, the projectile's explosion) and a turret's view
+model (TurretGun::CreateViewModel), one level deep each.
+=================
+*/
+static void CG_PrecacheModel(const char *name, int depth)
+{
+    char              path[MAX_QPATH];
+    dtiki_t          *tiki;
+    const dtikicmd_t *cmd;
+    size_t            len;
+    int               i, j;
+
+    if (Q_stricmpn(name, "models/", 7)) {
+        Com_sprintf(path, sizeof(path), "models/%s", name);
+    } else {
+        Q_strncpyz(path, name, sizeof(path));
+    }
+    // the server's name for it (CanonicalTikiName)
+    cgi.FS_CanonicalFilename(path);
+
+    if (cgi.FS_ReadFile(path, NULL, qtrue) == -1) {
+        return;
+    }
+
+    tiki = cgi.R_Model_GetHandle(cgi.R_RegisterModel(path));
+    if (!tiki || depth >= 2) {
+        return;
+    }
+
+    for (i = 0; i < tiki->a->num_server_initcmds; i++) {
+        cmd = &tiki->a->server_initcmds[i];
+
+        if (cmd->num_args == 2 && !Q_stricmp(cmd->args[0], "classname") && !Q_stricmp(cmd->args[1], "TurretGun")) {
+            char view[MAX_QPATH];
+
+            COM_StripExtension(path, view, sizeof(view));
+            Q_strcat(view, sizeof(view), "_viewmodel.tik");
+            CG_PrecacheModel(view, depth + 1);
+            continue;
+        }
+
+        for (j = 1; j < cmd->num_args; j++) {
+            len = strlen(cmd->args[j]);
+            if (len > 4 && !Q_stricmp(cmd->args[j] + len - 4, ".tik")) {
+                CG_PrecacheModel(cmd->args[j], depth + 1);
+            }
+        }
+    }
+}
+
+/*
+=================
+CG_PrecacheScript
+
+The `cache` lines of a precache script and of the scripts it executes, taken
+whatever condition they are under, registered as cgame's cache command does
+(CacheResource), but for the models
+=================
+*/
+static void CG_PrecacheScript(const char *script, int depth)
+{
+    char       *buffer;
+    char       *p;
+    char       *token;
+    char        name[MAX_QPATH];
+    const char *ext;
+
+    if (depth > 8 || cgi.FS_ReadFile(script, (void **)&buffer, qtrue) < 0) {
+        return;
+    }
+
+    p = buffer;
+    while (p) {
+        // the first word of a statement
+        token = COM_ParseExt(&p, qtrue);
+        if (!p) {
+            break;
+        }
+
+        if (!Q_stricmp(token, "cache")) {
+            Q_strncpyz(name, COM_ParseExt(&p, qfalse), sizeof(name));
+            Q_strlwr(name);
+            ext = COM_GetExtension(name);
+
+            if (!Q_stricmp(ext, "tik")) {
+                CG_PrecacheModel(name, 0);
+            } else if (!Q_stricmp(ext, "spr")) {
+                cgi.R_RegisterShader(name);
+            } else if (!Q_stricmp(ext, "wav") || !Q_stricmp(ext, "mp3")) {
+                cgi.S_RegisterSound(name, qfalse);
+            }
+        } else if (!Q_stricmp(token, "exec")) {
+            char *label;
+
+            Q_strncpyz(name, COM_ParseExt(&p, qfalse), sizeof(name));
+            label = strstr(name, "::");
+            if (label) {
+                *label = 0;
+            }
+            CG_PrecacheScript(name, depth + 1);
+        }
+
+        if (p) {
+            Com_SkipRestOfLine(&p);
+        }
+    }
+
+    cgi.FS_FreeFile(buffer);
+}
+
+/*
+=================
+CG_PrecachePlayerModels
+
+Every player model the game data has, as the server's InitModelList and
+IsPlayerModel find them (allied_, american_, german_, IT_ and SC_ models of
+models/player, not the first person ones), with its first person model: a
+player may choose one the server's precache list lacks (the stock
+global/DMprecache.scr names german_winter1 for german_winter_1 and has no
+allied_sas), which the server announces when the player spawns
+=================
+*/
+static void CG_PrecachePlayerModels(void)
+{
+    static const char *prefixes[] = {"allied_", "american_", "german_", "IT_", "SC_"};
+    char              **list;
+    char                name[MAX_QPATH];
+    size_t              len;
+    int                 num;
+    int                 i, j;
+
+    list = cgi.FS_ListFilteredFiles("models/player", ".tik", NULL, qfalse, &num, qfalse);
+    for (i = 0; i < num; i++) {
+        len = strlen(list[i]);
+        if (len >= 8 && !Q_stricmp(list[i] + len - 8, "_fps.tik")) {
+            continue;
+        }
+        for (j = 0; j < ARRAY_LEN(prefixes); j++) {
+            if (!Q_stricmpn(list[i], prefixes[j], strlen(prefixes[j]))) {
+                break;
+            }
+        }
+        if (j == ARRAY_LEN(prefixes)) {
+            continue;
+        }
+
+        Com_sprintf(name, sizeof(name), "models/player/%s", list[i]);
+        CG_PrecacheModel(name, 0);
+
+        Com_sprintf(name, sizeof(name), "models/player/%.*s_fps.tik", (int)(len - 4), list[i]);
+        CG_PrecacheModel(name, 0);
+    }
+    cgi.FS_FreeFileList(list);
+}
+
+/*
+=================
+CG_PrecacheScriptModels
+
+The TIKI models a script names (the map's own script: what it spawns or
+changes a model to, such as an objective's wreck and its explosion)
+=================
+*/
+static void CG_PrecacheScriptModels(const char *script)
+{
+    char  *buffer;
+    char  *s;
+    char  *start;
+    char   name[MAX_QPATH];
+    size_t len;
+
+    if (cgi.FS_ReadFile(script, (void **)&buffer, qtrue) < 0) {
+        return;
+    }
+
+    // every name ending in .tik, whatever the statement (the text, not the
+    // script's tokens: a quote left open in a string can't hide one)
+    for (s = buffer; *s; s++) {
+        if (s[0] != '.' || tolower(s[1]) != 't' || tolower(s[2]) != 'i' || tolower(s[3]) != 'k'
+            || isalnum((unsigned char)s[4]) || s[4] == '_') {
+            continue;
+        }
+
+        start = s;
+        while (start > buffer && (isalnum((unsigned char)start[-1]) || strchr("_-./\\", start[-1]))) {
+            start--;
+        }
+
+        len = s + 4 - start;
+        if (len > 4 && len < sizeof(name)) {
+            memcpy(name, start, len);
+            name[len] = 0;
+            CG_PrecacheModel(name, 0);
+        }
+        s += 3;
+    }
+
+    cgi.FS_FreeFile(buffer);
+}
+
+/*
+=================
+CG_PrecacheEntityModels
+
+The TIKI models of the map's entities: some get their model only when the
+script needs them, such as the explosions of an objective (the exploder's
+"exploderfire" entities)
+=================
+*/
+static void CG_PrecacheEntityModels(void)
+{
+    char       *p;
+    const char *token;
+    char        key[MAX_TOKEN_CHARS];
+    size_t      len;
+
+    p = cgi.CM_EntityString();
+    while (p) {
+        token = COM_Parse(&p);
+        if (!p) {
+            break;
+        }
+        if (!strcmp(token, "{") || !strcmp(token, "}")) {
+            continue;
+        }
+
+        Q_strncpyz(key, token, sizeof(key));
+        token = COM_Parse(&p);
+        if (Q_stricmp(key, "model")) {
+            continue;
+        }
+
+        len = strlen(token);
+        if (len > 4 && !Q_stricmp(token + len - 4, ".tik")) {
+            CG_PrecacheModel(token, 0);
+        }
+    }
+}
+
+/*
+=================
+CG_PrecacheMatch
+
+Multiplayer: registers at the load what a match only announces when it is
+used, which loaded its files in that frame (a model announced by a
+configstring took 2 to 18 ms in real matches): every player model with its
+first person model, the precache script's `cache` lines (the server's own
+list: in global/DMprecache.scr the players' models, their first person
+models and the weapons; the map's items), the models of
+the map's entities and those its script names, and what cgame registers when
+it first draws it and the health box a player drops. cg_precache: 1 the
+player models and the precache scripts, 2 the map's models, 4 cgame's own.
+=================
+*/
+static void CG_PrecacheMatch(void)
+{
+    static const char *shaders[] = {
+        "blastmark", "textures/hud/allies", "textures/hud/axis", "textures/hud/radar_allies.tga",
+        "textures/hud/radar_axis.tga", "gfx/2d/net.tga"
+    };
+    static const char *sprites[] = {
+        "textures/hud/allies_headicon.spr", "textures/hud/axis_headicon.spr", "textures/hud/talking_headicon.spr",
+        "textures/hud/inmenu_headicon.spr"
+    };
+    char  level[MAX_QPATH];
+    char  script[MAX_QPATH];
+    char *end;
+    int   i;
+
+    if (cgs.gametype == GT_SINGLE_PLAYER) {
+        return;
+    }
+
+    // the scripts' name as the server makes it (Level::SetMap)
+    Com_sprintf(level, sizeof(level), "maps/%s", Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "mapname"));
+    end = strpbrk(level, "$.");
+    if (end) {
+        *end = 0;
+    }
+
+    if (cg_precache->integer & 1) {
+        CG_PrecachePlayerModels();
+
+        Com_sprintf(script, sizeof(script), "%s_precache.scr", level);
+        if (cgi.FS_ReadFile(script, NULL, qtrue) != -1) {
+            CG_PrecacheScript(script, 0);
+        } else {
+            // the players and the weapons at least
+            CG_PrecacheScript("global/DMprecache.scr", 0);
+        }
+    }
+
+    if (cg_precache->integer & 2) {
+        CG_PrecacheEntityModels();
+        Com_sprintf(script, sizeof(script), "%s.scr", level);
+        CG_PrecacheScriptModels(script);
+    }
+
+    if (cg_precache->integer & 4) {
+        for (i = 0; i < ARRAY_LEN(shaders); i++) {
+            cgi.R_RegisterShader(shaders[i]);
+        }
+        for (i = 0; i < ARRAY_LEN(sprites); i++) {
+            cgi.R_RegisterModel(sprites[i]);
+        }
+        // what a player drops at death (Player::EventDMDeathDrop)
+        CG_PrecacheModel("models/items/dm_50_healthbox.tik", 0);
+    }
+}
+
+/*
+=================
 CG_PrepRefresh
 
 Call before entering a new level, or after changing renderers
@@ -592,6 +928,8 @@ void CG_PrepRefresh(void)
     for (i = CS_SYSTEMINFO + 1; i < MAX_CONFIGSTRINGS; i++) {
         CG_ProcessConfigString(i, qfalse);
     }
+
+    CG_PrecacheMatch();
 }
 
 //===========================================================================
@@ -618,6 +956,7 @@ void CG_GetRendererConfig(void)
     cgs.screenXScale = cgs.glconfig.vidWidth / 640.0;
     cgs.screenYScale = cgs.glconfig.vidHeight / 480.0;
     cgi.UI_GetHighResolutionScale(cgs.uiHiResScale);
+    CG_UpdateCrosshair();
 }
 
 /*
