@@ -55,6 +55,8 @@ SHOWN_MULTI = ("multi-kill shown", "multi-kills shown")
 # what Record… offers for the recorder's own frags
 RECORDER_KILLS = ("recorder frag", "recorder frags")
 RECORDER_MULTI = ("recorder multi-kill", "recorder multi-kills")
+# what demoonly plays of the recorder for those
+RECORDER_ONLY = {"recorderkills": "kills", "recordermultikills": "multikills"}
 # the demo list's columns
 DEMO_COLUMNS = ["Date", "Length", "Rules", "Recorder", "Player", "Map", "Demo"]
 COL_DATE, COL_LENGTH, COL_RULES, COL_RECORDER, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_COLUMNS))
@@ -894,9 +896,11 @@ class RecordDialog(QDialog):
     """What to record and how, kept in the settings.
 
     choices: [(key, label, enabled)], what can be recorded, after a stretch
-    of time from time when it isn't None. join: offer one video for all."""
+    of time from time when it isn't None. join: offer one video for all.
+    relabel(before, after): the choices again for that lead-in and out, in
+    msec, as their lengths change with them."""
 
-    def __init__(self, settings, choices, time=None, join=False, parent=None):
+    def __init__(self, settings, choices, time=None, join=False, parent=None, relabel=None):
         super().__init__(parent)
         self.setWindowTitle("Record a video")
         self.settings = settings
@@ -973,6 +977,12 @@ class RecordDialog(QDialog):
         kill_row.addWidget(QLabel("After:"))
         kill_row.addWidget(self.kill_after)
         form.addRow("Kill lead-in / out", kill_row)
+        if relabel:
+            # once they stop changing, as a choice of many demos takes a while
+            timer = QTimer(self, singleShot=True, interval=150)
+            timer.timeout.connect(lambda: self.relabel(relabel(*self.kill_times())))
+            self.kill_before.valueChanged.connect(lambda _: timer.start())
+            self.kill_after.valueChanged.connect(lambda _: timer.start())
 
         self.size = QComboBox()
         self.size.addItems(["1280x720", "1920x1080", "2560x1440", "3840x2160"])
@@ -1046,6 +1056,15 @@ class RecordDialog(QDialog):
         path = QFileDialog.getExistingDirectory(self, "Choose a folder", self.folder.text())
         if path:
             self.folder.setText(path)
+
+    def kill_times(self):
+        """The lead-in and out chosen, in msec."""
+        return int(self.kill_before.value() * 1000), int(self.kill_after.value() * 1000)
+
+    def relabel(self, choices):
+        for key, label, enabled in choices:
+            self.choices[key].setText(label)
+            self.choices[key].setEnabled(enabled)
 
     def what(self):
         """"range" or the key of the choice made."""
@@ -1982,47 +2001,39 @@ class Window(QMainWindow):
         texts = {"kills": ("kill" + by, "kills" + by), "multikills": ("multi-kill" + by, "multi-kills" + by),
                  "recorderkills": RECORDER_KILLS, "recordermultikills": RECORDER_MULTI,
                  "shownkills": SHOWN_KILLS, "shownmultikills": SHOWN_MULTI}
-        plans, labels, choices = {}, {}, []
-        rec_kb, rec_ka = self.get_rec_kill_times()
-        for key in keys:
-            if key == "watched":
-                plans[key] = demoonly_plan(index, key, player) if player else (0, [])
-                labels[key] = f"While {player} is watched" if player else "While a player is watched"
-                enabled = bool(plans[key][1])
-            elif key in ("recorderkills", "recordermultikills"):
-                only_type = "kills" if key == "recorderkills" else "multikills"
-                plans[key] = demoonly_plan(index, only_type, recorder, kill_before=rec_kb, kill_after=rec_ka) if recorder else (0, [])
-                labels[key] = the(plans[key][0], *texts[key])
-                enabled = plans[key][0] > 0
-            else:
-                plans[key] = demoonly_plan(index, key, "" if key.startswith("shown") else player,
-                                           kill_before=rec_kb, kill_after=rec_ka)
-                labels[key] = the(plans[key][0], *texts[key]) + (SHOWN_WHO if key == "shownkills" else "")
-                enabled = plans[key][0] > 0
-            choices.append((key, labels[key] + (", " + about(length(plans[key][1])) if enabled else ""), enabled))
-        dialog = RecordDialog(self.settings, choices, self.state.get("time", 0), parent=self)
+        # whose each choice plays
+        whose = {key: recorder if key in RECORDER_ONLY else "" if key.startswith("shown") else player for key in keys}
+
+        def plans_for(before, after):
+            """{key: (count, spans)} with that lead-in and out."""
+            return {key: (demoonly_plan(index, key, player) if player else (0, [])) if key == "watched"
+                    else demoonly_plan(index, RECORDER_ONLY.get(key, key), whose[key], before, after)
+                    for key in keys}
+
+        def choices(plans):
+            listed = []
+            for key in keys:
+                enabled = bool(plans[key][1]) if key == "watched" else plans[key][0] > 0
+                listed.append((key, labels[key] + (", " + about(length(plans[key][1])) if enabled else ""), enabled))
+            return listed
+
+        plans = plans_for(*self.get_rec_kill_times())
+        labels = {key: the(plans[key][0], *texts[key]) + (SHOWN_WHO if key == "shownkills" else "")
+                  for key in keys if key != "watched"}
+        labels["watched"] = f"While {player} is watched" if player else "While a player is watched"
+        dialog = RecordDialog(self.settings, choices(plans), self.state.get("time", 0), parent=self,
+                              relabel=lambda before, after: choices(plans_for(before, after)))
         if not dialog.exec():
             return
         what = dialog.what()
-        chosen_kb = int(dialog.kill_before.value() * 1000)
-        chosen_ka = int(dialog.kill_after.value() * 1000)
         if what == "range":
             start, end = dialog.times()
             label = f"{demo}, {clock(start)} to {clock(end)}"
             clip = range_clip(demo, start, end)
         else:
             label = demo + ", " + labels[what][0].lower() + labels[what][1:]
-            if what in ("recorderkills", "recordermultikills"):
-                only_type = "kills" if what == "recorderkills" else "multikills"
-                player = recorder
-                spans = demoonly_plan(index, only_type, player, kill_before=chosen_kb, kill_after=chosen_ka)[1]
-                clip = only_clip(demo, only_type, player, spans)
-            elif what == "watched":
-                clip = only_clip(demo, what, player, plans[what][1])
-            else:
-                player = "" if what.startswith("shown") else player
-                spans = demoonly_plan(index, what, player, kill_before=chosen_kb, kill_after=chosen_ka)[1]
-                clip = only_clip(demo, what, player, spans)
+            player = whose[what]
+            clip = only_clip(demo, RECORDER_ONLY.get(what, what), player, plans_for(*dialog.kill_times())[what][1])
         self.add_job(dialog.job(label, [clip], demo, player))
 
     def record_selected(self, tree):
@@ -2034,27 +2045,30 @@ class Window(QMainWindow):
             return
         one = "multi-kill" if tree is self.multikills else "kill"
         kind = f"{len(items)} {one}s" if len(items) > 1 else one
-        spans = stretches([span for item in items for span in item.data(1, Qt.UserRole)], self.switches())
-        dialog = RecordDialog(self.settings, [
-            ("selected", f"{the(len(items), one, one + 's')} selected, {about(length(spans))}", True)],
-            join=len(spans) > 1, parent=self)
+        player = self.player.currentData() or ""
+        # whoever is shown too: their kills only while they're shown
+        kills = self.player_kills(player)
+        player = "" if player == SHOWN else player
+        index = self.index or {}
+        chains = [[index["kills"][i] for i in item.data(2, Qt.UserRole)] for item in items]
+
+        def spans_for(before, after):
+            """The clips of the kills selected, and of the team kills near
+            them, with that lead-in and out."""
+            spans = {id(k): kill_span(index, k, start, end, before, after) for k, start, end in kills.values()}
+            return stretches([spans[id(k)] for chain in chains for k in chain if id(k) in spans]
+                             + [spans[id(k)] for chain in chains
+                                for k, _, _ in team_kills_with(list(kills.values()), chain)], self.switches())
+
+        def choices(spans):
+            return [("selected", f"{the(len(items), one, one + 's')} selected, {about(length(spans))}", True)]
+
+        spans = spans_for(*self.get_rec_kill_times())
+        dialog = RecordDialog(self.settings, choices(spans), join=len(spans) > 1, parent=self,
+                              relabel=lambda before, after: choices(spans_for(before, after)))
         if not dialog.exec():
             return
-        player = self.player.currentData() or ""
-        rec_kb = int(dialog.kill_before.value() * 1000)
-        rec_ka = int(dialog.kill_after.value() * 1000)
-        # whoever is shown too: their kills only while they're shown
-        kills_dict = self.player_kills(player)
-        player = "" if player == SHOWN else player
-        all_kills = (self.index or {}).get("kills", [])
-        rec_spans = {id(k): kill_span(self.index or {}, k, st, en, rec_kb, rec_ka) for k, st, en in kills_dict.values()}
-        selected_spans = []
-        for item in items:
-            chain = [all_kills[i] for i in item.data(2, Qt.UserRole)]
-            selected_spans.extend(rec_spans[id(k)] for k in chain if id(k) in rec_spans)
-            selected_spans.extend(rec_spans[id(k)] for k, _, _ in team_kills_with(list(kills_dict.values()), chain))
-        spans = stretches(selected_spans, self.switches())
-        clips = [range_clip(demo, start, end) for start, end in spans]
+        clips = [range_clip(demo, start, end) for start, end in spans_for(*dialog.kill_times())]
         if dialog.join.isChecked() or len(clips) == 1:
             self.add_job(dialog.job(f"{demo}, {kind}", clips, demo, player))
         else:
@@ -2075,54 +2089,63 @@ class Window(QMainWindow):
             found = {name: self.demo_items[name].data(COL_PLAYER, Qt.UserRole) for name in names}
         player = next((p for p in found.values() if p), "")
 
-        # what each choice records of each demo, from the indexes kept:
-        # {key: {name: (count, spans or None)}}, the demos with some
-        plans = {}
         indexes = {name: self.library.index(name) for name in names}
-        rec_kb, rec_ka = self.get_rec_kill_times()
-        for key in ("kills", "multikills", "recorderkills", "recordermultikills", "shownkills", "shownmultikills", "everything"):
-            plans[key] = {}
-            for name, index in indexes.items():
-                if index is None:
-                    if key == "everything":
-                        plans[key][name] = (0, None)
-                    continue
-                if key in ("recorderkills", "recordermultikills"):
-                    rec = (index.get("recorder") or {}).get("name", "")
-                    plan = demoonly_plan(index, "kills" if key == "recorderkills" else "multikills", rec,
-                                         kill_before=rec_kb, kill_after=rec_ka) if rec else (0, [])
-                else:
-                    plan = demoonly_plan(index, "" if key == "everything" else key,
-                                         found.get(name) or "" if key in ("kills", "multikills") else "",
-                                         kill_before=rec_kb, kill_after=rec_ka)
-                if plan[0] or key == "everything":
-                    plans[key][name] = plan
+        # whose kills each choice plays in each demo
+        recorders = {name: (index.get("recorder") or {}).get("name", "") for name, index in indexes.items() if index}
+        keys = ("kills", "multikills", "recorderkills", "recordermultikills", "shownkills", "shownmultikills",
+                "everything")
 
-        def text(key, label):
-            """label, in how many demos, how long."""
-            spans = [plan[1] for plan in plans[key].values()]
-            if len(names) > 1 and key != "everything":
-                label += f", in {len(spans)} of the {len(names)} demos"
-            if spans and None not in spans:
-                label += ", " + about(sum(length(s) for s in spans))
-            return key, label, bool(spans)
-        count = {key: sum(plan[0] for plan in plans[key].values()) for key in plans}
-        by = " by " + player if player else ""
-        dialog = RecordDialog(self.settings, [
-            text("kills", the(count["kills"], "kill" + by, "kills" + by)),
-            text("multikills", the(count["multikills"], "multi-kill" + by, "multi-kills" + by)),
-            text("recorderkills", the(count["recorderkills"], *RECORDER_KILLS)),
-            text("recordermultikills", the(count["recordermultikills"], *RECORDER_MULTI)),
-            text("shownkills", the(count["shownkills"], *SHOWN_KILLS) + SHOWN_WHO),
-            text("shownmultikills", the(count["shownmultikills"], *SHOWN_MULTI)),
-            text("everything", "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos"),
-        ], join=len(names) > 1, parent=self)
+        def plans_for(before, after):
+            """What each choice records of each demo with that lead-in and
+            out, from the indexes kept: {key: {name: (count, spans or None)}},
+            the demos with some."""
+            plans = {}
+            for key in keys:
+                plans[key] = {}
+                for name, index in indexes.items():
+                    if index is None:
+                        if key == "everything":
+                            plans[key][name] = (0, None)
+                        continue
+                    if key in RECORDER_ONLY:
+                        plan = (demoonly_plan(index, RECORDER_ONLY[key], recorders[name], before, after)
+                                if recorders[name] else (0, []))
+                    else:
+                        plan = demoonly_plan(index, "" if key == "everything" else key,
+                                             found.get(name) or "" if key in ("kills", "multikills") else "",
+                                             before, after)
+                    if plan[0] or key == "everything":
+                        plans[key][name] = plan
+            return plans
+
+        def choices(plans):
+            def text(key, label):
+                """label, in how many demos, how long."""
+                spans = [plan[1] for plan in plans[key].values()]
+                if len(names) > 1 and key != "everything":
+                    label += f", in {len(spans)} of the {len(names)} demos"
+                if spans and None not in spans:
+                    label += ", " + about(sum(length(s) for s in spans))
+                return key, label, bool(spans)
+            count = {key: sum(plan[0] for plan in plans[key].values()) for key in plans}
+            by = " by " + player if player else ""
+            return [
+                text("kills", the(count["kills"], "kill" + by, "kills" + by)),
+                text("multikills", the(count["multikills"], "multi-kill" + by, "multi-kills" + by)),
+                text("recorderkills", the(count["recorderkills"], *RECORDER_KILLS)),
+                text("recordermultikills", the(count["recordermultikills"], *RECORDER_MULTI)),
+                text("shownkills", the(count["shownkills"], *SHOWN_KILLS) + SHOWN_WHO),
+                text("shownmultikills", the(count["shownmultikills"], *SHOWN_MULTI)),
+                text("everything", "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos"),
+            ]
+
+        dialog = RecordDialog(self.settings, choices(plans_for(*self.get_rec_kill_times())), join=len(names) > 1,
+                              parent=self, relabel=lambda before, after: choices(plans_for(before, after)))
         if not dialog.exec():
             return
         what = dialog.what()
+        plans = plans_for(*dialog.kill_times())
         chosen = list(plans[what])
-        chosen_kb = int(dialog.kill_before.value() * 1000)
-        chosen_ka = int(dialog.kill_after.value() * 1000)
         whose = player + "'s" if player else "all the"
         kind = {"kills": f"{whose} kills", "multikills": f"{whose} multi-kills",
                 "recorderkills": "recorder frags", "recordermultikills": "recorder multi-kills",
@@ -2130,26 +2153,11 @@ class Window(QMainWindow):
         # no player for whoever is shown
         if what.startswith("shown"):
             found, player = {}, ""
-        elif what in ("recorderkills", "recordermultikills"):
-            found = {name: (indexes[name].get("recorder") or {}).get("name", "")
-                     for name in chosen if indexes.get(name)}
+        elif what in RECORDER_ONLY:
+            found = recorders
             player = found.get(chosen[0], "") if len(chosen) == 1 else ""
-
-        clips = []
-        for name in chosen:
-            if what == "everything":
-                only_arg = ""
-                p = found.get(name) or ""
-                spans = plans[what][name][1]
-            elif what in ("recorderkills", "recordermultikills"):
-                only_arg = "kills" if what == "recorderkills" else "multikills"
-                p = found.get(name) or ""
-                spans = demoonly_plan(indexes[name], only_arg, p, kill_before=chosen_kb, kill_after=chosen_ka)[1]
-            else:
-                only_arg = what
-                p = found.get(name) or ""
-                spans = demoonly_plan(indexes[name], only_arg, p, kill_before=chosen_kb, kill_after=chosen_ka)[1]
-            clips.append(only_clip(name, only_arg, p, spans))
+        only = "" if what == "everything" else RECORDER_ONLY.get(what, what)
+        clips = [only_clip(name, only, found.get(name) or "", plans[what][name][1]) for name in chosen]
         if dialog.join.isChecked() or len(clips) == 1:
             demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
             self.add_job(dialog.job(demo + (f", {kind}" if kind else ""), clips, demo, player))

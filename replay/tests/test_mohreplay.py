@@ -907,6 +907,26 @@ class TestRecording(FakeGameCase):
         self.assertEqual(video["cvars"]["s_loopback"], "0")
         self.assertIn("-an", video["cvars"]["cl_aviPipeFormat"])
 
+    def test_lengths_follow_the_lead_in_and_out(self):
+        window = self.window()
+        self.playing(window)
+        window.player.setCurrentIndex(window.player.findData("t-"))
+
+        def setup(dialog):
+            self.assertEqual(dialog.choices["kills"].text(), "The 3 kills by t-, under a minute")
+            dialog.kill_before.setValue(30)
+            dialog.kill_after.setValue(30)
+            # 0:00 to 0:44.5, while t- is shown
+            self.assertTrue(wait_until(lambda: dialog.choices["kills"].text() == "The 3 kills by t-, about 1 min", 2),
+                            dialog.choices["kills"].text())
+            dialog.choices["kills"].setChecked(True)
+            dialog.pattern.setText("long")
+        self.record(window, setup)
+        self.done(window)
+        video = self.video("long.mp4")
+        self.assertEqual((video["start"], video["cvars"]["cl_demoKillBefore"], video["cvars"]["cl_demoKillAfter"]),
+                         (0, "30.0", "30.0"))
+
     def test_record_multi_kills(self):
         window = self.window()
         self.playing(window)
