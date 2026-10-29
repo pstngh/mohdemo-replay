@@ -1333,6 +1333,19 @@ REAL_GAME = os.environ.get("MOHREPLAY_TEST_GAME")
 REAL_DEMOS = os.environ.get("MOHREPLAY_TEST_DEMOS")
 
 
+def game_folder(real, folder):
+    """A game folder of its own in folder, with links to the files of real
+    but none to its settings, which the game watched writes there."""
+    os.makedirs(os.path.join(folder, "main"))
+    for name in os.listdir(real):
+        if name != "main":
+            os.symlink(os.path.join(real, name), os.path.join(folder, name))
+    for name in os.listdir(os.path.join(real, "main")):
+        if name not in ("configs", "omconfig.cfg"):
+            os.symlink(os.path.join(real, "main", name), os.path.join(folder, "main", name))
+    return folder
+
+
 @unittest.skipUnless(REAL_GAME and REAL_DEMOS, "set MOHREPLAY_TEST_GAME and MOHREPLAY_TEST_DEMOS")
 class TestRealGame(FakeGameCase):
     """Plays and records a real demo with the real game, without a window."""
@@ -1343,7 +1356,7 @@ class TestRealGame(FakeGameCase):
         super().setUp()
         exe = os.environ.get("MOHREPLAY_TEST_EXE") or os.path.join(mohreplay.REPO, ".cmake", "RelWithDebInfo", "openmohaa")
         self.settings.setValue("exe", exe)
-        self.settings.setValue("game", REAL_GAME)
+        self.settings.setValue("game", game_folder(REAL_GAME, os.path.join(self.tmp, "real")))
         self.settings.setValue("demos", REAL_DEMOS)
         self.settings.setValue("size", "640x360")
         self.demo = os.environ.get("MOHREPLAY_TEST_DEMO") or "d482684ec556d1c3-obj-obj_team1"
