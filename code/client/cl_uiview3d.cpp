@@ -117,10 +117,6 @@ void View3D::OnDeactivate(Event *ev)
 
 void View3D::DrawFPS(void)
 {
-    if (CL_VideoRecording()) {
-        return;
-    }
-
     char string[128];
 
     setFont("verdana-14");
