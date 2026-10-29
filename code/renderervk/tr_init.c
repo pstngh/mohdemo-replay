@@ -1157,18 +1157,15 @@ void R_ScreenShotPNG_f (void) {
 
 /*
 ==================
-RB_TakeVideoFrameCmd
+RB_TakeVideoFrame
 ==================
 */
-const void *RB_TakeVideoFrameCmd( const void *data )
+static void RB_TakeVideoFrame( const videoFrameCommand_t *cmd )
 {
-	const videoFrameCommand_t	*cmd;
 	byte				*cBuf;
 	size_t				memcount, linelen;
 	int				padwidth, avipadwidth, padlen, avipadlen;
 	const int		packAlign = 1;	// vk_read_pixels rows are tightly packed
-	
-	cmd = (const videoFrameCommand_t *)data;
 
 	linelen = cmd->width * 3;
 
@@ -1225,8 +1222,46 @@ const void *RB_TakeVideoFrameCmd( const void *data )
 		
 		ri.CL_WriteAVIVideoFrame(cmd->encodeBuffer, avipadwidth * cmd->height);
 	}
+}
 
-	return (const void *)(cmd + 1);	
+/*
+==================
+Pending video frame
+
+Added in OPM
+Like the screenshots, a video frame is taken at the end of the frame, once
+everything is drawn (RB_SwapBuffers calls RB_TakePendingVideoFrame): the
+command comes first in the frame, where GL1 read the frame before.
+==================
+*/
+static videoFrameCommand_t	pendingVideoFrame;
+static qboolean				videoFramePending;
+
+void RB_TakePendingVideoFrame( void )
+{
+	if ( videoFramePending ) {
+		videoFramePending = qfalse;
+		RB_TakeVideoFrame( &pendingVideoFrame );
+	}
+}
+
+/*
+==================
+RB_TakeVideoFrameCmd
+==================
+*/
+const void *RB_TakeVideoFrameCmd( const void *data )
+{
+	const videoFrameCommand_t	*cmd;
+
+	cmd = (const videoFrameCommand_t *)data;
+
+	// one a frame: one not taken yet, as nothing was drawn since, goes first
+	RB_TakePendingVideoFrame();
+	pendingVideoFrame = *cmd;
+	videoFramePending = qtrue;
+
+	return (const void *)(cmd + 1);
 }
 
 //============================================================================

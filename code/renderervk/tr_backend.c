@@ -1462,6 +1462,9 @@ const void	*RB_SwapBuffers( const void *data ) {
 
 	// screenshot commands of this frame, now that everything is drawn
 	RB_TakePendingScreenshots();
+	// Added in OPM
+	//  and its video frame
+	RB_TakePendingVideoFrame();
 
 	cmd = (const swapBuffersCommand_t *)data;
 
