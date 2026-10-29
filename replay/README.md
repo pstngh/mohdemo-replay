@@ -74,7 +74,9 @@ asks for Wayland first, then XWayland. The settings changed in the game (its
 options, the console, key binds) are kept for the next games in the game
 folder, as `main/configs/omconfig.cfg` and `main/omconfig.cfg`, which are
 read first, and in `~/.config/mohdemo-replay/omconfig.cfg`
-(`~/Library/Preferences` on macOS), and videos are recorded with them. Some
+(`~/Library/Preferences` on macOS), and videos are recorded with them. The
+app's keys and its pipe aren't kept, so a game run from that folder without
+the app doesn't get them. Some
 are always the app's: the window size, the app's keys, a field of view of
 80, the most detailed models (`r_uselod 0`), the viewmodel and the models
 forced, and frames drawn at the screen's refresh rate (`r_swapInterval 1`,

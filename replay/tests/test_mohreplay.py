@@ -418,6 +418,18 @@ class TestGame(FakeGameCase):
         with open(mohreplay.kept_config()) as f:
             self.assertEqual(f.read(), 'seta cg_fov "100"\n')
 
+    def test_app_settings_not_kept(self):
+        game = self.start()
+        with open(os.path.join(game.home, mohreplay.GAME_CONFIG), "w") as f:
+            f.write('unbindall\nbind w "+forward"\nbind UPARROW "demonextkill t-"\nbind PAUSE "demopause"\n'
+                    'seta com_pipefile "replay_pipe"\nseta cg_fov "90"\n')
+        game.stop()
+        # nor in the game folder, where other games would get them
+        for path in (mohreplay.kept_config(), os.path.join(self.game_dir, mohreplay.GAME_CONFIG),
+                     os.path.join(self.game_dir, "main", "omconfig.cfg")):
+            with open(path) as f:
+                self.assertEqual(f.read(), 'unbindall\nbind w "+forward"\nseta cg_fov "90"\n')
+
     def test_recorder_settings_not_kept(self):
         with open(os.path.join(self.tmp, "kept.cfg"), "w") as f:
             f.write('seta cg_fov "90"\n')

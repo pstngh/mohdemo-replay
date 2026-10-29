@@ -436,6 +436,15 @@ def kept_config():
                         "mohdemo-replay", "omconfig.cfg")
 
 
+def app_setting(line):
+    """Whether a line of the game's config is the app's own, set again at each
+    start: its keys' binds and its pipe. They aren't kept, so other games run
+    from the game folder don't get them."""
+    words = line.split(None, 2)
+    return len(words) > 1 and (words[0].lower() == "bind" and words[1].upper() in BINDS
+                               or words[0].lower() == "seta" and words[1].lower() == "com_pipefile")
+
+
 class Game:
     """The game process, its throwaway home folder and its command pipe. It
     starts with the settings kept from earlier games, and keeps those changed
@@ -601,27 +610,22 @@ class Game:
         for the next games and in the game main folder."""
         if not self.keep_config or not self.home:
             return
-        written = os.path.join(self.home, GAME_CONFIG)
-        if not os.path.isfile(written):
-            return
-        kept = kept_config()
         try:
-            os.makedirs(os.path.dirname(kept), exist_ok=True)
-            shutil.copyfile(written, kept + ".new")
-            os.replace(kept + ".new", kept)
+            with open(os.path.join(self.home, GAME_CONFIG), encoding="latin-1", newline="") as f:
+                text = "".join(line for line in f if not app_setting(line))
         except OSError:
-            pass
+            return
+        paths = [kept_config()]
         if getattr(self, "game", None):
-            for path in [
-                os.path.join(self.game, GAME_CONFIG),
-                os.path.join(self.game, "main", "omconfig.cfg"),
-            ]:
-                try:
-                    os.makedirs(os.path.dirname(path), exist_ok=True)
-                    shutil.copyfile(written, path + ".new")
-                    os.replace(path + ".new", path)
-                except OSError:
-                    pass
+            paths += [os.path.join(self.game, GAME_CONFIG), os.path.join(self.game, "main", "omconfig.cfg")]
+        for path in paths:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path + ".new", "w", encoding="latin-1", newline="") as f:
+                    f.write(text)
+                os.replace(path + ".new", path)
+            except OSError:
+                pass
 
     def cleanup(self):
         if self.home:
