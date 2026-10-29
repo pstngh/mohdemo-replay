@@ -1,8 +1,8 @@
 # MoH Demo Replay
 
 Rewatch and record **Medal of Honor: Allied Assault** multiplayer demos. A
-small desktop app lists your demos and what happens in them (kills,
-multi-kills, rounds), jumps straight to any moment, and records MP4 videos
+small desktop app lists your demos and what happens in them (kills and
+rounds), jumps straight to any moment, and records MP4 videos
 with sound. It runs on a modified [OpenMoHAA](https://github.com/openmoh/openmohaa),
 the open-source engine for the game, which does the work through new console
 commands.
@@ -18,27 +18,26 @@ player names are made up.*
   and rules: default or realism servers, told apart by how fast the recorder
   runs with each weapon. Demos under 5 minutes are left out. Show only
   default or realism demos, and filter by demo name, level or player: type
-  a name to see every demo that player is in, with their kills and
-  multi-kills.
-- **Move around a demo.** Its kills, multi-kills and rounds are listed and
+  a name to see every demo that player is in, with their kills.
+- **Move around a demo.** Its kills and rounds are listed and
   marked on the time slider. A click jumps there, 4 seconds before a kill.
   Pause, skip 10 seconds, go to the next or previous kill or round, play
   from 0.25× to 4×.
-- **Watch only what matters.** Play only the kills or multi-kills, of
+- **Watch only what matters.** Play only the kills, of
   everyone, of one player (while the demo shows them) or of whoever is
   shown (the recorder's frags and those of the players they follow), or
   only while a player is watched. The rest is skipped.
 - **Record videos.** MP4 with sound, at the size and frame rate you choose,
   recorded in the background faster than real time while you keep watching.
-  Record a stretch of time, the kills or multi-kills, the kills you select,
+  Record a stretch of time, the kills, the kills you select,
   or a player's kills or the frags shown across many demos, in one video or
   one each. Videos wait in a queue.
 - **No app needed.** Everything is a game console command (`demoseek`,
   `demonextkill`, `demoonly`, `demovideo`…), so it all works with key binds
   too.
 
-A multi-kill is two kills or more by one player, each at most 3 seconds
-after the one before.
+The game's console also plays multi-kills (`demoonly multikills`): two
+kills or more by one player, each at most 3 seconds after the one before.
 
 ## Requirements
 

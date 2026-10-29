@@ -21,12 +21,11 @@ chooses them. For that, `mohdemoindex`, built next to the game, indexes the
 demos in the background the first time (about two minutes for 700), and the
 indexes are kept in `~/.cache/mohdemo-replay` (`~/Library/Caches` on macOS). Double-click a demo to
 play it (the game starts then, or with Restart game in the toolbar, where
-the folder's button chooses another), click a kill, a multi-kill or a round
-to jump to it; hovering a kill tells how it was made. Play chooses what
-plays: Everything, These kills, the kills listed (by the player chosen),
-from the one selected or the first, and on the Multi-kills tab, the
-multi-kills: two kills or more by a player, each at most 3 seconds after
-the one before, or While watched, while the player chosen is shown. A player's
+the folder's button chooses another), click a kill or a round to jump to
+it; hovering a kill tells how it was made. Play chooses what plays:
+Everything, These kills, the kills listed (by the player chosen), from the
+one selected or the first, or While watched, while the player chosen is
+shown. A player's
 kills are only those made while the demo shows them (the recorder playing,
 or the player the recorder follows), and only while they're shown, so a
 video of them never shows someone else. "Whoever is shown", in the Player
@@ -39,14 +38,13 @@ The time slider marks the kills listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
 
-Record… makes an MP4 of the demo playing: a stretch of time, the kills or
-the multi-kills (of the player chosen above), the recorder's own (when the
-player chosen is someone else) or the frags or multi-kills shown, one after
-the other, or only while a player is watched. A
-right-click on kills or multi-kills selected records those, and on demos
-or folders selected, all of their demos, the kills or multi-kills of the player the filter
-found, each demo with its own spelling of the name, the recorder's, or the
-frags or multi-kills shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
+Record… makes an MP4 of the demo playing: a stretch of time, the kills (of
+the player chosen above), the recorder's own (when the player chosen is
+someone else) or the frags shown, one after the other, or only while a
+player is watched. A right-click on kills selected records those, and on
+demos or folders selected, all of their demos, the kills of the player the
+filter found, each demo with its own spelling of the name, the recorder's,
+or the frags shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
 kills it holds and how long the video will be, and the last one is chosen
 again next time. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on

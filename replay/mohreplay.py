@@ -41,23 +41,20 @@ PIPE = "replay_pipe"
 GAME_CONFIG = os.path.join("main", "configs", "omconfig.cfg")
 KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
 KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
-MULTI_KILL_GAP = 3000  # msec at most between a player's kills in a multi-kill, as cl_demoMultiKill
 # msec at most between a team kill and a kill of its killer that plays, for
 # the team kill to play too, as the engine's DEMO_TEAMKILL_NEAR
 TEAM_KILL_NEAR = 2000
 MIN_LENGTH = 5 * 60000  # msec: shorter demos aren't listed, once indexed
 # the Player menu's "Whoever is shown": not a name, which can't hold a NUL
 SHOWN = "\0shown"
-# what Record… offers for whoever is shown, as demoonly shownkills and
-# shownmultikills: one and several
+# what Record… offers for whoever is shown, as demoonly shownkills: one and
+# several
 SHOWN_KILLS = ("frag shown", "frags shown")
 SHOWN_WHO = ": the recorder's and the players they follow"
-SHOWN_MULTI = ("multi-kill shown", "multi-kills shown")
 # what Record… offers for the recorder's own frags
 RECORDER_KILLS = ("recorder frag", "recorder frags")
-RECORDER_MULTI = ("recorder multi-kill", "recorder multi-kills")
 # what demoonly plays of the recorder for those
-RECORDER_ONLY = {"recorderkills": "kills", "recordermultikills": "multikills"}
+RECORDER_ONLY = {"recorderkills": "kills"}
 # the demo list's columns
 DEMO_COLUMNS = ["Demo", "Player", "Length", "Map", "Recorder", "Rules", "Date"]
 COL_DEMO, COL_PLAYER, COL_LENGTH, COL_MAP, COL_RECORDER, COL_RULES, COL_DATE = range(len(DEMO_COLUMNS))
@@ -171,24 +168,6 @@ def is_grenade(kill):
     return bool(kill.get("grenade")) or "grenade" in kill.get("text", "").lower() or "shrapnel" in kill.get("text", "").lower()
 
 
-def multi_kills(kills):
-    """The multi-kills, as demoonly multikills plays them: lists of two
-    kills or more by a player, each at most MULTI_KILL_GAP after the one
-    before, in the order they start. Team kills and grenade kills don't count."""
-    chains, last = [], {}
-    for kill in kills:
-        if not kill["killerName"] or kill.get("teamKill") or is_grenade(kill):
-            continue
-        key = clean_name(kill["killerName"])
-        chain = last.get(key)
-        if chain and kill["time"] - chain[-1]["time"] <= MULTI_KILL_GAP:
-            chain.append(kill)
-        else:
-            last[key] = chain = [kill]
-            chains.append(chain)
-    return [chain for chain in chains if len(chain) > 1]
-
-
 def shown_kills(index):
     """The kills made while their killer is the player shown, as demoonly
     plays a player's kills (at other times the demo shows someone else):
@@ -237,9 +216,9 @@ def team_kills_with(kills, frags):
 
 
 def player_kills(player):
-    """"name (kills, multi-kills)" from a summary's [name, kills, multi-kills]."""
-    name, kills, multi = player
-    return f"{name} ({kills}, {multi} multi)" if multi else f"{name} ({kills})"
+    """"name (kills)" from a summary's [name, kills]."""
+    name, kills = player
+    return f"{name} ({kills})"
 
 
 def walk_demos(folder):
@@ -263,13 +242,13 @@ def list_demos(folder):
 
 def summarize(index):
     """What the demo list shows of an index: its maps, length, recorder and
-    players, {clean name: [name, kills, multi-kills]}, counting the kills
-    made while they're shown."""
+    players, {clean name: [name, kills]}, counting the kills made while
+    they're shown."""
     players = {}
 
     def add(name, kills=0):
         if name:
-            players.setdefault(clean_name(name), [name, 0, 0])[1] += kills
+            players.setdefault(clean_name(name), [name, 0])[1] += kills
     add(index.get("recorder", {}).get("name", ""))
     for watched in index.get("watched", []):
         add(watched["name"])
@@ -279,8 +258,6 @@ def summarize(index):
     shown = [kill for kill, _, _ in shown_kills(index) if not kill.get("teamKill") and not is_grenade(kill)]
     for kill in shown:
         add(kill["killerName"], 1)
-    for chain in multi_kills(shown):
-        players[clean_name(chain[0]["killerName"])][2] += 1
     # "realism" or "default" when its levels tell one, "both", or ""
     kinds = {m.get("rules") for m in index.get("maps", [])} & {"realism", "default"}
     rules = "both" if len(kinds) == 2 else kinds.pop() if kinds else ""
@@ -1062,8 +1039,8 @@ def range_clip(demo, start, end):
 
 
 def only_clip(demo, only="", player="", spans=None):
-    """A clip of what demoonly plays ("kills", "multikills", "shownkills",
-    "shownmultikills", "watched"), or of all of demo; spans: what that is,
+    """A clip of what demoonly plays ("kills", "shownkills" or "watched"), or
+    of all of demo; spans: what that is,
     from demoonly_plan(), if known."""
     command = f"demoonly {only}" + (" " + quoted(player) if player else "") if only else "demoonly"
     start = spans[0][0] if (spans and spans[0][0] > 0) else 0
@@ -1101,8 +1078,8 @@ def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
 
 def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
     """What demoonly <only> [player] plays in a demo, as the engine does,
-    from its index: (how many kills or multi-kills, [(start, end)] in msec),
-    all of the demo without only. Team kills aren't counted, and only play
+    from its index: (how many kills, [(start, end)] in msec), all of the demo
+    without only. Team kills aren't counted, and only play
     with a kill of their killer near them."""
     duration = index.get("duration", 0)
     watched = index.get("watched", [])
@@ -1121,10 +1098,6 @@ def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
         kills, switches = [(k, 0, duration) for k in index.get("kills", [])], []
     frags = [x for x in kills if not x[0].get("teamKill") and not is_grenade(x[0])]
     count = len(frags)
-    if only.endswith("multikills"):
-        chains = multi_kills([k for k, _, _ in frags])
-        keep = {id(k) for chain in chains for k in chain}
-        frags, count = [x for x in frags if id(x[0]) in keep], len(chains)
     kills = frags + team_kills_with(kills, [k for k, _, _ in frags])
     kb = KILL_BEFORE if kill_before is None else kill_before
     ka = KILL_AFTER if kill_after is None else kill_after
@@ -1548,7 +1521,7 @@ class Window(QMainWindow):
         self.jobs = []
         self.last_jump = (None, 0)
         self.play_mode_asked = -1
-        self.round_marks = self.kill_marks = self.multi_marks = []
+        self.round_marks = self.kill_marks = []
         self.library = Library(self.library_changed, self)
         self.demo_items = {}  # name: item
         self.folder_items = {}  # folder in the demos folder: item
@@ -1625,17 +1598,14 @@ class Window(QMainWindow):
         players.addLayout(modes)
 
         self.kills = self.make_list(["Time", "Killer", "Victim"])
-        self.multikills = self.make_list(["Time", "Player", "Kills", "Victims"])
         self.rounds = self.make_list(["Time", "Round", "Result"])
         # a click jumps, so does Enter
-        for tree in (self.kills, self.multikills, self.rounds):
+        for tree in (self.kills, self.rounds):
             tree.itemClicked.connect(self.jump_to_item)
             tree.itemActivated.connect(self.jump_to_item)
-        for tree in (self.kills, self.multikills):
-            self.add_menu(tree, "Record the ones selected…", lambda _=False, t=tree: self.record_selected(t))
+        self.add_menu(self.kills, "Record the ones selected…", lambda: self.record_selected(self.kills))
         self.tabs = tabs = QTabWidget()
         tabs.addTab(self.kills, "Kills")
-        tabs.addTab(self.multikills, "Multi-kills")
         tabs.addTab(self.rounds, "Rounds")
         tabs.currentChanged.connect(self.tab_changed)
         right = QWidget()
@@ -2193,31 +2163,16 @@ class Window(QMainWindow):
             item.setData(2, Qt.UserRole, [place[id(kill)]])
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
-        self.multikills.clear()
-        self.multi_marks = []
-        for chain in multi_kills([kill for kill, _, _ in kills]):
-            victims = ", ".join(kill["victimName"] or "?" for kill in chain)
-            item = QTreeWidgetItem([clock(chain[0]["time"]), chain[0]["killerName"], str(len(chain)), victims])
-            clips = stretches([spans[id(kill)] for kill in chain]
-                              + [spans[id(k)] for k, _, _ in team_kills_with(kills, chain)], switches)
-            item.setData(0, Qt.UserRole, clips[0][0])
-            item.setData(1, Qt.UserRole, clips)
-            item.setData(2, Qt.UserRole, [place[id(kill)] for kill in chain])
-            self.multikills.addTopLevelItem(item)
-            self.multi_marks += [(kill["time"], kill["text"]) for kill in chain]
         self.tabs.setTabText(0, f"Kills ({self.kills.topLevelItemCount()})")
-        self.tabs.setTabText(1, f"Multi-kills ({self.multikills.topLevelItemCount()})")
-        self.tabs.setTabText(2, f"Rounds ({self.rounds.topLevelItemCount()})")
+        self.tabs.setTabText(1, f"Rounds ({self.rounds.topLevelItemCount()})")
         # Up and Down too
         next_kill, prev_kill = self.kill_commands()
         self.game.send("bind UPARROW " + next_kill, "bind DOWNARROW " + prev_kill)
         self.tab_changed()
 
     def tab_changed(self):
-        """The slider marks the kills of the tab, and the button plays them."""
-        multi = self.tabs.currentWidget() is self.multikills
-        self.slider.set_marks(self.multi_marks if multi else self.kill_marks, self.round_marks)
-        self.only_kills_button.setText("These multi-kills" if multi else "These kills")
+        """The slider marks the kills listed and the rounds."""
+        self.slider.set_marks(self.kill_marks, self.round_marks)
 
     # actions
 
@@ -2233,20 +2188,17 @@ class Window(QMainWindow):
         self.game.send("demoseek " + seconds(self.slider.value()))
 
     def only_kills(self):
-        """Plays the kills or multi-kills listed, from the one selected or the
-        first; False if there are none."""
-        multi = self.tabs.currentWidget() is self.multikills
-        tree = self.multikills if multi else self.kills
-        item = tree.currentItem() or tree.topLevelItem(0)
+        """Plays the kills listed, from the one selected or the first; False
+        if there are none."""
+        item = self.kills.currentItem() or self.kills.topLevelItem(0)
         if not item:
-            QMessageBox.information(self, "Only these multi-kills" if multi else "Only these kills",
-                                    f"There are no {'multi-kills' if multi else 'kills'} to play.")
+            QMessageBox.information(self, "Only these kills", "There are no kills to play.")
             return False
         player = self.player.currentData() or ""
         if player == SHOWN:
-            only = f"demoonly shown{'multikills' if multi else 'kills'}"
+            only = "demoonly shownkills"
         else:
-            only = f"demoonly {'multikills' if multi else 'kills'}" + (" " + quoted(player) if player else "")
+            only = "demoonly kills" + (" " + quoted(player) if player else "")
         self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)), only)
         return True
 
@@ -2268,9 +2220,8 @@ class Window(QMainWindow):
     # recording
 
     def record(self):
-        """Record…: a stretch of the demo playing, its kills or multi-kills
-        (by the player chosen), those of whoever is shown, or while a player
-        is watched."""
+        """Record…: a stretch of the demo playing, its kills (by the player
+        chosen), those of whoever is shown, or while a player is watched."""
         demo = self.state.get("demo")
         if not demo:
             QMessageBox.information(self, "Record a video", "Play a demo first.")
@@ -2278,16 +2229,14 @@ class Window(QMainWindow):
         player = self.player.currentData() or ""
         index = self.index or {}
         recorder = (index.get("recorder") or {}).get("name", "")
-        keys = ["kills", "multikills", "shownkills", "shownmultikills", "watched"]
+        keys = ["kills", "shownkills", "watched"]
         # whoever is shown in the Player menu: their kills are the frags shown
         if player == SHOWN:
-            player, keys = "", keys[2:]
+            player, keys = "", keys[1:]
         elif recorder and not same_player(player, recorder):
-            keys = ["kills", "multikills", "recorderkills", "recordermultikills", "shownkills", "shownmultikills", "watched"]
+            keys = ["kills", "recorderkills", "shownkills", "watched"]
         by = " by " + player if player else ""
-        texts = {"kills": ("kill" + by, "kills" + by), "multikills": ("multi-kill" + by, "multi-kills" + by),
-                 "recorderkills": RECORDER_KILLS, "recordermultikills": RECORDER_MULTI,
-                 "shownkills": SHOWN_KILLS, "shownmultikills": SHOWN_MULTI}
+        texts = {"kills": ("kill" + by, "kills" + by), "recorderkills": RECORDER_KILLS, "shownkills": SHOWN_KILLS}
         # whose each choice plays
         whose = {key: recorder if key in RECORDER_ONLY else "" if key.startswith("shown") else player for key in keys}
 
@@ -2324,13 +2273,13 @@ class Window(QMainWindow):
         self.add_job(dialog.job(label, [clip], demo, player))
 
     def record_selected(self, tree):
-        """The kills or multi-kills selected, in one video or one each."""
+        """The kills selected, in one video or one each."""
         demo = self.state.get("demo")
         items = tree.selectedItems()
         if not demo or not items:
             QMessageBox.information(self, "Record a video", "Select kills of the demo playing first.")
             return
-        one = "multi-kill" if tree is self.multikills else "kill"
+        one = "kill"
         kind = f"{len(items)} {one}s" if len(items) > 1 else one
         player = self.player.currentData() or ""
         # whoever is shown too: their kills only while they're shown
@@ -2363,9 +2312,8 @@ class Window(QMainWindow):
                 self.add_job(dialog.job(f"{demo}, {clock(clip['start'])} to {clock(clip['end'])}", [clip], demo, player))
 
     def record_demos(self):
-        """The demos selected, all of them, the kills or multi-kills of the
-        player found by the filter, or those of whoever is shown, in one video
-        or one each."""
+        """The demos selected, all of them, the kills of the player found by
+        the filter, or those of whoever is shown, in one video or one each."""
         names = self.demos_of(self.demos.selectedItems())
         if not names:
             QMessageBox.information(self, "Record a video", "Select demos first.")
@@ -2379,8 +2327,7 @@ class Window(QMainWindow):
         indexes = {name: self.library.index(name) for name in names}
         # whose kills each choice plays in each demo
         recorders = {name: (index.get("recorder") or {}).get("name", "") for name, index in indexes.items() if index}
-        keys = ("kills", "multikills", "recorderkills", "recordermultikills", "shownkills", "shownmultikills",
-                "everything")
+        keys = ("kills", "recorderkills", "shownkills", "everything")
 
         def plans_for(before, after):
             """What each choice records of each demo with that lead-in and
@@ -2399,7 +2346,7 @@ class Window(QMainWindow):
                                 if recorders[name] else (0, []))
                     else:
                         plan = demoonly_plan(index, "" if key == "everything" else key,
-                                             found.get(name) or "" if key in ("kills", "multikills") else "",
+                                             found.get(name) or "" if key == "kills" else "",
                                              before, after)
                     if plan[0] or key == "everything":
                         plans[key][name] = plan
@@ -2418,11 +2365,8 @@ class Window(QMainWindow):
             by = " by " + player if player else ""
             return [
                 text("kills", the(count["kills"], "kill" + by, "kills" + by)),
-                text("multikills", the(count["multikills"], "multi-kill" + by, "multi-kills" + by)),
                 text("recorderkills", the(count["recorderkills"], *RECORDER_KILLS)),
-                text("recordermultikills", the(count["recordermultikills"], *RECORDER_MULTI)),
                 text("shownkills", the(count["shownkills"], *SHOWN_KILLS) + SHOWN_WHO),
-                text("shownmultikills", the(count["shownmultikills"], *SHOWN_MULTI)),
                 text("everything", "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos"),
             ]
 
@@ -2434,9 +2378,8 @@ class Window(QMainWindow):
         plans = plans_for(*dialog.kill_times())
         chosen = list(plans[what])
         whose = player + "'s" if player else "all the"
-        kind = {"kills": f"{whose} kills", "multikills": f"{whose} multi-kills",
-                "recorderkills": "recorder frags", "recordermultikills": "recorder multi-kills",
-                "shownkills": SHOWN_KILLS[1], "shownmultikills": SHOWN_MULTI[1], "everything": ""}[what]
+        kind = {"kills": f"{whose} kills", "recorderkills": "recorder frags", "shownkills": SHOWN_KILLS[1],
+                "everything": ""}[what]
         # no player for whoever is shown
         if what.startswith("shown"):
             found, player = {}, ""
