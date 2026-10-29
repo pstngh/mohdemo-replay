@@ -10,7 +10,9 @@ and PySide6.
 On the first run, Settings asks for the game program (found by itself when
 built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
 with `main/Pak0.pk3`) and the folder with the demos, whose folders are
-looked in too: a demo there is named by its path in it. The list shows each
+looked in too: the list shows them in their folders, which tell how many of
+their demos are shown, and a demo there is named by its path in the folder
+of demos (the filter finds a folder's name too). The list shows each
 demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
 too little), the menu next to the filter shows only default or realism
@@ -42,7 +44,7 @@ the multi-kills (of the player chosen above), the recorder's own (when the
 player chosen is someone else) or the frags or multi-kills shown, one after
 the other, or only while a player is watched. A
 right-click on kills or multi-kills selected records those, and on demos
-selected, all of them, the kills or multi-kills of the player the filter
+or folders selected, all of their demos, the kills or multi-kills of the player the filter
 found, each demo with its own spelling of the name, the recorder's, or the
 frags or multi-kills shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
 kills it holds and how long the video will be, and the last one is chosen

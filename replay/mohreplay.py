@@ -59,8 +59,8 @@ RECORDER_MULTI = ("recorder multi-kill", "recorder multi-kills")
 # what demoonly plays of the recorder for those
 RECORDER_ONLY = {"recorderkills": "kills", "recordermultikills": "multikills"}
 # the demo list's columns
-DEMO_COLUMNS = ["Date", "Length", "Rules", "Recorder", "Player", "Map", "Demo"]
-COL_DATE, COL_LENGTH, COL_RULES, COL_RECORDER, COL_PLAYER, COL_MAP, COL_DEMO = range(len(DEMO_COLUMNS))
+DEMO_COLUMNS = ["Demo", "Player", "Length", "Map", "Recorder", "Rules", "Date"]
+COL_DEMO, COL_PLAYER, COL_LENGTH, COL_MAP, COL_RECORDER, COL_RULES, COL_DATE = range(len(DEMO_COLUMNS))
 # the rules of a demo's levels, from mohdemoindex: realism servers change
 # the speeds and the damage of weapons
 RULES = {"default": "Default", "realism": "Realism", "both": "Both"}
@@ -443,14 +443,31 @@ class Library(QObject):
 
 
 class SortItem(QTreeWidgetItem):
-    """Sorts by the number kept in a column's UserRole, if any."""
+    """Sorts by the number kept in a column's UserRole, if any; folders
+    first, by name, whichever way the rest is sorted."""
 
     def __lt__(self, other):
-        column = self.treeWidget().sortColumn() if self.treeWidget() else 0
+        tree = self.treeWidget()
+        column = tree.sortColumn() if tree else 0
+        if isinstance(self, FolderItem) or isinstance(other, FolderItem):
+            if isinstance(self, FolderItem) and isinstance(other, FolderItem):
+                less = self.folder.lower() < other.folder.lower()
+            else:
+                less = isinstance(self, FolderItem)
+            # sorting the other way asks other < self
+            return less if not tree or tree.header().sortIndicatorOrder() == Qt.AscendingOrder else not less
         mine, theirs = self.data(column, Qt.UserRole), other.data(column, Qt.UserRole)
         if isinstance(mine, (int, float)) and isinstance(theirs, (int, float)):
             return mine < theirs
         return self.text(column).lower() < other.text(column).lower()
+
+
+class FolderItem(SortItem):
+    """A folder of demos in the list, with those in it."""
+
+    def __init__(self, folder):
+        super().__init__([""] * len(DEMO_COLUMNS))
+        self.folder = folder
 
 
 def kept_config():
@@ -1534,6 +1551,7 @@ class Window(QMainWindow):
         self.round_marks = self.kill_marks = self.multi_marks = []
         self.library = Library(self.library_changed, self)
         self.demo_items = {}  # name: item
+        self.folder_items = {}  # folder in the demos folder: item
         self.wanted_player = None  # to choose once the demo plays
 
         self.setWindowTitle("MoH Demo Replay")
@@ -1554,7 +1572,8 @@ class Window(QMainWindow):
         self.demos = self.make_list(DEMO_COLUMNS, fit=False)
         self.demos.setSortingEnabled(True)
         self.demos.sortByColumn(COL_DATE, Qt.DescendingOrder)
-        self.demos.itemActivated.connect(lambda item: self.play_demo(item.text(COL_DEMO)))
+        self.demos.itemActivated.connect(lambda item: item.data(COL_DEMO, Qt.UserRole)
+                                         and self.play_demo(item.data(COL_DEMO, Qt.UserRole)))
         self.add_menu(self.demos, "Record the demos selected…", self.record_demos)
         left = QWidget()
         box = QVBoxLayout(left)
@@ -1883,12 +1902,18 @@ class Window(QMainWindow):
     # demos
 
     def fill_demos(self):
-        """Lists the demos of the folder, with what the library knows of
-        them, keeping the items there."""
+        """Lists the demos of the folder, in the folders they're in, with
+        what the library knows of them, keeping the items there."""
         demos = list_demos(self.settings.value("demos", ""))
         for name in [n for n in self.demo_items if n not in demos]:
             item = self.demo_items.pop(name)
-            self.demos.takeTopLevelItem(self.demos.indexOfTopLevelItem(item))
+            (item.parent() or self.demos.invisibleRootItem()).removeChild(item)
+        # the folders left empty, those in them first
+        for folder in sorted(self.folder_items, key=len, reverse=True):
+            item = self.folder_items[folder]
+            if not item.childCount():
+                (item.parent() or self.demos.invisibleRootItem()).removeChild(item)
+                del self.folder_items[folder]
         self.demos.setSortingEnabled(False)
         for name, path in demos.items():
             item = self.demo_items.get(name)
@@ -1900,8 +1925,9 @@ class Window(QMainWindow):
                 date = QDateTime.fromSecsSinceEpoch(mtime).toString("yyyy-MM-dd hh:mm")
                 item = self.demo_items[name] = SortItem([""] * len(DEMO_COLUMNS))
                 item.setText(COL_DATE, date)
-                item.setText(COL_DEMO, name)
-                self.demos.addTopLevelItem(item)
+                item.setText(COL_DEMO, name.rsplit("/", 1)[-1])
+                item.setData(COL_DEMO, Qt.UserRole, name)
+                self.folder_item(posixpath.dirname(name)).addChild(item)
             summary = self.library.demos.get(name)
             if summary and item.data(COL_LENGTH, Qt.UserRole) != summary["duration"]:
                 item.setText(COL_LENGTH, clock(summary["duration"]))
@@ -1915,8 +1941,37 @@ class Window(QMainWindow):
                        + html.escape(", ".join(player_kills(p) for p in players)))
                 for column in range(len(DEMO_COLUMNS)):
                     item.setToolTip(column, tip)
+        self.demos.setRootIsDecorated(bool(self.folder_items))
         self.demos.setSortingEnabled(True)
         self.filter_demos()
+
+    def folder_item(self, folder):
+        """The item of a folder in the demos folder, with those it's in; the
+        list itself for none."""
+        if not folder:
+            return self.demos.invisibleRootItem()
+        item = self.folder_items.get(folder)
+        if item is None:
+            parent = self.folder_item(posixpath.dirname(folder))
+            item = self.folder_items[folder] = FolderItem(folder)
+            item.setIcon(COL_DEMO, theme_icon("folder", QStyle.SP_DirIcon))
+            item.setToolTip(COL_DEMO, plain_tip(folder))
+            parent.addChild(item)
+            item.setExpanded(True)
+        return item
+
+    def demos_of(self, items):
+        """The names of the demos shown among items, and in the folders among
+        them."""
+        names = []
+        for item in items:
+            if item.isHidden():
+                continue
+            if isinstance(item, FolderItem):
+                names += self.demos_of(item.child(i) for i in range(item.childCount()))
+            elif item.data(COL_DEMO, Qt.UserRole):
+                names.append(item.data(COL_DEMO, Qt.UserRole))
+        return list(dict.fromkeys(names))
 
     def rules_changed(self):
         self.settings.setValue("rules", self.rules.currentData())
@@ -1948,6 +2003,17 @@ class Window(QMainWindow):
             item.setText(COL_PLAYER, ", ".join(player_kills(p) for p in best))
             item.setData(COL_PLAYER, Qt.UserRole, best[0][0] if best else None)
             found_any |= shown and bool(best)
+        # a folder shows how many of its demos are shown, those in it first
+        counts = {}
+        for folder in sorted(self.folder_items, key=len, reverse=True):
+            item = self.folder_items[folder]
+            children = [item.child(i) for i in range(item.childCount())]
+            count = counts[folder] = sum(counts[c.folder] if isinstance(c, FolderItem) else not c.isHidden()
+                                         for c in children)
+            item.setText(COL_DEMO, f"{posixpath.basename(folder)} ({count})")
+            item.setHidden(not count)
+            if words and count:
+                item.setExpanded(True)
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)
 
@@ -2300,7 +2366,7 @@ class Window(QMainWindow):
         """The demos selected, all of them, the kills or multi-kills of the
         player found by the filter, or those of whoever is shown, in one video
         or one each."""
-        names = [item.text(COL_DEMO) for item in self.demos.selectedItems() if not item.isHidden()]
+        names = self.demos_of(self.demos.selectedItems())
         if not names:
             QMessageBox.information(self, "Record a video", "Select demos first.")
             return

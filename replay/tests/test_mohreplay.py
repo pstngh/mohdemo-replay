@@ -694,8 +694,10 @@ class TestWindow(FakeGameCase):
                 "bind UPARROW " + next_kill, "bind DOWNARROW " + prev_kill, next_kill, prev_kill]), player)
 
     def shown(self, window):
-        return sorted(window.demos.topLevelItem(i).text(mohreplay.COL_DEMO) for i in range(window.demos.topLevelItemCount())
-                      if not window.demos.topLevelItem(i).isHidden())
+        """The names of the demos shown, in folders shown."""
+        def shown(item):
+            return not item.isHidden() and (not item.parent() or shown(item.parent()))
+        return sorted(name for name, item in window.demo_items.items() if shown(item))
 
     def test_filter_demos(self):
         self.add_demo("second-obj_team2", DEMO)
@@ -852,8 +854,24 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(self.shown(window), ["broken", "clan/first", "clan/war 2/first", "first", "other"])
         self.assertEqual(window.demo_items["clan/war 2/first"].text(mohreplay.COL_LENGTH), "10:00")
         self.assertTrue(os.path.isfile(os.path.join(window.library.cache, "clan", "war 2", "first.json")))
+        # in their folders, by their file name; folders first
+        clan = window.folder_items["clan"]
+        self.assertEqual(clan.text(mohreplay.COL_DEMO), "clan (2)")
+        self.assertEqual([clan.child(i).text(mohreplay.COL_DEMO) for i in range(clan.childCount())], ["war 2 (1)", "first"])
+        self.assertIs(window.demo_items["clan/war 2/first"].parent(), window.folder_items["clan/war 2"])
+        self.assertEqual(window.demos.topLevelItem(0), clan)
+        self.assertTrue(window.demos.rootIsDecorated())
         window.filter.setText("WAR")
         self.assertEqual(self.shown(window), ["clan/war 2/first"])
+        self.assertEqual(clan.text(mohreplay.COL_DEMO), "clan (1)")
+        window.filter.setText("first")
+        self.assertEqual(window.demos_of([clan]), ["clan/war 2/first", "clan/first"])
+        window.filter.setText("")
+        # a double-click on a folder plays nothing
+        window.demos.itemActivated.emit(clan, 0)
+        self.assertIsNone(window.pending_demo)
+        window.demos.itemActivated.emit(window.demo_items["clan/war 2/first"], 0)
+        self.assertEqual(window.pending_demo, "clan/war 2/first")
         self.playing(window, "clan/war 2/first")
         # the folders are watched, new ones too
         os.makedirs(os.path.join(self.demos, "clan", "new"))
@@ -864,6 +882,10 @@ class TestLibrary(FakeGameCase):
         os.remove(os.path.join(self.demos, "clan", "first.dm3"))
         self.assertTrue(wait_until(lambda: "clan/first" not in window.demo_items, 20))
         self.assertFalse(os.path.exists(os.path.join(window.library.cache, "clan", "first.json")))
+        # a folder left empty goes
+        shutil.rmtree(os.path.join(self.demos, "clan", "new"))
+        self.assertTrue(wait_until(lambda: "clan/new" not in window.folder_items, 20))
+        self.assertIn("clan", window.folder_items)
 
     def test_without_mohdemoindex(self):
         os.remove(os.path.join(self.bin, "mohdemoindex"))
