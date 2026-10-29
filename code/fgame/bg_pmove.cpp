@@ -277,7 +277,10 @@ static float PM_CmdScale(usercmd_t *cmd)
         return 0;
     }
 
-    total = sqrt((float)(fmove * fmove + smove * smove + cmd->upmove * cmd->upmove));
+    // The original games divide by the raw cmd values, so the backward and
+    // strafe factors from PM_GetMove apply twice (backward is 0.636 of run
+    // speed, strafe 0.716). Stock clients predict with this, so keep it.
+    total = sqrt((float)(cmd->forwardmove * cmd->forwardmove + cmd->rightmove * cmd->rightmove + cmd->upmove * cmd->upmove));
     scale = (float)pm->ps->speed * max / (127.0 * total);
 
     return scale;
