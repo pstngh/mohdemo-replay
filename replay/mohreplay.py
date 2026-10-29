@@ -17,6 +17,7 @@ import hashlib
 import html
 import json
 import os
+import posixpath
 import shutil
 import sys
 import tempfile
@@ -241,12 +242,23 @@ def player_kills(player):
     return f"{name} ({kills}, {multi} multi)" if multi else f"{name} ({kills})"
 
 
+def walk_demos(folder):
+    """{name: path} of the demos in folder and the folders in it, a name
+    being the path in folder without .dm3, with / between folders as the
+    game takes it, and the folders looked in, but hidden ones."""
+    demos, folders = {}, []
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        folders.append(root)
+        sub = os.path.relpath(root, folder).replace(os.sep, "/")
+        for n in files:
+            if n.lower().endswith(".dm3"):
+                demos[n[:-4] if sub == "." else sub + "/" + n[:-4]] = os.path.join(root, n)
+    return demos, folders
+
+
 def list_demos(folder):
-    """{name without .dm3: path} of the demos in folder."""
-    try:
-        return {n[:-4]: os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".dm3")}
-    except OSError:
-        return {}
+    return walk_demos(folder)[0]
 
 
 def summarize(index):
@@ -288,6 +300,7 @@ class Library(QObject):
         super().__init__(parent)
         self.on_change = on_change
         self.demos = {}  # name: summarize()
+        self.paths = {}  # name: path of the demos to index
         self.folder = self.cache = self.tool = None
         self.waiting = []
         self.busy = set()
@@ -314,14 +327,19 @@ class Library(QObject):
         key = hashlib.sha1(self.folder.encode()).hexdigest()[:12]
         base = QStandardPaths.writableLocation(QStandardPaths.GenericCacheLocation)
         self.cache = os.path.join(base, "mohdemo-replay", "index", key)
-        self.watcher.addPath(self.folder)
         self.rescan()
 
     def rescan(self):
         """Loads the indexes kept, and indexes the demos without one."""
         if not self.folder or not os.path.isdir(self.folder):
             return
-        demos = list_demos(self.folder)
+        demos, folders = walk_demos(self.folder)
+        # the folders in it too, for demos added there
+        watched = set(self.watcher.directories())
+        if set(folders) - watched:
+            self.watcher.addPaths(sorted(set(folders) - watched))
+        if watched - set(folders):
+            self.watcher.removePaths(sorted(watched - set(folders)))
         try:
             made = os.path.getmtime(self.tool) if self.tool and os.path.isfile(self.tool) else None
         except OSError:
@@ -348,7 +366,8 @@ class Library(QObject):
                 except OSError:
                     pass
         # newest first
-        self.waiting = [demos[name] for _, name in sorted(stale, reverse=True)]
+        self.paths = demos
+        self.waiting = [name for _, name in sorted(stale, reverse=True)]
         self.total = len(self.waiting) + len(self.busy)
         self.start_workers()
         self.on_change()
@@ -369,35 +388,39 @@ class Library(QObject):
             self.demos.pop(name, None)
 
     def start_workers(self):
-        if self.waiting:
-            os.makedirs(self.cache, exist_ok=True)
         while self.waiting and len(self.workers) < self.WORKERS:
-            batch, self.waiting = self.waiting[:self.BATCH], self.waiting[self.BATCH:]
-            names = {os.path.basename(path)[:-4] for path in batch}
+            # the demos of one folder, as mohdemoindex names an index after
+            # the demo's file, in the folder of indexes for it
+            folder = posixpath.dirname(self.waiting[0])
+            batch = [n for n in self.waiting if posixpath.dirname(n) == folder][:self.BATCH]
+            names = set(batch)
+            self.waiting = [n for n in self.waiting if n not in names]
             self.busy |= names
+            output = os.path.join(self.cache, folder)
+            os.makedirs(output, exist_ok=True)
             worker = QProcess(self)
-            worker.readyReadStandardOutput.connect(lambda w=worker: self.indexed(w))
-            worker.finished.connect(lambda *_, w=worker, n=names: self.worker_done(w, n))
-            worker.errorOccurred.connect(lambda error, w=worker, n=names:
-                                         error == QProcess.FailedToStart and self.worker_done(w, n))
+            worker.readyReadStandardOutput.connect(lambda w=worker, f=folder: self.indexed(w, f))
+            worker.finished.connect(lambda *_, w=worker, n=names, f=folder: self.worker_done(w, n, f))
+            worker.errorOccurred.connect(lambda error, w=worker, n=names, f=folder:
+                                         error == QProcess.FailedToStart and self.worker_done(w, n, f))
             self.workers.append(worker)
-            worker.start(self.tool, [self.cache, *batch])
+            worker.start(self.tool, [output, *(self.paths[n] for n in batch)])
             try:
                 # behind the game
                 os.setpriority(os.PRIO_PROCESS, worker.processId(), 10)
             except (OSError, AttributeError):
                 pass
 
-    def indexed(self, worker):
+    def indexed(self, worker, folder):
         for line in bytes(worker.readAllStandardOutput()).decode("utf-8", "replace").splitlines():
             if line:
-                self.load(line)
+                self.load(posixpath.join(folder, line))
         self.changed_timer.start()
 
-    def worker_done(self, worker, names):
+    def worker_done(self, worker, names, folder):
         if worker not in self.workers:
             return
-        self.indexed(worker)
+        self.indexed(worker, folder)
         self.workers.remove(worker)
         self.busy -= names
         # not indexed: not tried again until the folder is opened again
@@ -1127,6 +1150,8 @@ class RecordDialog(QDialog):
             options = with_filters(options, f"tmix=frames={frames},framestep={frames}")
             fps *= frames
         width, height = (int(v) for v in self.size.currentText().lower().split("x"))
+        # a demo's file name, without its folders
+        demo = demo.rsplit("/", 1)[-1]
         try:
             name = self.pattern.text().format_map({
                 "demo": demo, "start": clock(clips[0]["start"]).replace(":", "-"), "player": player or "",
@@ -2260,7 +2285,7 @@ def main():
     parser.add_argument("--exe", help="the openmohaa program")
     parser.add_argument("--game", help="the folder with the game files (main/Pak0.pk3)")
     parser.add_argument("--demos", help="the folder with the demos (.dm3)")
-    parser.add_argument("demo", nargs="?", help="a demo to play, without .dm3")
+    parser.add_argument("demo", nargs="?", help="a demo to play: its path in the demos folder, without .dm3")
     args = parser.parse_args()
 
     app = QApplication(sys.argv)

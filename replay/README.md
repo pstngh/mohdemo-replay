@@ -9,7 +9,8 @@ and PySide6.
 
 On the first run, Settings asks for the game program (found by itself when
 built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
-with `main/Pak0.pk3`) and the folder with the demos. The list shows each
+with `main/Pak0.pk3`) and the folder with the demos, whose folders are
+looked in too: a demo there is named by its path in it. The list shows each
 demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
 too little), the menu next to the filter shows only default or realism
@@ -49,8 +50,8 @@ Linux and faster than real time, while you keep watching; FFmpeg joins the
 clips of a video without encoding them again. The Videos panel lists them,
 with how far the one recording is and how long it has left
 (Cancel, Open folder, double-click to watch one), and each lands in the
-folder chosen, named from a pattern (`{demo}`, `{start}`, `{player}`,
-`{date}`). How long each kill plays before and after it, the size, the
+folder chosen, named from a pattern (`{demo}`, the demo's file name,
+`{start}`, `{player}`, `{date}`). How long each kill plays before and after it, the size, the
 viewmodel, frames per second, quality, codec (H.264, H.265 or the graphics
 card's H.264 encoder: VAAPI on Linux, VideoToolbox on macOS), the models
 forced, sound and its bitrate are settings, and the Advanced box takes

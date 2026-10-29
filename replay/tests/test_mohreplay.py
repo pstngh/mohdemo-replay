@@ -773,6 +773,30 @@ class TestLibrary(FakeGameCase):
         self.assertNotIn("other", window.library.demos)
         self.assertFalse(os.path.exists(os.path.join(window.library.cache, "other.json")))
 
+    def test_demos_in_folders(self):
+        # named by their path, so the same file name in two folders is two
+        # demos; hidden folders are left out
+        for name in ("clan/first", "clan/war 2/first", ".trash/first"):
+            os.makedirs(os.path.dirname(os.path.join(self.demos, name)), exist_ok=True)
+            self.add_demo(name, DEMO)
+        window = self.window()
+        self.indexed(window, ("first", "other", "clan/first", "clan/war 2/first"))
+        self.assertEqual(self.shown(window), ["broken", "clan/first", "clan/war 2/first", "first", "other"])
+        self.assertEqual(window.demo_items["clan/war 2/first"].text(mohreplay.COL_LENGTH), "10:00")
+        self.assertTrue(os.path.isfile(os.path.join(window.library.cache, "clan", "war 2", "first.json")))
+        window.filter.setText("WAR")
+        self.assertEqual(self.shown(window), ["clan/war 2/first"])
+        self.playing(window, "clan/war 2/first")
+        # the folders are watched, new ones too
+        os.makedirs(os.path.join(self.demos, "clan", "new"))
+        self.assertTrue(wait_until(lambda: os.path.join(self.demos, "clan", "new") in window.library.watcher.directories(), 20))
+        self.add_demo("clan/new/late", DEMO)
+        self.assertTrue(wait_until(lambda: "clan/new/late" in window.demo_items
+                                   and window.demo_items["clan/new/late"].text(mohreplay.COL_LENGTH), 20))
+        os.remove(os.path.join(self.demos, "clan", "first.dm3"))
+        self.assertTrue(wait_until(lambda: "clan/first" not in window.demo_items, 20))
+        self.assertFalse(os.path.exists(os.path.join(window.library.cache, "clan", "first.json")))
+
     def test_without_mohdemoindex(self):
         os.remove(os.path.join(self.bin, "mohdemoindex"))
         window = self.window()
@@ -919,6 +943,24 @@ class TestRecording(FakeGameCase):
         self.assertNotIn("tmix", cvars["cl_aviPipeFormat"])
         self.assertIn("Recorded", window.statusBar().currentMessage())
         self.assertIsNone(window.recorder)
+
+    def test_record_a_demo_in_a_folder(self):
+        os.makedirs(os.path.join(self.demos, "clan", "war 2"))
+        self.add_demo("clan/war 2/first", DEMO)
+        window = self.window()
+        self.playing(window, "clan/war 2/first")
+
+        def setup(dialog):
+            dialog.start.setText("1:00")
+            dialog.end.setText("1:10")
+            dialog.pattern.setText("{demo} {start}")
+        self.record(window, setup)
+        job, = self.done(window)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["item"].text(1), "clan/war 2/first, 1:00 to 1:10")
+        # named after the demo's file
+        video = self.video("first 1-00.mp4")
+        self.assertEqual((video["start"], video["end"]), (60000, 70000))
 
     def test_motion_blur(self):
         window = self.window()
