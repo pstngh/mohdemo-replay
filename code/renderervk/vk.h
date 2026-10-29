@@ -567,6 +567,7 @@ void		vk_clear( int buffers, const vec4_t color );
 
 typedef enum {
 	READ_RGB8,			// 3 bytes per pixel
+	READ_BGR8,			// 3 bytes per pixel, blue first: a copy of a B8G8R8A8 frame (Added in OPM)
 	READ_DEPTH_FLOAT,	// window-space depth in [0, 1], one float per pixel
 	READ_STENCIL8		// 1 byte per pixel
 } readFormat_t;

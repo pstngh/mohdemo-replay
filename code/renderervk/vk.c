@@ -4249,6 +4249,7 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 
 	switch ( format ) {
 	case READ_RGB8:
+	case READ_BGR8:
 		pixelSize = 3;
 		break;
 	case READ_DEPTH_FLOAT:
@@ -4281,11 +4282,11 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 	h = y1 - y0;
 
 	VK_BeginFrameIfNeeded();
-	if ( format == READ_RGB8 ) {
+	if ( format == READ_RGB8 || format == READ_BGR8 ) {
 		// the scene is in the color target once it has ended
 		vk_end_scene();
 	}
-	if ( format != READ_RGB8 ) {
+	if ( format != READ_RGB8 && format != READ_BGR8 ) {
 		// zeros until the depth image is readable (vk_want_depth_reads)
 		vk.depthReadSerial = vk.frameSerial;
 		if ( !vk.depthReadable ) {
@@ -4295,7 +4296,7 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 	VK_EndRenderPass();
 	cmd = vk.frame->mainCmd;
 
-	if ( format == READ_RGB8 ) {
+	if ( format == READ_RGB8 || format == READ_BGR8 ) {
 		// the color target of the frame; before anything is drawn in the
 		// frame (no target chosen yet) the offscreen image, whose contents
 		// are then stale or undefined, like a GL back buffer's
@@ -4344,7 +4345,7 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 	qvkCmdCopyImageToBuffer( cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk.readbackBuffer.buffer, 1, &region );
 
 	VK_ImageBarrier( cmd, image, barrierAspect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, 0, stages, access | ( format == READ_RGB8 ? VK_ACCESS_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT ) );
+		VK_PIPELINE_STAGE_TRANSFER_BIT, 0, stages, access | ( format == READ_RGB8 || format == READ_BGR8 ? VK_ACCESS_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT ) );
 
 	VK_HostReadBarrier( cmd, vk.readbackBuffer.buffer );
 
@@ -4354,12 +4355,20 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 	// B8G8R8A8 targets have red third
 	red = vk.colorFormat == VK_FORMAT_B8G8R8A8_UNORM ? 2 : 0;
 	blue = 2 - red;
+	// Added in OPM
+	//  BGR: the first and third bytes of each pixel the other way round, a
+	//  copy of a B8G8R8A8 frame's texels without A
+	if ( format == READ_BGR8 ) {
+		red = blue;
+		blue = 2 - red;
+	}
 	for ( row = 0; row < h; row++ ) {
 		const byte *src = vk.readbackBuffer.mapped + (size_t)( h - 1 - row ) * w * texelSize;
 		byte *dst = (byte *)buffer + ( (size_t)( y0 - y + row ) * width + ( x0 - x ) ) * pixelSize;
 
 		switch ( format ) {
 		case READ_RGB8:
+		case READ_BGR8:
 			if ( texelSize == 8 ) {
 				// HDR output's RGBA16F frame: the frame read back is drawn
 				// without the expansion (vk_sdr_frame), clamped and rounded
@@ -4368,7 +4377,8 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 				int c;
 
 				for ( col = 0; col < w * 3; col++ ) {
-					float v = VK_HalfToFloat( half[( col / 3 ) * 4 + col % 3] );
+					int channel = format == READ_BGR8 ? 2 - col % 3 : col % 3;
+					float v = VK_HalfToFloat( half[( col / 3 ) * 4 + channel] );
 
 					c = (int)( Com_Clamp( 0.0f, 1.0f, v ) * 255.0f + 0.5f );
 					dst[col] = (byte)c;

@@ -1177,8 +1177,25 @@ static void RB_TakeVideoFrame( const videoFrameCommand_t *cmd )
 	avipadlen = avipadwidth - linelen;
 
 	cBuf = PADP(cmd->captureBuffer, packAlign);
-		
-	vk_read_pixels(0, 0, cmd->width, cmd->height, READ_RGB8, cBuf);
+
+	// Added in OPM
+	//  Read as the BGR the AVI holds, the frame's own order mostly, straight
+	//  into its rows when they need no padding: 1.6 msec less at 1920x1080
+	if(!cmd->motionJpeg && !avipadlen)
+	{
+		vk_read_pixels(0, 0, cmd->width, cmd->height, READ_BGR8, cmd->encodeBuffer);
+
+		memcount = avipadwidth * cmd->height;
+
+		// gamma correct
+		if(glConfig.deviceSupportsGamma)
+			R_GammaCorrect(cmd->encodeBuffer, memcount);
+
+		ri.CL_WriteAVIVideoFrame(cmd->encodeBuffer, memcount);
+		return;
+	}
+
+	vk_read_pixels(0, 0, cmd->width, cmd->height, cmd->motionJpeg ? READ_RGB8 : READ_BGR8, cBuf);
 
 	memcount = padwidth * cmd->height;
 
@@ -1202,17 +1219,14 @@ static void RB_TakeVideoFrame( const videoFrameCommand_t *cmd )
 		destptr = cmd->encodeBuffer;
 		memend = srcptr + memcount;
 		
-		// swap R and B and remove line paddings
+		// Changed in OPM
+		//  pad the lines, read as BGR
 		while(srcptr < memend)
 		{
 			lineend = srcptr + linelen;
-			while(srcptr < lineend)
-			{
-				*destptr++ = srcptr[2];
-				*destptr++ = srcptr[1];
-				*destptr++ = srcptr[0];
-				srcptr += 3;
-			}
+			Com_Memcpy(destptr, srcptr, linelen);
+			destptr += linelen;
+			srcptr = lineend;
 			
 			Com_Memset(destptr, '\0', avipadlen);
 			destptr += avipadlen;
