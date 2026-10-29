@@ -586,7 +586,8 @@ quake3 set test blah + map test
 ============================================================================
 */
 
-#define	MAX_CONSOLE_LINES	32
+// the + commands of the command line; mohreplay's recorder sends over 32
+#define	MAX_CONSOLE_LINES	128
 int		com_numConsoleLines;
 char	*com_consoleLines[MAX_CONSOLE_LINES];
 
