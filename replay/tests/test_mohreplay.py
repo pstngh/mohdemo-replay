@@ -722,7 +722,10 @@ class TestWindow(FakeGameCase):
 
 class TestSettings(FakeGameCase):
     def test_tabs(self):
-        dialog = mohreplay.SettingsDialog(self.settings, tab="videos")
+        # on the window, as the app opens it: left alone, PySide may delete
+        # it twice when Python quits
+        window = self.window()
+        dialog = mohreplay.SettingsDialog(self.settings, window, "videos")
         self.assertEqual(dialog.tabs.tabText(dialog.tabs.currentIndex()), "Videos")
         dialog.fields["demos"].setText(os.path.join(self.tmp, "other demos"))
         dialog.kill_before.setValue(6)
@@ -741,7 +744,7 @@ class TestSettings(FakeGameCase):
         self.assertEqual((self.settings.value("rec/size"), self.settings.value("rec/blur")), ("1280x720", "true"))
         self.assertEqual(mohreplay.video_summary(self.settings),
                          "1280x720, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced")
-        again = mohreplay.SettingsDialog(self.settings)
+        again = mohreplay.SettingsDialog(self.settings, window)
         self.assertEqual(again.tabs.currentIndex(), 0)
         self.assertTrue(again.videos.blur.isChecked())
 
@@ -1123,7 +1126,8 @@ class TestRecording(FakeGameCase):
         self.assertEqual(self.video("multi.mp4")["only"], "multikills")
 
     def test_nothing_to_record(self):
-        dialog = mohreplay.RecordDialog(self.settings, [("kills", "No kills", False), ("watched", "While watched", False)])
+        dialog = mohreplay.RecordDialog(self.settings, [("kills", "No kills", False), ("watched", "While watched", False)],
+                                        parent=self.window())
         self.assertFalse(dialog.nothing.isHidden())
         self.assertTrue(all(button.isHidden() for button in dialog.choices.values()))
         dialog.accept()
