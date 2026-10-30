@@ -741,6 +741,8 @@ typedef struct {
 	int			numVictims;
 	char		victims[DEMOFILTER_NAMES][MAX_NAME_LENGTH];
 	int			weapons;	// 1 << demoWeapon_t of each, 0 for any
+	int			numLevels;
+	char		levels[DEMOFILTER_NAMES][MAX_NAME_LENGTH];	// parts of level names, any case
 } demoFilter_t;
 
 static demoFilter_t	cl_demoFilter;
@@ -1197,16 +1199,48 @@ static qboolean CL_DemoKillerIs( const demoEvent_t *ev, const char *player, qboo
 
 /*
 ====================
+CL_DemoLevelOf
+
+The name of the level event ev is in, "" before the first
+====================
+*/
+static const char *CL_DemoLevelOf( const demoEvent_t *ev ) {
+	for ( ; ev >= cl_demoIndex.events; ev-- ) {
+		if ( ev->type == DEMOEVENT_MAP ) {
+			return ev->text;
+		}
+	}
+	return "";
+}
+
+/*
+====================
 CL_DemoFilterPasses
 
-Whether kill event ev has one of the filter's victims and weapons
+Whether kill event ev has one of the filter's victims and weapons, in one
+of its levels
 ====================
 */
 static qboolean CL_DemoFilterPasses( const demoEvent_t *ev ) {
+	const char	*level;
+	int			i;
+
 	if ( cl_demoFilter.weapons && !( cl_demoFilter.weapons & ( 1 << ev->weapon ) ) ) {
 		return qfalse;
 	}
-	return !cl_demoFilter.numVictims || CL_DemoNamesHave( ev->otherName, cl_demoFilter.victims, cl_demoFilter.numVictims );
+	if ( cl_demoFilter.numVictims && !CL_DemoNamesHave( ev->otherName, cl_demoFilter.victims, cl_demoFilter.numVictims ) ) {
+		return qfalse;
+	}
+	if ( !cl_demoFilter.numLevels ) {
+		return qtrue;
+	}
+	level = CL_DemoLevelOf( ev );
+	for ( i = 0; i < cl_demoFilter.numLevels; i++ ) {
+		if ( Q_stristr( level, cl_demoFilter.levels[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }
 
 /*
@@ -1810,13 +1844,14 @@ static void CL_DemoPrintFilterNames( const char *what, char names[][MAX_NAME_LEN
 ====================
 CL_DemoFilter_f
 
-demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>...]
+demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name>]
 
 Which kills demoonly kills, demonextkill and demoprevkill go to without a
 player given: by players whose names have one of the killers in them, while
 they're shown, or by whoever is shown, of players whose names have one of
-the victims, with one of the weapons. Each adds to it, but clear; without
-arguments, it tells what it is.
+the victims, with one of the weapons, in levels whose names have one of the
+levels in them (any case: "obj/" for the objective maps). Each adds to it,
+but clear; without arguments, it tells what it is.
 ====================
 */
 static void CL_DemoFilter_f( void ) {
@@ -1839,6 +1874,11 @@ static void CL_DemoFilter_f( void ) {
 			}
 		}
 		Com_Printf( cl_demoFilter.weapons ? "\n" : " any\n" );
+		if ( cl_demoFilter.numLevels ) {
+			CL_DemoPrintFilterNames( "Levels:", cl_demoFilter.levels, cl_demoFilter.numLevels );
+		} else {
+			Com_Printf( "Levels: any\n" );
+		}
 		return;
 	}
 
@@ -1864,8 +1904,10 @@ static void CL_DemoFilter_f( void ) {
 			weapons |= ( 1 << weapon ) | ( weapon == DEMOWEAPON_OTHER ? 1 << DEMOWEAPON_UNKNOWN : 0 );
 		}
 		cl_demoFilter.weapons |= weapons;
+	} else if ( !Q_stricmp( what, "level" ) && Cmd_Argc() > 2 ) {
+		CL_DemoAddFilterName( cl_demoFilter.levels, &cl_demoFilter.numLevels, Cmd_ArgsFrom( 2 ) );
 	} else {
-		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>...]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other\n" );
+		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name>]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, and level obj/ keeps the objective maps'\n" );
 	}
 }
 
