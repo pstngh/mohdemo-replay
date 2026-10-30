@@ -380,7 +380,7 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(plan(DEMO, "kills", "T-", 10000, 5000), (3, [(0, 19500)]))
 
     def test_wording(self):
-        self.assertEqual([mohreplay.the(n, "kill", "kills") for n in (0, 1, 3)], ["No kills", "The kill", "The 3 kills"])
+        self.assertEqual([mohreplay.the(n, "frag", "frags") for n in (0, 1, 3)], ["No frags", "The frag", "The 3 frags"])
         self.assertEqual([mohreplay.about(msec) for msec in (20000, 291000, 3900000)],
                          ["under a minute", "about 5 min", "about 1 h 5 min"])
 
@@ -590,9 +590,11 @@ class TestWindow(FakeGameCase):
         self.assertEqual(window.title.text(), "first")
         self.assertIn("obj/obj_team1", window.info.text())
         self.assertIn("recorded by t-", window.info.text())
-        self.assertEqual([window.tabs.tabText(i) for i in range(window.tabs.count())], ["Kills (4)", "Rounds (3)"])
+        self.assertEqual([window.tabs.tabText(i) for i in range(window.tabs.count())], ["Frags (4)", "Rounds (3)"])
         # with what, and how in the tooltip, as the game told it
-        self.assertEqual(window.kills.columnCount(), 4)
+        self.assertEqual([window.kills.headerItem().text(i) for i in range(4)], ["Time", "Fragger", "Victim", "Weapon"])
+        self.assertTrue({"Fragger", "Victim", "Weapon"} <= {label.text() for label in window.findChildren(mohreplay.QLabel)})
+        self.assertEqual(window.only_kills_button.text(), "These frags")
         self.assertEqual([window.kills.topLevelItem(i).text(3) for i in range(4)], ["Rifle", "Rifle", "Other", "Other"])
         self.assertIn("was", window.kills.topLevelItem(0).toolTip(2))
         # the players to choose from
@@ -611,14 +613,14 @@ class TestWindow(FakeGameCase):
         self.choose(window, killer="phil")
         self.assertEqual(self.listed(window), [])
         self.assertEqual(window.slider.kills, [])
-        self.assertEqual(window.tabs.tabText(0), "Kills (0 of 4)")
+        self.assertEqual(window.tabs.tabText(0), "Frags (0 of 4)")
         self.choose(window, killer="T")
         self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14"])
         self.assertEqual(len(window.slider.kills), 3)
         # several
         self.choose(window, killer="phil, t-")
         self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14"])
-        self.assertEqual(window.tabs.tabText(0), "Kills (3 of 4)")
+        self.assertEqual(window.tabs.tabText(0), "Frags (3 of 4)")
         self.assertTrue(wait_until(lambda: self.commands(window.game)[-3:] == [
             "demofilter clear", 'demofilter killer "phil"', 'demofilter killer "t-"']))
 
@@ -626,7 +628,7 @@ class TestWindow(FakeGameCase):
         window = self.window()
         # no demo, no kills of none
         self.choose(window, weapons=["rifle"])
-        self.assertEqual(window.tabs.tabText(0), "Kills (0)")
+        self.assertEqual(window.tabs.tabText(0), "Frags (0)")
         self.playing(window)
         # anyone's, whoever is shown: Bob's suicide too
         self.choose(window, victim="bob", weapons=[])
@@ -645,7 +647,7 @@ class TestWindow(FakeGameCase):
             "demofilter weapon other"]))
         self.choose(window, killer="", victim="", weapons=[])
         self.assertEqual(window.weapon.text(), "Any weapon")
-        self.assertEqual(window.tabs.tabText(0), "Kills (4)")
+        self.assertEqual(window.tabs.tabText(0), "Frags (4)")
 
     def test_filter_fields(self):
         window = self.window()
@@ -726,7 +728,7 @@ class TestWindow(FakeGameCase):
         self.assertTrue(wait_until(lambda: window.state.get("only") == "kills"))
         self.assertEqual(self.commands(window.game)[-4:], ["demofilter clear", "demofilter shown", "demoseek 6.000",
                                                           "demoonly kills"])
-        self.assertTrue(wait_until(lambda: "Playing only the kills of whoever is shown" in window.info.text()))
+        self.assertTrue(wait_until(lambda: "Playing only the frags of whoever is shown" in window.info.text()))
 
         # from the one selected
         window.kills.setCurrentItem(rows[3])
@@ -736,10 +738,10 @@ class TestWindow(FakeGameCase):
         # with a weapon
         self.choose(window, weapons=["sniper"])
         self.assertEqual(self.listed(window), ["5:03"])
-        self.assertTrue(wait_until(lambda: "Playing only the kills of whoever is shown with sniper" in window.info.text()))
+        self.assertTrue(wait_until(lambda: "Playing only the frags of whoever is shown with sniper" in window.info.text()))
 
         window.only_watched()
-        self.assertEqual(self.messages.shown[-1], ("Only while watched", "Type a killer first."))
+        self.assertEqual(self.messages.shown[-1], ("Only while watched", "Type a fragger first."))
         # still chosen in the next demo
         self.playing(window)
         self.assertTrue(window.killer.shown())
@@ -778,7 +780,7 @@ class TestWindow(FakeGameCase):
         self.assertTrue(wait_until(lambda: window.state.get("only") == "kills"))
         self.assertEqual(self.commands(window.game)[-4:], ["demofilter clear", 'demofilter killer "t-"', "demoseek 6.000",
                                                           "demoonly kills"])
-        self.assertIn("only the kills by t-", window.info.text())
+        self.assertIn("only the frags by t-", window.info.text())
         self.assertTrue(wait_until(lambda: window.only_kills_button.isChecked(), 2))
         window.everything_button.click()
         self.assertTrue(wait_until(lambda: window.state.get("only") == ""))
@@ -788,7 +790,7 @@ class TestWindow(FakeGameCase):
         window = self.window()
         self.playing(window)
         window.watched_button.click()
-        self.assertEqual(self.messages.shown[-1], ("Only while watched", "Type a killer first."))
+        self.assertEqual(self.messages.shown[-1], ("Only while watched", "Type a fragger first."))
         # nothing plays otherwise
         self.assertTrue(window.everything_button.isChecked())
         self.choose(window, killer="bob")
@@ -816,8 +818,8 @@ class TestWindow(FakeGameCase):
         self.assertEqual((mohreplay.BINDS["UPARROW"], mohreplay.BINDS["DOWNARROW"]), ("demonextkill", "demoprevkill"))
         for killer, told in (("t-", ["demofilter clear", 'demofilter killer "t-"']), ("", ["demofilter clear"])):
             self.choose(window, killer=killer)
-            buttons["Next kill listed (Up)"].click()
-            buttons["Previous kill listed (Down)"].click()
+            buttons["Next frag listed (Up)"].click()
+            buttons["Previous frag listed (Down)"].click()
             self.assertTrue(wait_until(lambda: self.commands(window.game)[-2 * len(told) - 2:] == [
                 *told, "demonextkill", *told, "demoprevkill"]), killer)
 
@@ -1259,7 +1261,7 @@ class TestRecording(FakeGameCase):
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("{player} frags")
         dialog = self.record(window, setup)
-        self.assertEqual(dialog.choices["kills"].text(), "The 3 kills by t-, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 3 frags by t-, under a minute")
         self.assertFalse(dialog.join.isVisible())
         self.done(window)
         video = self.video("t- frags.mp4")
@@ -1274,11 +1276,11 @@ class TestRecording(FakeGameCase):
         self.choose(window, killer="t-")
 
         def setup(dialog):
-            self.assertEqual(dialog.choices["kills"].text(), "The 3 kills by t-, under a minute")
+            self.assertEqual(dialog.choices["kills"].text(), "The 3 frags by t-, under a minute")
             dialog.kill_before.setValue(30)
             dialog.kill_after.setValue(30)
             # 0:00 to 0:44.5, while t- is shown
-            self.assertTrue(wait_until(lambda: dialog.choices["kills"].text() == "The 3 kills by t-, about 1 min", 2),
+            self.assertTrue(wait_until(lambda: dialog.choices["kills"].text() == "The 3 frags by t-, about 1 min", 2),
                             dialog.choices["kills"].text())
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("long")
@@ -1318,7 +1320,7 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("rifle")
         dialog = self.record(window, setup)
         self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "shownkills", "watched"])
-        self.assertEqual(dialog.choices["kills"].text(), "The 2 kills of bob or phil with rifle, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 2 frags of bob or phil with rifle, under a minute")
         self.assertEqual(dialog.choices["recorderkills"].text(), "The 2 recorder frags of bob or phil with rifle, under a minute")
         self.assertEqual(dialog.choices["shownkills"].text(), "The 2 frags shown of bob or phil with rifle: the recorder's "
                          "and the players they follow, under a minute")
@@ -1336,7 +1338,7 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("{player} watched")
         dialog = self.record(window, watched)
         self.assertEqual(dialog.choices["watched"].text(), "While phil is watched, about 5 min")
-        self.assertEqual(dialog.choices["kills"].text(), "No kills by phil")
+        self.assertEqual(dialog.choices["kills"].text(), "No frags by phil")
         self.assertTrue(dialog.choices["kills"].isHidden())
         self.done(window, 2)
         video = self.video("phil watched.mp4")
@@ -1354,7 +1356,7 @@ class TestRecording(FakeGameCase):
         dialog = self.record(window, setup)
         # the recorder's are the kills by t-
         self.assertEqual(list(dialog.choices), ["kills", "shownkills", "watched"])
-        self.assertEqual(dialog.choices["kills"].text(), "The 3 kills by t-, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 3 frags by t-, under a minute")
         self.assertEqual(dialog.choices["shownkills"].text(),
                          "The 3 frags shown: the recorder's and the players they follow, under a minute")
         job, = self.done(window)
@@ -1504,7 +1506,7 @@ class TestRecording(FakeGameCase):
             dialog.join.setChecked(True)
             dialog.pattern.setText("selected")
         dialog = self.record(window, setup, lambda: window.record_selected(window.kills))
-        self.assertEqual(dialog.choices["selected"].text(), "The 3 kills selected, under a minute")
+        self.assertEqual(dialog.choices["selected"].text(), "The 3 frags selected, under a minute")
         self.assertTrue(dialog.join.isVisibleTo(dialog))
         job, = self.done(window)
         self.assertEqual(job["status"], "done", job["item"].toolTip(2))
@@ -1525,7 +1527,7 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("selected")
         rows[2].setSelected(True)
         dialog = self.record(window, setup, lambda: window.record_selected(window.kills))
-        self.assertEqual(dialog.choices["selected"].text(), "The kill selected, under a minute")
+        self.assertEqual(dialog.choices["selected"].text(), "The frag selected, under a minute")
         self.done(window)
         video = self.video("selected.mp4")
         self.assertEqual((video["start"], video["end"]), (10500, 18000))
@@ -1607,10 +1609,10 @@ class TestRecording(FakeGameCase):
             dialog.join.setChecked(True)
             dialog.pattern.setText("{player} in {demo}")
         dialog = self.record(window, setup, window.record_demos)
-        self.assertEqual(dialog.choices["kills"].text(), "The 6 kills by t-, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 6 frags by t-, under a minute")
         job, = self.done(window)
         self.assertEqual(job["status"], "done", job["item"].toolTip(2))
-        self.assertEqual(job["item"].text(1), "2 demos, kills by t-")
+        self.assertEqual(job["item"].text(1), "2 demos, frags by t-")
         parts = self.video("t- in 2 demos.mp4")["joined"]
         # a part of the name, whatever each demo's spelling
         self.assertEqual([(p["only"], p["player"], p["filter"]["killers"]) for p in parts],
@@ -1631,7 +1633,7 @@ class TestRecording(FakeGameCase):
             dialog.join.setChecked(True)
             dialog.pattern.setText("{demo} {player}")
         dialog = self.record(window, setup, window.record_demos)
-        self.assertEqual(dialog.choices["kills"].text(), "The 11 kills, about 1 min")
+        self.assertEqual(dialog.choices["kills"].text(), "The 11 frags, about 1 min")
         self.assertEqual(dialog.choices["shownkills"].text(), "The 8 frags shown: the recorder's and the players "
                          "they follow, in 2 of the 3 demos, under a minute")
         job, = self.done(window)
@@ -1686,7 +1688,7 @@ class TestRecording(FakeGameCase):
             dialog.join.setChecked(True)
             dialog.pattern.setText("{demo} {player}")
         dialog = self.record(window, setup, window.record_demos)
-        self.assertEqual(dialog.choices["kills"].text(), "The 11 kills, about 1 min")
+        self.assertEqual(dialog.choices["kills"].text(), "The 11 frags, about 1 min")
         self.assertEqual(dialog.choices["recorderkills"].text(),
                          "The 6 recorder frags, in 2 of the 3 demos, under a minute")
         job, = self.done(window)
@@ -1723,7 +1725,7 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("{demo}")
         dialog = self.record(window, setup, window.record_demos)
         self.assertEqual(dialog.choices["everything"].text(), "All of the demo, under a minute")
-        self.assertEqual(dialog.choices["kills"].text(), "The 4 kills, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 4 frags, under a minute")
         job, = self.done(window)
         self.assertEqual(job["item"].text(1), "second")
         video = self.video("second.mp4")

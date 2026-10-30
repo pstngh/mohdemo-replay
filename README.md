@@ -19,23 +19,23 @@ player names are made up.*
   and rules: default or realism servers, told apart by how fast the recorder
   runs with each weapon. Demos under 5 minutes are left out. Show only
   default or realism demos, and filter by demo name, level or player: type
-  a name to see every demo that player is in, with their kills.
-- **Choose the kills.** By killer, by victim and by weapon (sniper, rifle,
+  a name to see every demo that player is in, with their frags.
+- **Choose the frags.** By fragger, by victim and by weapon (sniper, rifle,
   SMG, StG / BAR, shotgun, pistol, bazooka, melee), several of each, on
-  their own or together: the list shows only the demos with such kills, and
+  their own or together: the list shows only the demos with such frags, and
   the demo playing lists, plays and records only those.
-- **Move around a demo.** Its kills and rounds are listed and
-  marked on the time slider. A click jumps there, 4 seconds before a kill.
-  Pause, skip 10 seconds, go to the next or previous kill or round, play
+- **Move around a demo.** Its frags and rounds are listed and
+  marked on the time slider. A click jumps there, 4 seconds before a frag.
+  Pause, skip 10 seconds, go to the next or previous frag or round, play
   from 0.25× to 4×.
-- **Watch only what matters.** Play only the kills chosen, of
+- **Watch only what matters.** Play only the frags chosen, of
   everyone, of some players (while the demo shows them) or of whoever is
   shown (the recorder's frags and those of the players they follow), or
   only while a player is watched. The rest is skipped.
 - **Record videos.** MP4 with sound, at the size and frame rate you choose,
   recorded in the background faster than real time while you keep watching.
   Record a stretch of time, the kills, the kills you select,
-  or the kills chosen or the frags shown across many demos, in one video or
+  or the frags chosen or the frags shown across many demos, in one video or
   one each. Videos wait in a queue.
 - **No app needed.** Everything is a game console command (`demoseek`,
   `demonextkill`, `demoonly`, `demovideo`…), so it all works with key binds

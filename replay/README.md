@@ -1,7 +1,7 @@
 # MoH Demo Replay
 
 Rewatch Medal of Honor: Allied Assault demos (`.dm3`) with buttons: the list
-of demos, their kills and rounds, play/pause, speed and seeking. It needs
+of demos, their frags and rounds, play/pause, speed and seeking. It needs
 OpenMoHAA built from this repository, which adds the demo commands, Python 3
 and PySide6.
 
@@ -17,48 +17,48 @@ demo's length (demos under 5 minutes aren't listed), recorder, levels and rules 
 recorder's speeds with each weapon; blank when they spectated or played
 too little), the menu next to the filter shows only default or realism
 demos, and the filter finds demos by name, level or player: for a player, it
-shows their kills in each demo. For that, `mohdemoindex`, built next to the
+shows their frags in each demo. For that, `mohdemoindex`, built next to the
 game, indexes the demos in the background the first time (about two minutes
 for 700, and again once after it changes), and the indexes are kept in
 `~/.cache/mohdemo-replay`.
 
-Killer, Victim and Weapon, under the filter, choose the kills, those of the
-demos listed and of the demo playing, each on its own or together: Killer
-and Victim take parts of names, separated by commas, as the filter does
-(`pstn, tommeh` finds pstN's kills under any clan tag, and tommeh's), and
+Fragger, Victim and Weapon, under the filter, choose the frags, those of
+the demos listed and of the demo playing, each on its own or together:
+Fragger and Victim take parts of names, separated by commas, as the filter does
+(`pstn, tommeh` finds pstN's frags under any clan tag, and tommeh's), and
 their menus add the players of the demo playing; Weapon ticks sniper, rifle,
 SMG, StG / BAR (the StG 44 and the BAR, which the game calls machine guns),
 shotgun, pistol, bazooka, melee (a hit with a gun's butt) or other, as the
 death messages tell (also the French, German, Spanish and Portuguese ones
-seen; the French write a rifle kill as a sniper kill). The list then shows
-only the demos with such kills, with how many of each killer, and the demo
-playing lists only those. A player's kills are only those made while the
+seen; the French write a rifle frag as a sniper frag). The list then shows
+only the demos with such frags, with how many of each fragger, and the
+demo playing lists only those. A player's frags are only those made while the
 demo shows them (the recorder playing, or the player the recorder follows),
 and only while they're shown, so a video of them never shows someone else.
-"Whoever is shown", in Killer's menu, keeps the frags shown: the recorder's
+"Whoever is shown", in Fragger's menu, keeps the frags shown: the recorder's
 while they play and those of the players they follow, while they follow
 them.
 
 Double-click a demo to play it (the game starts then, or with Restart game
-in the toolbar, where the folder's button chooses another), click a kill or
-a round to jump to it; hovering a kill tells how it was made. Play chooses
-what plays: Everything, These kills, the kills listed, from the one
-selected or the first, or While watched, while one of the killers is shown.
+in the toolbar, where the folder's button chooses another), click a frag or
+a round to jump to it; hovering a frag tells how it was made. Play chooses
+what plays: Everything, These frags, the frags listed, from the one
+selected or the first, or While watched, while one of the fraggers is shown.
 Settings also sets how long
-each kill plays before and after it (4 and 2 seconds), and Viewmodel and
+each frag plays before and after it (4 and 2 seconds), and Viewmodel and
 Force models, in the toolbar, show the gun in the player's hands and show
 everyone as an airborne soldier or a winter German, whatever they wore.
-The time slider marks the kills listed under it and the rounds above it:
+The time slider marks the frags listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
 
-Record… makes an MP4 of the demo playing: a stretch of time, the kills
+Record… makes an MP4 of the demo playing: a stretch of time, the frags
 listed, the recorder's own or the frags shown (both of the victims and with
-the weapons chosen), one after the other, or only while a killer is
-watched. A right-click on kills selected records those, and on demos or
-folders selected, all of their demos, the kills chosen, the recorder's, or
+the weapons chosen), one after the other, or only while a fragger is
+watched. A right-click on frags selected records those, and on demos or
+folders selected, all of their demos, the frags chosen, the recorder's, or
 the frags shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
-kills it holds and how long the video will be, and the last one is chosen
+frags it holds and how long the video will be, and the last one is chosen
 again next time. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
 Linux and faster than real time, while you keep watching; FFmpeg joins the
@@ -66,14 +66,14 @@ clips of a video without encoding them again. The Videos panel lists them,
 with how far the one recording is and how long it has left
 (Cancel, Open folder, double-click to watch one), and each lands in the
 folder chosen, named from a pattern (`{demo}`, the demo's file name,
-`{start}`, `{player}`, `{date}`), with each kill played from how long before
+`{start}`, `{player}`, `{date}`), with each frag played from how long before
 it to how long after. The size, frames per second, quality, codec (H.264,
 H.265 or the graphics card's H.264 encoder, with VAAPI), sound and its bitrate, the viewmodel and the models forced are in
 the Videos tab of Settings, which the Record dialog sums up in a line, with
 Change… to set them there, and the Advanced box takes FFmpeg output options
 instead. Motion blur is the renderer's: what moves blurs
 over all of a frame's time, as with a camera, along each pixel's motion.
-Motion looks smoother, a cut between two kills stays clean, and recording
+Motion looks smoother, a cut between two frags stays clean, and recording
 takes about 1.7 times as long with the graphics card's encoder, 1.1 times
 with H.264 (at 1920x1080, 60 frames a second). The clips are written in a hidden
 `.mohreplay-parts` folder next to the video, not in memory. It needs FFmpeg.
@@ -104,10 +104,12 @@ other letters, numbers, Space and Enter do nothing. The app binds these keys:
 | --- | --- |
 | Pause | pause or play |
 | Left / Right | back or forward 5 seconds |
-| Down / Up | previous or next kill listed: the kills chosen in the app |
+| Down / Up | previous or next frag listed: the frags chosen in the app |
 | PgDn / PgUp | previous or next round |
 
 ## Console commands
+
+The game's commands call frags kills, and fraggers killers.
 
 The buttons only send these, so they also work in the console or with key
 binds, without the app:

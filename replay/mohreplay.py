@@ -917,7 +917,7 @@ class NamesField(QLineEdit):
         self.shown_action = None
         if offer_shown:
             self.shown_action = QAction("Whoever is shown", self, checkable=True)
-            self.shown_action.setToolTip("The recorder's kills, and those of the players they follow while they do")
+            self.shown_action.setToolTip("The recorder's frags, and those of the players they follow while they do")
             self.shown_action.toggled.connect(self.shown_toggled)
         menu_action = self.addAction(theme_icon("go-down", QStyle.SP_ArrowDown), QLineEdit.TrailingPosition)
         menu_action.setToolTip("The players of the demo playing")
@@ -1169,9 +1169,9 @@ class SettingsDialog(QDialog):
         self.size.setEditable(True)
         self.size.setCurrentText(settings.value("size", "1280x720"))
         form.addRow("Game window size", self.size)
-        self.kill_before = seconds_box(settings, "kill_before", 4.0, "Time shown before each kill (cl_demoKillBefore)")
-        self.kill_after = seconds_box(settings, "kill_after", 2.0, "Time shown after each kill (cl_demoKillAfter)")
-        form.addRow("Each kill plays", lead_row(self.kill_before, self.kill_after, "it"))
+        self.kill_before = seconds_box(settings, "kill_before", 4.0, "Time shown before each frag (cl_demoKillBefore)")
+        self.kill_after = seconds_box(settings, "kill_after", 2.0, "Time shown after each frag (cl_demoKillAfter)")
+        form.addRow("Each frag plays", lead_row(self.kill_before, self.kill_after, "it"))
         self.tabs.addTab(game, "Game")
         self.videos = VideoSettings(settings)
         self.tabs.addTab(self.videos, "Videos")
@@ -1316,7 +1316,7 @@ def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None, 
 
 
 def the(count, one, many):
-    """"The 3 kills", "The kill" or "No kills"."""
+    """"The 3 frags", "The frag" or "No frags"."""
     return f"The {count} {many}" if count > 1 else f"The {one}" if count else f"No {many}"
 
 
@@ -1384,10 +1384,10 @@ class RecordDialog(QDialog):
             self.join.hide()
 
         self.kill_before = seconds_box(settings, "rec/kill_before", 4.0,
-                                       "Time recorded before each kill (cl_demoKillBefore)", "kill_before")
+                                       "Time recorded before each frag (cl_demoKillBefore)", "kill_before")
         self.kill_after = seconds_box(settings, "rec/kill_after", 2.0,
-                                      "Time recorded after each kill (cl_demoKillAfter)", "kill_after")
-        form.addRow("Each kill", lead_row(self.kill_before, self.kill_after, "it"))
+                                      "Time recorded after each frag (cl_demoKillAfter)", "kill_after")
+        form.addRow("Each frag", lead_row(self.kill_before, self.kill_after, "it"))
         if relabel:
             # once they stop changing, as a choice of many demos takes a while
             timer = QTimer(self, singleShot=True, interval=150)
@@ -1759,12 +1759,12 @@ class Window(QMainWindow):
                                          and self.play_demo(item.data(COL_DEMO, Qt.UserRole)))
         self.add_menu(self.demos, "Record the demos selected…", self.record_demos)
         # the kills of the demos listed and of the demo playing
-        self.killer = NamesField("Kills by players whose names have one of these, separated by commas, while "
+        self.killer = NamesField("Frags by players whose names have one of these, separated by commas, while "
                                  "they're shown, or by whoever is shown", offer_shown=True)
-        self.victim = NamesField("Kills of players whose names have one of these, separated by commas")
+        self.victim = NamesField("Frags of players whose names have one of these, separated by commas")
         self.weapon = QToolButton()
         self.weapon.setPopupMode(QToolButton.InstantPopup)
-        self.weapon.setToolTip("Kills made with these weapons, as the death messages tell")
+        self.weapon.setToolTip("Frags made with these weapons, as the death messages tell")
         menu = StayOpenMenu(self.weapon)
         menu.setToolTipsVisible(True)
         self.weapon_actions = {}
@@ -1789,7 +1789,7 @@ class Window(QMainWindow):
         row.addWidget(self.rules)
         box.addLayout(row)
         row = QHBoxLayout()
-        for label, widget, stretch in (("Killer", self.killer, 3), ("Victim", self.victim, 2), ("Weapon", self.weapon, 0)):
+        for label, widget, stretch in (("Fragger", self.killer, 3), ("Victim", self.victim, 2), ("Weapon", self.weapon, 0)):
             row.addWidget(QLabel(label))
             row.addWidget(widget, stretch)
         box.addLayout(row)
@@ -1810,15 +1810,15 @@ class Window(QMainWindow):
         # what plays: one of three, as the game tells
         self.play_modes = QButtonGroup(self)
         self.everything_button = QPushButton("Everything")
-        self.only_kills_button = QPushButton("These kills")
+        self.only_kills_button = QPushButton("These frags")
         self.watched_button = QPushButton("While watched")
         modes = QHBoxLayout()
         modes.setSpacing(0)
         for button, text, action in (
                 (self.everything_button, "Play all of the demo", lambda: self.game.send("demoonly") or True),
-                (self.only_kills_button, "Play only the kills listed, from the one selected or the first",
+                (self.only_kills_button, "Play only the frags listed, from the one selected or the first",
                  self.only_kills),
-                (self.watched_button, "Play only while one of the killers is shown, from the first time",
+                (self.watched_button, "Play only while one of the fraggers is shown, from the first time",
                  self.only_watched)):
             button.setCheckable(True)
             button.setToolTip(text)
@@ -1831,7 +1831,7 @@ class Window(QMainWindow):
         players.addLayout(modes)
         players.addStretch(1)
 
-        self.kills = self.make_list(["Time", "Killer", "Victim", "Weapon"])
+        self.kills = self.make_list(["Time", "Fragger", "Victim", "Weapon"])
         self.rounds = self.make_list(["Time", "Round", "Result"])
         # a click jumps, so does Enter
         for tree in (self.kills, self.rounds):
@@ -1839,7 +1839,7 @@ class Window(QMainWindow):
             tree.itemActivated.connect(self.jump_to_item)
         self.add_menu(self.kills, "Record the ones selected…", lambda: self.record_selected(self.kills))
         self.tabs = tabs = QTabWidget()
-        tabs.addTab(self.kills, "Kills")
+        tabs.addTab(self.kills, "Frags")
         tabs.addTab(self.rounds, "Rounds")
         tabs.currentChanged.connect(self.tab_changed)
         right = QWidget()
@@ -1873,14 +1873,14 @@ class Window(QMainWindow):
         controls.setSpacing(2)
         # the kill buttons go to the kills listed
         for icon, tip, command in ((QStyle.SP_MediaSkipBackward, "Previous round (PgDn)", "demoprevround"),
-                                   (QStyle.SP_MediaSeekBackward, "Previous kill listed (Down)",
+                                   (QStyle.SP_MediaSeekBackward, "Previous frag listed (Down)",
                                     lambda: self.kill_commands("demoprevkill")),
                                    (None, "Back 10 seconds (Left: 5)", "demoskip -10")):
             controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
                 *(c() if callable(c) else [c])), "-10 s"))
         controls.addWidget(self.play)
         for icon, tip, command in ((None, "Forward 10 seconds (Right: 5)", "demoskip 10"),
-                                   (QStyle.SP_MediaSeekForward, "Next kill listed (Up)",
+                                   (QStyle.SP_MediaSeekForward, "Next frag listed (Up)",
                                     lambda: self.kill_commands("demonextkill")),
                                    (QStyle.SP_MediaSkipForward, "Next round (PgUp)", "demonextround")):
             controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
@@ -2291,11 +2291,11 @@ class Window(QMainWindow):
         # of the kill filter, without a player
         others = kill_filter.words(killers=False)
         if only in ("kills", "multikills"):
-            mode = ("only the kills" if only == "kills" else "only the multi-kills") + (
+            mode = ("only the frags" if only == "kills" else "only the multi-kills") + (
                 " by " + player + others if player else " of whoever is shown" + others if kill_filter.shown
                 else kill_filter.words())
         elif only in ("shownkills", "shownmultikills"):
-            mode = ("only the kills" if only == "shownkills" else "only the multi-kills") + " of whoever is shown" + others
+            mode = ("only the frags" if only == "shownkills" else "only the multi-kills") + " of whoever is shown" + others
         elif only == "watched":
             mode = "only while " + (player or or_list(kill_filter.names)) + " is watched"
         else:
@@ -2414,9 +2414,9 @@ class Window(QMainWindow):
         if kill_filter and self.index:
             every = sum(1 for kill in (self.index or {}).get("kills", [])
                         if not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths)
-            self.tabs.setTabText(0, f"Kills ({listed} of {every})")
+            self.tabs.setTabText(0, f"Frags ({listed} of {every})")
         else:
-            self.tabs.setTabText(0, f"Kills ({listed})")
+            self.tabs.setTabText(0, f"Frags ({listed})")
         self.tabs.setTabText(1, f"Rounds ({self.rounds.topLevelItemCount()})")
         # for Up and Down too
         self.game.send(*kill_filter.commands())
@@ -2444,7 +2444,7 @@ class Window(QMainWindow):
         if there are none."""
         item = self.kills.currentItem() or self.kills.topLevelItem(0)
         if not item:
-            QMessageBox.information(self, "Only these kills", "There are no kills to play.")
+            QMessageBox.information(self, "Only these frags", "There are no frags to play.")
             return False
         self.game.send(*self.kill_filter().commands(), "demoseek " + seconds(item.data(0, Qt.UserRole)),
                        "demoonly kills")
@@ -2455,7 +2455,7 @@ class Window(QMainWindow):
         time; False if none is."""
         kill_filter = self.kill_filter()
         if not kill_filter.killers:
-            QMessageBox.information(self, "Only while watched", "Type a killer first.")
+            QMessageBox.information(self, "Only while watched", "Type a fragger first.")
             return False
         watched = (self.index or {}).get("watched", [])
         start = next((w["time"] for w in watched if kill_filter.has_killer(clean_name(w["name"]))), None)
@@ -2472,7 +2472,7 @@ class Window(QMainWindow):
         whoever is shown: {key: (one, several, after the count)}."""
         others = kill_filter.words(killers=False)
         shown = (SHOWN_KILLS[0] + others, SHOWN_KILLS[1] + others, SHOWN_WHO)
-        return {"kills": shown if kill_filter.shown else ("kill" + kill_filter.words(), "kills" + kill_filter.words(), ""),
+        return {"kills": shown if kill_filter.shown else ("frag" + kill_filter.words(), "frags" + kill_filter.words(), ""),
                 "recorderkills": (RECORDER_KILLS[0] + others, RECORDER_KILLS[1] + others, ""), "shownkills": shown}
 
     def record(self):
@@ -2535,9 +2535,9 @@ class Window(QMainWindow):
         demo = self.state.get("demo")
         items = tree.selectedItems()
         if not demo or not items:
-            QMessageBox.information(self, "Record a video", "Select kills of the demo playing first.")
+            QMessageBox.information(self, "Record a video", "Select frags of the demo playing first.")
             return
-        one = "kill"
+        one = "frag"
         kind = f"{len(items)} {one}s" if len(items) > 1 else one
         kill_filter = self.kill_filter()
         # those of a killer, or of whoever is shown, only while they're shown
@@ -2629,7 +2629,7 @@ class Window(QMainWindow):
         what = dialog.what()
         plans = plans_for(*dialog.kill_times())
         chosen = list(plans[what])
-        kind = {"kills": SHOWN_KILLS[1] if kill_filter.shown else "kills" + kill_filter.words(),
+        kind = {"kills": SHOWN_KILLS[1] if kill_filter.shown else "frags" + kill_filter.words(),
                 "recorderkills": RECORDER_KILLS[1], "shownkills": SHOWN_KILLS[1], "everything": ""}[what]
         # who's in the videos' names, and whose kills play in each demo
         player = "" if what in ("shownkills", "everything") or kill_filter.shown else ", ".join(kill_filter.names)
