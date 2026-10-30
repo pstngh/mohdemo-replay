@@ -292,6 +292,10 @@ void UIGMBox::Print(const char *text)
         // Overwrite an item
         //
         RemoveTopItem();
+        // Changed in OPM
+        //  The decay going on was the removed item's: the new top item gets
+        //  its own, instead of fading at once
+        CancelEventsOfType(EV_GMBox_Decay);
     }
 
     m_items[m_numitems].flags = 0;
@@ -408,4 +412,8 @@ void UIGMBox::setRealShow(bool b)
 void UIGMBox::Clear(void)
 {
     m_numitems = 0;
+    // Added in OPM
+    //  The decay of the items cleared stops, or the next item printed (after
+    //  a level, round or demo restart) fades with it and goes in a moment
+    CancelEventsOfType(EV_GMBox_Decay);
 }
