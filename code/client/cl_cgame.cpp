@@ -427,6 +427,25 @@ qboolean CL_ProcessServerCommand(const char* origString, const char* cmd, qboole
 
 /*
 ===================
+CL_DemoHidesPrint
+
+Added in OPM
+Whether a demo doesn't show this message: "<player> has entered the
+battle", which the server tells everyone each time a player enters, as at
+every round, and which fills the message box
+===================
+*/
+static qboolean CL_DemoHidesPrint( const char *text ) {
+	static const char entered[] = " has entered the battle\n";
+	size_t len;
+
+	len = strlen( text );
+	return text[0] == HUD_MESSAGE_WHITE[0] && len >= sizeof( entered ) - 1
+		&& !strcmp( text + len - ( sizeof( entered ) - 1 ), entered );
+}
+
+/*
+===================
 CL_GetServerCommand
 
 Set up argc/argv for the given command
@@ -461,6 +480,11 @@ qboolean CL_GetServerCommand( int serverCommandNumber, qboolean differentServer 
 
 	Cmd_TokenizeString(s);
 	cmd = Cmd_Argv(0);
+
+	// Added in OPM
+	if ( clc.demoplaying && !strcmp( cmd, "print" ) && CL_DemoHidesPrint( Cmd_Argv( 1 ) ) ) {
+		return qfalse;
+	}
 
 	// Readded in OPM (from ioquake)
 	// Configstring big buffer
