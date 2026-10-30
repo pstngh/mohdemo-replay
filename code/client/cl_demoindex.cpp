@@ -424,6 +424,192 @@ static qboolean DI_IsTeamKill(diParser_t *p, int killer, int victim)
 }
 
 /*
+What death messages tell of the weapon: their words after the victim's name,
+and, if after is set, what comes right after the killer's name ("": nothing
+but a space). As Player::Obituary writes them, then as servers of the
+French, German, Spanish and Portuguese games wrote them in the demos seen,
+each checked against the gun the killer held then. The French write sniper
+and rifle kills alike, as sniper kills. Text is Latin-1, its escapes split
+where a letter after them would be read as a digit.
+*/
+typedef struct {
+    const char  *words;
+    const char  *after;
+    demoWeapon_t weapon;
+} diObituary_t;
+
+static const diObituary_t diObituaries[] = {
+    {"was sniped by",                                 NULL,                          DEMOWEAPON_SNIPER },
+    {"was rifled by",                                 NULL,                          DEMOWEAPON_RIFLE  },
+    {"was perforated by",                             NULL,                          DEMOWEAPON_SMG    },
+    {"was machine-gunned by",                         NULL,                          DEMOWEAPON_MG     },
+    {"was gunned down by",                            NULL,                          DEMOWEAPON_PISTOL },
+    {"was pumped full of buckshot by",                NULL,                          DEMOWEAPON_SHOTGUN},
+    {"was hunted down by",                            NULL,                          DEMOWEAPON_SHOTGUN},
+    {"was bashed by",                                 NULL,                          DEMOWEAPON_MELEE  },
+    {"was clubbed by",                                NULL,                          DEMOWEAPON_MELEE  },
+    {"tripped on",                                    NULL,                          DEMOWEAPON_GRENADE},
+    {"is picking",                                    NULL,                          DEMOWEAPON_GRENADE},
+    {"played catch with himself",                     NULL,                          DEMOWEAPON_GRENADE},
+    {"caught some shrapnel",                          NULL,                          DEMOWEAPON_GRENADE},
+    {"took himself out of commision",                 NULL,                          DEMOWEAPON_OTHER  },
+    {"took",                                          NULL,                          DEMOWEAPON_ROCKET },
+    {"rocketed himself",                              NULL,                          DEMOWEAPON_ROCKET },
+    {"caught a rocket",                               NULL,                          DEMOWEAPON_ROCKET },
+    {"was shot",                                      NULL,                          DEMOWEAPON_OTHER  },
+    {"was blown away by",                             NULL,                          DEMOWEAPON_OTHER  },
+    {"was killed by",                                 NULL,                          DEMOWEAPON_OTHER  },
+    {"was crushed by",                                NULL,                          DEMOWEAPON_OTHER  },
+    {"was telefragged by",                            NULL,                          DEMOWEAPON_OTHER  },
+    {"was burned up by",                              NULL,                          DEMOWEAPON_OTHER  },
+    {"was melted by",                                 NULL,                          DEMOWEAPON_OTHER  },
+    {"was pushed over the edge by",                   NULL,                          DEMOWEAPON_OTHER  },
+    {"was knocked out by",                            NULL,                          DEMOWEAPON_OTHER  },
+    {"was run over by",                               NULL,                          DEMOWEAPON_OTHER  },
+    {"was impaled by",                                NULL,                          DEMOWEAPON_OTHER  },
+    {"stepped on",                                    NULL,                          DEMOWEAPON_OTHER  },
+    {"was burned to a crisp",                         NULL,                          DEMOWEAPON_OTHER  },
+    {"was melted to nothing",                         NULL,                          DEMOWEAPON_OTHER  },
+    {"cratered",                                      NULL,                          DEMOWEAPON_OTHER  },
+    {"blew himself up",                               NULL,                          DEMOWEAPON_OTHER  },
+    {"blew up",                                       NULL,                          DEMOWEAPON_OTHER  },
+    {"shot himself",                                  NULL,                          DEMOWEAPON_OTHER  },
+    {"was hoist on his own pitard",                   NULL,                          DEMOWEAPON_OTHER  },
+    {"died",                                          NULL,                          DEMOWEAPON_OTHER  },
+    // French
+    {"a \xe9t\xe9 tu\xe9 par",                        " avec un \xe9" "clat de grenade", DEMOWEAPON_GRENADE},
+    {"a \xe9t\xe9 tu\xe9 par",                        NULL,                          DEMOWEAPON_SNIPER },
+    {"s\x92" "est fait tuer par",                     " avec un pistolet mitrailleur", DEMOWEAPON_SMG  },
+    {"a \xe9t\xe9 fusill\xe9 par",                    NULL,                          DEMOWEAPON_MG     },
+    // without a hit location, a pistol's butt
+    {"s\x92" "est fait descendre par",                "",                            DEMOWEAPON_MELEE  },
+    {"s\x92" "est fait descendre par",                NULL,                          DEMOWEAPON_PISTOL },
+    {"a \xe9t\xe9 \xe9limin\xe9 par",                 NULL,                          DEMOWEAPON_MELEE  },
+    {"s\x92" "est fait abattre par",                  NULL,                          DEMOWEAPON_SHOTGUN},
+    {"s\x92" "est fait liquider par",                 NULL,                          DEMOWEAPON_SHOTGUN},
+    {"a tr\xe9" "buch\xe9 sur",                       NULL,                          DEMOWEAPON_GRENADE},
+    {"s'est suicid\xe9.",                             NULL,                          DEMOWEAPON_OTHER  },
+    {"s'est explos\xe9 tout seul.",                   NULL,                          DEMOWEAPON_OTHER  },
+    {"est mort",                                      NULL,                          DEMOWEAPON_OTHER  },
+    // German
+    {"wurde getroffen durch",                         NULL,                          DEMOWEAPON_SNIPER },
+    {"wurde niedergeschossen durch",                  NULL,                          DEMOWEAPON_RIFLE  },
+    {"wurde perforiert durch",                        NULL,                          DEMOWEAPON_SMG    },
+    {"wurde zersiebt durch",                          NULL,                          DEMOWEAPON_MG     },
+    {"wurde erschossen durch",                        NULL,                          DEMOWEAPON_PISTOL },
+    {"wurde mit Schrot vollgepumpt durch",            NULL,                          DEMOWEAPON_SHOTGUN},
+    {"wurde zur Strecke gebracht durch",              NULL,                          DEMOWEAPON_SHOTGUN},
+    {"wurde geschlagen durch",                        NULL,                          DEMOWEAPON_MELEE  },
+    {"wurde niedergekn\xfcppelt durch",               NULL,                          DEMOWEAPON_MELEE  },
+    {"trat auf",                                      NULL,                          DEMOWEAPON_GRENADE},
+    {"w\xe4hlt",                                      NULL,                          DEMOWEAPON_GRENADE},
+    {"ist auf die eigene Granate getreten",           NULL,                          DEMOWEAPON_GRENADE},
+    {"spielt mit sich selber Fangen",                 NULL,                          DEMOWEAPON_GRENADE},
+    {"nahm",                                          NULL,                          DEMOWEAPON_ROCKET },
+    {"wurde gesprengt durch",                         NULL,                          DEMOWEAPON_OTHER  },
+    {"ist in die Luft geflogen",                      NULL,                          DEMOWEAPON_OTHER  },
+    {"hat sich in die Luft gesprengt",                NULL,                          DEMOWEAPON_OTHER  },
+    {"hat sich selbst aus dem Verkehr gezogen",       NULL,                          DEMOWEAPON_OTHER  },
+    {"eingestampft",                                  NULL,                          DEMOWEAPON_OTHER  },
+    // Spanish and Portuguese
+    {"fue snipeado por",                              NULL,                          DEMOWEAPON_SNIPER },
+    {"fue abatido con un rifle de francotirador por", NULL,                          DEMOWEAPON_SNIPER },
+    {"se ha suicidado",                               NULL,                          DEMOWEAPON_OTHER  },
+    {"levou uma snipada do",                          NULL,                          DEMOWEAPON_SNIPER },
+};
+
+/*
+===============
+DI_WordsAt
+
+Whether words come at s, after spaces, as whole words
+===============
+*/
+static qboolean DI_WordsAt(const char *s, const char *words)
+{
+    size_t len = strlen(words);
+
+    while (*s == ' ') {
+        s++;
+    }
+    return !strncmp(s, words, len) && (s[len] == ' ' || !s[len]);
+}
+
+/*
+===============
+DI_FindWords
+
+Where words are in text as whole words, NULL if they aren't
+===============
+*/
+static const char *DI_FindWords(const char *text, const char *words)
+{
+    const char *s;
+
+    for (s = strstr(text, words); s; s = strstr(s + 1, words)) {
+        if ((s == text || s[-1] == ' ') && DI_WordsAt(s, words)) {
+            return s;
+        }
+    }
+    return NULL;
+}
+
+/*
+===============
+DI_Weapon
+
+The weapon of a kill from its message, the words after the victim's name
+(afterVictim) and, if the killer was found, after theirs (afterKiller); the
+whole text when the victim wasn't found
+===============
+*/
+static demoWeapon_t DI_Weapon(const char *text, const char *afterVictim, const char *afterKiller)
+{
+    const diObituary_t *o;
+    const char         *at;
+    int                 i;
+
+    for (i = 0; i < (int)ARRAY_LEN(diObituaries); i++) {
+        o  = &diObituaries[i];
+        at = afterVictim ? (DI_WordsAt(afterVictim, o->words) ? afterVictim : NULL) : DI_FindWords(text, o->words);
+        if (!at) {
+            continue;
+        }
+        if (o->after && !o->after[0]) {
+            // nothing after the killer
+            if (!afterKiller || !DI_WordsAt(afterKiller, "")) {
+                continue;
+            }
+        } else if (o->after) {
+            if (afterKiller ? strncmp(afterKiller, o->after, strlen(o->after)) : !strstr(at, o->after)) {
+                continue;
+            }
+        }
+        return o->weapon;
+    }
+
+    // a message not known, but telling
+    if (Q_stristr(text, "grenade") || Q_stristr(text, "shrapnel") || Q_stristr(text, "granate")
+        || Q_stristr(text, "granada")) {
+        return DEMOWEAPON_GRENADE;
+    }
+    return DEMOWEAPON_UNKNOWN;
+}
+
+/*
+===============
+DemoIndex_WeaponName
+===============
+*/
+const char *DemoIndex_WeaponName(demoWeapon_t weapon)
+{
+    static const char *names[DEMOWEAPON_COUNT] = {
+        "", "pistol", "rifle", "sniper", "smg", "mg", "shotgun", "rocket", "grenade", "melee", "other"};
+
+    return weapon >= 0 && weapon < DEMOWEAPON_COUNT ? names[weapon] : "";
+}
+
+/*
 ===============
 DI_Print
 
@@ -438,6 +624,7 @@ static void DI_Print(diParser_t *p, const char *s)
     char         text[MAX_STRING_CHARS];
     demoEvent_t *ev;
     const char  *end;
+    const char  *afterVictim, *afterKiller;
     char        *c;
 
     if (!*s) {
@@ -451,13 +638,19 @@ static void DI_Print(diParser_t *p, const char *s)
     }
 
     if (*s == HUD_MESSAGE_CHAT_RED[0]) {
-        ev        = DI_AddEvent(p, DEMOEVENT_KILL);
-        ev->other = DI_FindPlayer(p, text, qtrue, ev->otherName, &end);
+        ev          = DI_AddEvent(p, DEMOEVENT_KILL);
+        ev->other   = DI_FindPlayer(p, text, qtrue, ev->otherName, &end);
+        afterVictim = afterKiller = NULL;
         if (ev->otherName[0]) {
-            ev->client = DI_FindPlayer(p, end, qfalse, ev->name, &end);
+            afterVictim = end;
+            ev->client  = DI_FindPlayer(p, end, qfalse, ev->name, &end);
+            if (ev->name[0]) {
+                afterKiller = end;
+            }
         }
         ev->teamKill = DI_IsTeamKill(p, ev->client, ev->other);
-        ev->grenade  = Q_stristr(text, "grenade") != NULL || Q_stristr(text, "shrapnel") != NULL;
+        ev->weapon   = DI_Weapon(text, afterVictim, afterKiller);
+        ev->grenade  = ev->weapon == DEMOWEAPON_GRENADE;
         Q_strncpyz(ev->text, text, sizeof(ev->text));
         return;
     }
@@ -1214,6 +1407,7 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             DI_String(b, ev->text);
             DI_Printf(b, ", \"teamKill\": %s", ev->teamKill ? "true" : "false");
             DI_Printf(b, ", \"grenade\": %s", ev->grenade ? "true" : "false");
+            DI_Printf(b, ", \"weapon\": \"%s\"", DemoIndex_WeaponName(ev->weapon));
             break;
         case DEMOEVENT_ROUNDSTART:
             break;

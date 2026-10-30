@@ -88,6 +88,7 @@ static bool TestDemo(const char *demo, bool json)
     char       *text;
     bool        ok = true;
     int         kills = 0, rounds = 0, roundEnds = 0, watched = 0, maps = 0;
+    int         unknownWeapons = 0;
     int         realism = 0, defaults = 0;
     const char *rules;
     int         lastTime = 0;
@@ -138,6 +139,9 @@ static bool TestDemo(const char *demo, bool json)
                 later = index.events[j].type == DEMOEVENT_WATCH;
             }
             ok &= Check(demo, shown || later, "a kill is on a level before a watch event");
+            ok &= Check(demo, ev->weapon >= 0 && ev->weapon < DEMOWEAPON_COUNT, "a kill's weapon is out of range");
+            ok &= Check(demo, !ev->grenade == (ev->weapon != DEMOWEAPON_GRENADE), "a grenade kill isn't one by its weapon");
+            unknownWeapons += ev->weapon == DEMOWEAPON_UNKNOWN;
             kills++;
             break;
         case DEMOEVENT_ROUNDSTART:
@@ -158,7 +162,8 @@ static bool TestDemo(const char *demo, bool json)
         fputs(text, stdout);
     } else {
         printf(
-            "%s %s: %d:%02d, %d levels (%d realism, %d default), %d rounds, %d round ends, %d kills, %d watched%s\n",
+            "%s %s: %d:%02d, %d levels (%d realism, %d default), %d rounds, %d round ends, %d kills (%d weapons not known), "
+            "%d watched%s\n",
             ok ? "ok" : "FAILED",
             demo,
             index.duration / 60000,
@@ -169,6 +174,7 @@ static bool TestDemo(const char *demo, bool json)
             rounds,
             roundEnds,
             kills,
+            unknownWeapons,
             watched,
             index.truncated ? ", truncated" : ""
         );

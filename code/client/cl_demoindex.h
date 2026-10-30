@@ -38,6 +38,22 @@ typedef enum {
     DEMOEVENT_ROUNDEND    // text is the message, like "Axis win!"
 } demoEventType_t;
 
+// what a kill was made with, as its death message tells
+typedef enum {
+    DEMOWEAPON_UNKNOWN, // a message not known
+    DEMOWEAPON_PISTOL,
+    DEMOWEAPON_RIFLE,   // without a scope
+    DEMOWEAPON_SNIPER,  // a rifle with a scope
+    DEMOWEAPON_SMG,
+    DEMOWEAPON_MG,      // the StG 44 and the BAR, the game's machine guns
+    DEMOWEAPON_SHOTGUN,
+    DEMOWEAPON_ROCKET,  // the bazooka and the panzerschreck
+    DEMOWEAPON_GRENADE,
+    DEMOWEAPON_MELEE,   // a hit with a gun's butt
+    DEMOWEAPON_OTHER,   // anything else: explosions, falls, being crushed...
+    DEMOWEAPON_COUNT
+} demoWeapon_t;
+
 typedef struct {
     demoEventType_t type;
     int             time;   // msec from the demo's first snapshot
@@ -48,7 +64,8 @@ typedef struct {
     char            text[MAX_STRING_CHARS];
     // for a kill: the killer and the victim were last seen on the same team
     qboolean        teamKill;
-    qboolean        grenade;
+    qboolean        grenade; // weapon is DEMOWEAPON_GRENADE
+    demoWeapon_t    weapon;
     // for a level: the recorder's snapshots at a top speed only realism
     // servers give, and at one only default servers give
     int realismTicks;
@@ -73,6 +90,9 @@ void DemoIndex_Free(demoIndex_t *index);
 // the rules a level was played under, from its realism and default ticks:
 // "realism", "default", "mixed" or "" when there's too little to tell
 const char *DemoIndex_LevelRules(const demoEvent_t *level);
+// "pistol", "rifle", "sniper", "smg", "mg", "shotgun", "rocket", "grenade",
+// "melee", "other", or "" for a message not known
+const char *DemoIndex_WeaponName(demoWeapon_t weapon);
 // returns the index as JSON, to free with free()
 char *DemoIndex_ToJSON(const demoIndex_t *index, const char *demoName);
 typedef struct {

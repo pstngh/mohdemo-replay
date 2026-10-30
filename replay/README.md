@@ -128,7 +128,7 @@ everyone plays on one team) aren't kills: they aren't listed, counted, part
 of multi-kills or gone to by the next and previous kill, and they only play,
 and are only recorded, with a kill by the same player at most 2 seconds
 before or after them: a teammate hit while shooting at an enemy. Grenade
-kills (the messages about a grenade or shrapnel) aren't kills either, nor
+kills (a grenade or its shrapnel, as the death message tells) aren't kills either, nor
 is the death of the player shown at the time: the recorder killed while
 playing, or the player they follow. A kill plays only inside its level: its
 clip starts no earlier than the level and ends with it.
