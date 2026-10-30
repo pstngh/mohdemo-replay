@@ -20,7 +20,8 @@ player names are made up.*
   runs with each weapon. Demos under 5 minutes are left out. Show only
   default or realism demos, or those recorded by some players, and filter
   by demo name, level or player: type a name to see every demo that player
-  is in, with their frags.
+  is in, with their frags. Words separated by spaces must all match, and
+  commas separate searches: `pstn, tommeh` finds the demos of either.
 - **Choose the frags.** By fragger, by victim and by weapon (sniper, rifle,
   SMG, StG / BAR, shotgun, pistol, bazooka, melee), several of each, on
   their own or together: the list shows only the demos with such frags, and

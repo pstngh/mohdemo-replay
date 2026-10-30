@@ -19,7 +19,9 @@ too little), the menu next to the filter shows only default or realism
 demos, Recorder only the demos recorded by the players named (parts of
 names separated by commas, as the filter takes them; its menu lists the
 recorders, those of the most demos first), and the filter finds demos by
-name, level or player: for a player, it shows their frags in each demo. For that, `mohdemoindex`, built next to the
+name, level or player, those with all of its words, and commas separate
+searches (`pstn v2, tommeh` finds pstN's demos on v2 and tommeh's demos):
+for a player, it shows their frags in each demo. For that, `mohdemoindex`, built next to the
 game, indexes the demos in the background the first time (about two minutes
 for 700, and again once after it changes), and the indexes are kept in
 `~/.cache/mohdemo-replay`.

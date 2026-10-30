@@ -391,6 +391,36 @@ def filter_kills(summary, kill_filter):
     return count, killers
 
 
+def search_parts(text):
+    """The searches of the demo filter: the words of each part separated by
+    commas, cleaned like names. A demo is found by any search with all of its
+    words."""
+    parts = ([w for w in (clean_name(w) for w in part.split()) if w] for part in text.split(","))
+    return [words for words in parts if words]
+
+
+def search_demo(name, summary, searches):
+    """The players of a demo the searches find, {clean name: [name, kills]},
+    or None when no search has all its words in the demo's name, a level or a
+    player's name."""
+    players = summary.get("players", {})
+    maps = " ".join(summary.get("maps", [])).lower()
+    found, any_found = {}, False
+    for words in searches:
+        hits = {}
+        for word in words:
+            if word in name.lower() or word in maps:
+                continue
+            keys = [key for key in players if word in key]
+            if not keys:
+                break
+            hits.update((key, players[key]) for key in keys)
+        else:
+            any_found = True
+            found.update(hits)
+    return found if any_found else None
+
+
 class Library(QObject):
     """What's in every demo of the folder, without playing them: mohdemoindex
     (built next to the game) indexes them in the background, and the indexes
@@ -1769,6 +1799,8 @@ class Window(QMainWindow):
         # demos
         self.filter = QLineEdit(placeholderText="Filter demos by name, map or player")
         self.filter.setClearButtonEnabled(True)
+        self.filter.setToolTip("Demos with all of these words in their name, a level or a player's name; commas "
+                               "separate searches, so \"pstn, tommeh\" finds the demos of either")
         self.filter.textChanged.connect(self.filter_demos)
         self.rules = QComboBox()
         self.rules.addItem("All demos", "")
@@ -2232,33 +2264,26 @@ class Window(QMainWindow):
         self.show_state()
 
     def filter_demos(self):
-        """Shows the demos where each word is in the name, a map or a
-        player's name, and the players found; with the kill filter, only
-        those with kills it keeps, and their killers; only those recorded by
-        the recorders named, and of the rules chosen, if any, and not those
-        shorter than MIN_LENGTH."""
-        words = [w for w in (clean_name(w) for w in self.filter.text().split()) if w]
+        """Shows the demos with each word of one of the searches (separated
+        by commas) in the name, a map or a player's name, and the players
+        found; with the kill filter, only those with kills it keeps, and
+        their killers; only those recorded by the recorders named, and of the
+        rules chosen, if any, and not those shorter than MIN_LENGTH."""
+        searches = search_parts(self.filter.text())
         rules = self.rules.currentData()
         recorders = [clean_name(name) for name in self.recorded_by.names()]
         kill_filter = self.kill_filter()
         found_any = False
         for name, item in self.demo_items.items():
             summary = self.library.demos.get(name) or {}
-            players = summary.get("players", {})
-            maps = " ".join(summary.get("maps", [])).lower()
             found, shown = {}, not rules or summary.get("rules") in (rules, "both")
             shown = shown and summary.get("duration", MIN_LENGTH) >= MIN_LENGTH
             if shown and recorders:
                 recorder = clean_name(summary.get("recorder", ""))
                 shown = bool(recorder) and any(part in recorder for part in recorders)
-            for word in words if shown else ():
-                if word in name.lower() or word in maps:
-                    continue
-                hits = [key for key in players if word in key]
-                if not hits:
-                    shown = False
-                    break
-                found.update((key, players[key]) for key in hits)
+            if shown and searches:
+                hits = search_demo(name, summary, searches)
+                shown, found = hits is not None, hits or {}
             if shown and kill_filter:
                 count, found = filter_kills(summary, kill_filter)
                 shown = count > 0
@@ -2275,7 +2300,7 @@ class Window(QMainWindow):
                                          for c in children)
             item.setText(COL_DEMO, f"{posixpath.basename(folder)} ({count})")
             item.setHidden(not count)
-            if (words or recorders or kill_filter) and count:
+            if (searches or recorders or kill_filter) and count:
                 item.setExpanded(True)
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)

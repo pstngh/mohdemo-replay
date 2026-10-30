@@ -341,6 +341,21 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(summary, kf(victims=["bob"])), (2, {"t-": ["t-", 1]}))
         self.assertEqual(mohreplay.filter_kills(summary, kf(shown=True, weapons=["rifle"])), (2, {"t-": ["t-", 2]}))
 
+    def test_search_demo(self):
+        """Words separated by spaces must all be in a demo, commas separate
+        searches that each find demos."""
+        parts = mohreplay.search_parts
+        self.assertEqual(parts(" T-  ^1Phil , team1 ,, "), [["t-", "phil"], ["team1"]])
+        self.assertEqual(parts(" , "), [])
+        summary = mohreplay.summarize(DEMO)
+        search = lambda text, name="clan/first": mohreplay.search_demo(name, summary, parts(text))
+        self.assertEqual(search("phil"), {"phil": ["^1Phil", 0]})
+        self.assertEqual(search("phil nobody"), None)
+        self.assertEqual(search("phil nobody, bob"), {"bob": ["Bob", 0]})
+        self.assertEqual(search("nobody, team1"), {})
+        self.assertEqual(search("clan bob, phil, al"), {"bob": ["Bob", 0], "phil": ["^1Phil", 0], "al": ["Al", 0]})
+        self.assertEqual(search("nobody, mohdm6"), None)
+
     def test_deaths_shown(self):
         # t- killed at 3:20 while shown, Phil at 6:40 while followed
         deaths = mohreplay.deaths_shown(DEMO)
@@ -1066,6 +1081,17 @@ class TestLibrary(FakeGameCase):
         self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
         window.filter.setText("nobody")
         self.assertEqual(self.shown(window), [])
+        # commas separate searches: the demos of either
+        window.filter.setText("obj_team1, kos")
+        self.assertEqual(self.shown(window), ["first", "other"])
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_PLAYER), "")
+        self.assertEqual(window.demo_items["other"].text(mohreplay.COL_PLAYER), "<KoS>Bob (3)")
+        window.filter.setText("mohdm6 phil, nobody")
+        self.assertEqual(self.shown(window), ["other"])
+        window.filter.setText("mohdm6 kos, team1 al")
+        self.assertEqual(self.shown(window), ["first", "other"])
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_PLAYER), "Al (0)")
+        self.assertEqual(window.demo_items["other"].text(mohreplay.COL_PLAYER), "<KoS>Bob (3)")
 
     def test_filter_by_rules(self):
         mixed = json.loads(json.dumps(DEMO))
