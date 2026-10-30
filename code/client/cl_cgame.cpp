@@ -433,15 +433,20 @@ Added in OPM
 Whether a demo doesn't show this message, of those that fill the message
 box: the yellow ones, which tell what the player picked up (ammo, health,
 weapons, in any language; also a server's "( 3 ) players are active and
-clean"), and the server's own about players coming and going, like
+clean"), the server's own about players coming and going, like
 "<player> has entered the battle", which it tells everyone each time a
-player enters, as at every round
+player enters, as at every round, and the bomb's
 ===================
 */
 static qboolean CL_DemoHidesPrint( const char *text ) {
 	static const char *const comings[] = {
-		" has entered the battle\n", " has left the battle\n", " has joined the Allies\n",
-		" has joined the Axis\n", " is preparing for deployment\n"
+		" has entered the battle", " has left the battle", " has joined the Allies", " has joined the Axis",
+		" is preparing for deployment"
+	};
+	// as English, French and German servers tell them
+	static const char *const bombs[] = {
+		"A Bomb has been planted!", "A Bomb has been defused!", "A bomb is still set!", "La bombe est en place.",
+		"La bombe vient d'\xeatre d\xe9samorc\xe9" "e.", "Bombe wurde platziert."
 	};
 	size_t len, endLen;
 	int i;
@@ -453,10 +458,19 @@ static qboolean CL_DemoHidesPrint( const char *text ) {
 		return qfalse;
 	}
 
+	text++;
 	len = strlen( text );
+	if ( len && text[len - 1] == '\n' ) {
+		len--;
+	}
 	for ( i = 0; i < (int)ARRAY_LEN( comings ); i++ ) {
 		endLen = strlen( comings[i] );
-		if ( len > endLen && !strcmp( text + len - endLen, comings[i] ) ) {
+		if ( len > endLen && !strncmp( text + len - endLen, comings[i], endLen ) ) {
+			return qtrue;
+		}
+	}
+	for ( i = 0; i < (int)ARRAY_LEN( bombs ); i++ ) {
+		if ( len == strlen( bombs[i] ) && !strncmp( text, bombs[i], len ) ) {
 			return qtrue;
 		}
 	}
