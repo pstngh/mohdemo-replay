@@ -159,7 +159,8 @@ the way. `cg_followcamera 1` (the default) puts it behind them, where stock
 servers do; `cg_followcamera 0` shows it as recorded.
 
 Demos don't show "<player> has entered the battle", which the server tells
-everyone each time a player enters, as at every round, and which fills the
+everyone each time a player enters, as at every round, nor what the player
+picks up (ammo, health and weapons, the yellow messages): they fill the
 message box.
 
 ## Recording

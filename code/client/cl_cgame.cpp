@@ -430,14 +430,20 @@ qboolean CL_ProcessServerCommand(const char* origString, const char* cmd, qboole
 CL_DemoHidesPrint
 
 Added in OPM
-Whether a demo doesn't show this message: "<player> has entered the
-battle", which the server tells everyone each time a player enters, as at
-every round, and which fills the message box
+Whether a demo doesn't show this message, of those that fill the message
+box: the yellow ones, which tell what the player picked up (ammo, health,
+weapons, in any language; also a server's "( 3 ) players are active and
+clean"), and "<player> has entered the battle", which the server tells
+everyone each time a player enters, as at every round
 ===================
 */
 static qboolean CL_DemoHidesPrint( const char *text ) {
 	static const char entered[] = " has entered the battle\n";
 	size_t len;
+
+	if ( text[0] == HUD_MESSAGE_YELLOW[0] ) {
+		return qtrue;
+	}
 
 	len = strlen( text );
 	return text[0] == HUD_MESSAGE_WHITE[0] && len >= sizeof( entered ) - 1
