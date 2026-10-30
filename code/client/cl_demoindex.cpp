@@ -33,6 +33,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // the same as the client's MAX_PARSE_ENTITIES
 #define DI_PARSE_ENTITIES 8192
 
+// a field of view with a scope on: the sniper rifles' is 20, against 80
+// without
+#define DI_SCOPE_FOV 60
+
 typedef struct {
     qboolean      valid;
     int           messageNum;
@@ -74,6 +78,7 @@ typedef struct {
     int      watched;
     int      level; // the map event of the level playing, -1 before the first
     int      teams[MAX_CLIENTS]; // the team each player was last seen on, TEAM_NONE if not seen
+    int      unscopedTime; // the last snapshot of the player in view without a scope on
 
     diName_t knownNames[DI_KNOWN_NAMES];
     int      numKnownNames;
@@ -102,6 +107,8 @@ static demoEvent_t *DI_AddEvent(diParser_t *p, demoEventType_t type)
     ev->time   = -1;
     ev->client = -1;
     ev->other  = -1;
+    ev->scope  = -1;
+    ev->speed  = -1;
     return ev;
 }
 
@@ -1084,6 +1091,35 @@ const char *DemoIndex_LevelRules(const demoEvent_t *level)
 
 /*
 ===============
+DI_SetKillAims
+
+The kills waiting for snap, made by the player in view: how long they had a
+scope on before the shot, as the snapshot before shows, and their speed.
+The death message comes with the snapshot of the shot.
+===============
+*/
+static void DI_SetKillAims(diParser_t *p, const diSnapshot_t *snap)
+{
+    const float *velocity = snap->ps.velocity;
+    demoEvent_t *ev;
+    int          i;
+
+    if (!snap->valid || !p->snap.valid || p->snap.ps.clientNum != snap->ps.clientNum) {
+        return;
+    }
+
+    for (i = p->firstUntimed; i < p->index->numEvents; i++) {
+        ev = &p->index->events[i];
+        if (ev->type != DEMOEVENT_KILL || ev->client != snap->ps.clientNum) {
+            continue;
+        }
+        ev->scope = p->snap.ps.fov < DI_SCOPE_FOV ? snap->serverTime - p->unscopedTime : 0;
+        ev->speed = (int)(sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1]) + 0.5);
+    }
+}
+
+/*
+===============
 DI_ParseSnapshot
 
 Like CL_ParseSnapshot
@@ -1145,6 +1181,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
         p->startTime = newSnap.serverTime;
     }
     p->lastTime = newSnap.serverTime;
+    DI_SetKillAims(p, &newSnap);
     DI_SetEventTimes(p, newSnap.serverTime);
 
     if (!newSnap.valid) {
@@ -1165,6 +1202,9 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
         DI_AddEvent(p, DEMOEVENT_ROUNDSTART);
     }
 
+    if (!p->snap.valid || p->snap.ps.clientNum != newSnap.ps.clientNum || newSnap.ps.fov >= DI_SCOPE_FOV) {
+        p->unscopedTime = newSnap.serverTime;
+    }
     p->snap                                       = newSnap;
     p->snapshots[newSnap.messageNum & PACKET_MASK] = newSnap;
     DI_CountRulesSpeed(p, &newSnap.ps);
@@ -1425,6 +1465,9 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             DI_Printf(b, ", \"teamKill\": %s", ev->teamKill ? "true" : "false");
             DI_Printf(b, ", \"grenade\": %s", ev->grenade ? "true" : "false");
             DI_Printf(b, ", \"weapon\": \"%s\"", DemoIndex_WeaponName(ev->weapon));
+            if (ev->scope >= 0) {
+                DI_Printf(b, ", \"scope\": %d, \"speed\": %d", ev->scope, ev->speed);
+            }
             break;
         case DEMOEVENT_ROUNDSTART:
             break;

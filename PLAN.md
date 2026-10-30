@@ -87,7 +87,9 @@ taken for the game; CI now builds `main` for macOS too.
      recorder), `kills` (`killer`/`killerName`, `victim`/`victimName`,
      `text`; client numbers are -1 when unknown, killer is -1 for suicides;
      `teamKill` when both were last seen on the same team, from the
-     recorder's `STAT_TEAM` and the others' `EF_ALLIES`/`EF_AXIS`),
+     recorder's `STAT_TEAM` and the others' `EF_ALLIES`/`EF_AXIS`; for a
+     kill seen from the killer's view, `scope`, the msec they had a scope on
+     before the shot, 0 for none, and `speed`, theirs then),
      `rounds` (when the level restarts: snapshots toggle
      `SNAPFLAG_SERVERCOUNT`, about 3.3 s after a round end, also without
      one, like at the start of a match) and `roundEnds` (`text`: "Axis

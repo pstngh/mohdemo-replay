@@ -141,6 +141,9 @@ static bool TestDemo(const char *demo, bool json)
             ok &= Check(demo, shown || later, "a kill is on a level before a watch event");
             ok &= Check(demo, ev->weapon >= 0 && ev->weapon < DEMOWEAPON_COUNT, "a kill's weapon is out of range");
             ok &= Check(demo, !ev->grenade == (ev->weapon != DEMOWEAPON_GRENADE), "a grenade kill isn't one by its weapon");
+            ok &= Check(demo, (ev->scope < 0) == (ev->speed < 0) && ev->scope <= index.duration && ev->speed < 2000,
+                        "a kill's scope time or speed is wrong");
+            ok &= Check(demo, ev->scope < 0 || ev->client >= 0, "a kill without a killer has a scope time");
             unknownWeapons += ev->weapon == DEMOWEAPON_UNKNOWN;
             kills++;
             break;

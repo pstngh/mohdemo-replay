@@ -66,6 +66,11 @@ typedef struct {
     qboolean        teamKill;
     qboolean        grenade; // weapon is DEMOWEAPON_GRENADE
     demoWeapon_t    weapon;
+    // for a kill seen from the killer's view (the recorder's, or the player
+    // followed): msec the killer had a scope on before the shot, 0 for none,
+    // and their speed then; -1 when not seen
+    int scope;
+    int speed;
     // for a level: the recorder's snapshots at a top speed only realism
     // servers give, and at one only default servers give
     int realismTicks;
