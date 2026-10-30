@@ -16,21 +16,35 @@ of demos (the filter finds a folder's name too). The list shows each
 demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
 too little), the menu next to the filter shows only default or realism
-demos, and the filter finds demos by name, level or player: for a player, it shows their kills in each demo, and playing one
-chooses them. For that, `mohdemoindex`, built next to the game, indexes the
-demos in the background the first time (about two minutes for 700), and the
-indexes are kept in `~/.cache/mohdemo-replay`. Double-click a demo to
-play it (the game starts then, or with Restart game in the toolbar, where
-the folder's button chooses another), click a kill or a round to jump to
-it; hovering a kill tells how it was made. Play chooses what plays:
-Everything, These kills, the kills listed (by the player chosen), from the
-one selected or the first, or While watched, while the player chosen is
-shown. A player's
-kills are only those made while the demo shows them (the recorder playing,
-or the player the recorder follows), and only while they're shown, so a
-video of them never shows someone else. "Whoever is shown", in the Player
-menu, lists the frags shown: the recorder's while they play and those of
-the players they follow, while they follow them. Settings also sets how long
+demos, and the filter finds demos by name, level or player: for a player, it
+shows their kills in each demo. For that, `mohdemoindex`, built next to the
+game, indexes the demos in the background the first time (about two minutes
+for 700, and again once after it changes), and the indexes are kept in
+`~/.cache/mohdemo-replay`.
+
+Killer, Victim and Weapon, under the filter, choose the kills, those of the
+demos listed and of the demo playing, each on its own or together: Killer
+and Victim take parts of names, separated by commas, as the filter does
+(`pstn, tommeh` finds pstN's kills under any clan tag, and tommeh's), and
+their menus add the players of the demo playing; Weapon ticks sniper, rifle,
+SMG, StG / BAR (the StG 44 and the BAR, which the game calls machine guns),
+shotgun, pistol, bazooka, melee (a hit with a gun's butt) or other, as the
+death messages tell (also the French, German, Spanish and Portuguese ones
+seen; the French write a rifle kill as a sniper kill). The list then shows
+only the demos with such kills, with how many of each killer, and the demo
+playing lists only those. A player's kills are only those made while the
+demo shows them (the recorder playing, or the player the recorder follows),
+and only while they're shown, so a video of them never shows someone else.
+"Whoever is shown", in Killer's menu, keeps the frags shown: the recorder's
+while they play and those of the players they follow, while they follow
+them.
+
+Double-click a demo to play it (the game starts then, or with Restart game
+in the toolbar, where the folder's button chooses another), click a kill or
+a round to jump to it; hovering a kill tells how it was made. Play chooses
+what plays: Everything, These kills, the kills listed, from the one
+selected or the first, or While watched, while one of the killers is shown.
+Settings also sets how long
 each kill plays before and after it (4 and 2 seconds), and Viewmodel and
 Force models, in the toolbar, show the gun in the player's hands and show
 everyone as an airborne soldier or a winter German, whatever they wore.
@@ -38,13 +52,12 @@ The time slider marks the kills listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
 
-Record… makes an MP4 of the demo playing: a stretch of time, the kills (of
-the player chosen above), the recorder's own (when the player chosen is
-someone else) or the frags shown, one after the other, or only while a
-player is watched. A right-click on kills selected records those, and on
-demos or folders selected, all of their demos, the kills of the player the
-filter found, each demo with its own spelling of the name, the recorder's,
-or the frags shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
+Record… makes an MP4 of the demo playing: a stretch of time, the kills
+listed, the recorder's own or the frags shown (both of the victims and with
+the weapons chosen), one after the other, or only while a killer is
+watched. A right-click on kills selected records those, and on demos or
+folders selected, all of their demos, the kills chosen, the recorder's, or
+the frags shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
 kills it holds and how long the video will be, and the last one is chosen
 again next time. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
@@ -91,7 +104,7 @@ other letters, numbers, Space and Enter do nothing. The app binds these keys:
 | --- | --- |
 | Pause | pause or play |
 | Left / Right | back or forward 5 seconds |
-| Down / Up | previous or next kill listed: of the player chosen in the app, or anyone's |
+| Down / Up | previous or next kill listed: the kills chosen in the app |
 | PgDn / PgUp | previous or next round |
 
 ## Console commands

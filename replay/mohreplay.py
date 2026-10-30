@@ -25,13 +25,13 @@ from time import monotonic
 
 from PySide6.QtCore import (
     QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment,
-    QSettings, QStandardPaths, Qt, QTimer, QUrl,
+    QSettings, QStandardPaths, Qt, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider, QSplitter, QStyle,
+    QMenu, QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider, QSplitter, QStyle,
     QStyleOptionSlider, QTabWidget, QToolBar, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -45,16 +45,30 @@ KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
 # the team kill to play too, as the engine's DEMO_TEAMKILL_NEAR
 TEAM_KILL_NEAR = 2000
 MIN_LENGTH = 5 * 60000  # msec: shorter demos aren't listed, once indexed
-# the Player menu's "Whoever is shown": not a name, which can't hold a NUL
-SHOWN = "\0shown"
 # what Record… offers for whoever is shown, as demoonly shownkills: one and
 # several
 SHOWN_KILLS = ("frag shown", "frags shown")
 SHOWN_WHO = ": the recorder's and the players they follow"
 # what Record… offers for the recorder's own frags
 RECORDER_KILLS = ("recorder frag", "recorder frags")
-# what demoonly plays of the recorder for those
-RECORDER_ONLY = {"recorderkills": "kills"}
+# what demoonly plays for each of Record…'s choices of kills
+ONLY = {"kills": "kills", "recorderkills": "kills", "shownkills": "shownkills", "watched": "watched"}
+# the weapons kills are filtered by, as the demo index names them, and in
+# words, but grenades, whose kills aren't kills; other is anything else,
+# and the death messages not known
+WEAPONS = {"sniper": "Sniper", "rifle": "Rifle", "smg": "SMG", "mg": "StG / BAR", "shotgun": "Shotgun",
+           "pistol": "Pistol", "rocket": "Bazooka", "melee": "Melee", "other": "Other"}
+WEAPON_WORDS = {"sniper": "sniper", "rifle": "rifle", "smg": "SMG", "mg": "StG / BAR", "shotgun": "shotgun",
+                "pistol": "pistol", "rocket": "bazooka", "melee": "melee", "other": "other weapons"}
+WEAPON_TIPS = {"sniper": "Springfield and KAR98 sniper: \"was sniped by\"",
+               "rifle": "M1 Garand and KAR98: \"was rifled by\"",
+               "smg": "Thompson and MP40: \"was perforated by\"",
+               "mg": "StG 44 and BAR, the game's machine guns: \"was machine-gunned by\"",
+               "shotgun": "\"was hunted down by\", \"was pumped full of buckshot by\"",
+               "pistol": "Colt 45, P38 and the silenced pistol: \"was gunned down by\"",
+               "rocket": "Bazooka and panzerschreck: \"took …'s rocket\"",
+               "melee": "Hit with a gun's butt: \"was bashed by\", \"was clubbed by\"",
+               "other": "Explosions, falls, being crushed…, and death messages not known"}
 # the demo list's columns
 DEMO_COLUMNS = ["Demo", "Player", "Length", "Map", "Recorder", "Rules", "Date"]
 COL_DEMO, COL_PLAYER, COL_LENGTH, COL_MAP, COL_RECORDER, COL_RULES, COL_DATE = range(len(DEMO_COLUMNS))
@@ -159,8 +173,79 @@ def same_player(a, b):
 
 
 def is_grenade(kill):
-    """Whether kill was made with a grenade or shrapnel."""
+    """Whether kill was made with a grenade or shrapnel: as its index tells,
+    or its message for an index made before weapons were."""
+    if "weapon" in kill:
+        return bool(kill.get("grenade"))
     return bool(kill.get("grenade")) or "grenade" in kill.get("text", "").lower() or "shrapnel" in kill.get("text", "").lower()
+
+
+def weapon_of(kill):
+    """What kill was made with, a key of WEAPONS: other for what isn't
+    known, as in indexes made before weapons were."""
+    weapon = kill.get("weapon", "")
+    return weapon if weapon in WEAPONS else "other"
+
+
+def or_list(words):
+    """"a, b or c"."""
+    words = list(words)
+    return ", ".join(words[:-1]) + " or " + words[-1] if len(words) > 1 else "".join(words)
+
+
+class KillFilter:
+    """The kills listed, played and recorded: by players whose names have one
+    of killers in them, while they're shown, as a player's kills are, or by
+    whoever is shown (shown), of players whose names have one of victims,
+    made with one of weapons (keys of WEAPONS). Names are parts of names as
+    the search takes its words; none is anyone, no weapons any weapon. The
+    game is told it with demofilter."""
+
+    def __init__(self, killers=(), victims=(), weapons=(), shown=False):
+        self.shown = bool(shown)
+        # as given, for the game and the labels; whoever is shown, or names
+        self.names = [] if shown else [n.strip() for n in killers if clean_name(n)]
+        self.victim_names = [n.strip() for n in victims if clean_name(n)]
+        self.killers = [clean_name(n) for n in self.names]
+        self.victims = [clean_name(n) for n in self.victim_names]
+        self.weapons = [w for w in WEAPONS if w in weapons]
+
+    def __bool__(self):
+        return bool(self.shown or self.killers or self.victims or self.weapons)
+
+    def by_shown(self):
+        """Whether its kills are only those made while their killer is shown."""
+        return self.shown or bool(self.killers)
+
+    def has_killer(self, killer):
+        """Whether a killer's clean name is one of its, anyone if whoever is
+        shown."""
+        return not self.killers or any(part in killer for part in self.killers)
+
+    def has(self, victim, weapon):
+        """Whether a kill of a victim (clean name) made with weapon is one of
+        its, whoever the killer."""
+        return (not self.weapons or weapon in self.weapons) and (
+            not self.victims or any(part in victim for part in self.victims))
+
+    def keeps(self, kill, killer=True):
+        """Whether kill is one of its, whoever the killer unless killer."""
+        return ((not killer or self.has_killer(clean_name(kill["killerName"])))
+                and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill)))
+
+    def commands(self):
+        """The demofilter commands telling it to the game."""
+        return (["demofilter clear"] + (["demofilter shown"] if self.shown else [])
+                + ["demofilter killer " + quoted(name) for name in self.names]
+                + ["demofilter victim " + quoted(name) for name in self.victim_names]
+                + (["demofilter weapon " + " ".join(self.weapons)] if self.weapons else []))
+
+    def words(self, killers=True):
+        """What it keeps after "kills", the killers too if killers: " by
+        pstn or Phil of Bob with sniper", "" for all."""
+        text = " by " + or_list(self.names) if killers and self.names else ""
+        text += " of " + or_list(self.victim_names) if self.victim_names else ""
+        return text + (" with " + or_list(WEAPON_WORDS[w] for w in self.weapons) if self.weapons else "")
 
 
 def watching(index):
@@ -264,7 +349,8 @@ def list_demos(folder):
 def summarize(index):
     """What the demo list shows of an index: its maps, length, recorder and
     players, {clean name: [name, kills]}, counting the kills made while
-    they're shown."""
+    they're shown, and its kills for the kill filter: [(killer, clean
+    killer, clean victim, weapon, whether made while the killer is shown)]."""
     players = {}
 
     def add(name, kills=0):
@@ -277,15 +363,32 @@ def summarize(index):
         add(kill["killerName"])
         add(kill["victimName"])
     deaths = deaths_shown(index)
-    shown = [kill for kill, _, _ in shown_kills(index)
+    shown = {id(kill) for kill, _, _ in shown_kills(index)}
+    kills = [kill for kill in index.get("kills", [])
              if not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths]
-    for kill in shown:
-        add(kill["killerName"], 1)
+    for kill in kills:
+        if id(kill) in shown:
+            add(kill["killerName"], 1)
     # "realism" or "default" when its levels tell one, "both", or ""
     kinds = {m.get("rules") for m in index.get("maps", [])} & {"realism", "default"}
     rules = "both" if len(kinds) == 2 else kinds.pop() if kinds else ""
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
-            "recorder": index.get("recorder", {}).get("name", ""), "players": players, "rules": rules}
+            "recorder": index.get("recorder", {}).get("name", ""), "players": players, "rules": rules,
+            "kills": [(kill["killerName"], clean_name(kill["killerName"]), clean_name(kill.get("victimName", "")),
+                       weapon_of(kill), id(kill) in shown) for kill in kills]}
+
+
+def filter_kills(summary, kill_filter):
+    """The kills of a demo the filter keeps, from its summary: how many, and
+    their killers, {clean name: [name, kills]}."""
+    count, killers = 0, {}
+    by_shown = kill_filter.by_shown()
+    for name, killer, victim, weapon, shown in summary.get("kills", []):
+        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon):
+            count += 1
+            if name:
+                killers.setdefault(killer, [name, 0])[1] += 1
+    return count, killers
 
 
 class Library(QObject):
@@ -787,6 +890,84 @@ class Timeline(QSlider):
         return super().event(event)
 
 
+class StayOpenMenu(QMenu):
+    """A menu whose checkable actions are ticked without closing it."""
+
+    def mouseReleaseEvent(self, event):
+        action = self.activeAction()
+        if action and action.isCheckable() and action.isEnabled():
+            action.trigger()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class NamesField(QLineEdit):
+    """Parts of players' names, separated by commas, anyone if none. Its menu
+    adds or takes off the players of the demo playing (players), and
+    whoever is shown instead of names, if offered."""
+
+    edited = Signal()
+
+    def __init__(self, tip, offer_shown=False):
+        super().__init__(placeholderText="Anyone")
+        self.setClearButtonEnabled(True)
+        self.setToolTip(tip)
+        self.players = []
+        self.menu = StayOpenMenu(self)
+        self.shown_action = None
+        if offer_shown:
+            self.shown_action = QAction("Whoever is shown", self, checkable=True)
+            self.shown_action.setToolTip("The recorder's kills, and those of the players they follow while they do")
+            self.shown_action.toggled.connect(self.shown_toggled)
+        menu_action = self.addAction(theme_icon("go-down", QStyle.SP_ArrowDown), QLineEdit.TrailingPosition)
+        menu_action.setToolTip("The players of the demo playing")
+        menu_action.triggered.connect(self.open_menu)
+        self.textChanged.connect(self.text_changed)
+
+    def names(self):
+        return [part.strip() for part in self.text().split(",") if clean_name(part)]
+
+    def shown(self):
+        return bool(self.shown_action and self.shown_action.isChecked())
+
+    def set_shown(self, shown):
+        if self.shown_action:
+            self.shown_action.setChecked(shown)
+
+    def text_changed(self, text):
+        # names instead of whoever is shown
+        if text.strip() and self.shown():
+            self.shown_action.setChecked(False)
+        self.edited.emit()
+
+    def shown_toggled(self, checked):
+        self.setPlaceholderText("Whoever is shown" if checked else "Anyone")
+        if checked and self.text():
+            self.blockSignals(True)
+            self.clear()
+            self.blockSignals(False)
+        self.edited.emit()
+
+    def open_menu(self):
+        self.menu.clear()
+        if self.shown_action:
+            self.menu.addAction(self.shown_action)
+            self.menu.addSeparator()
+        chosen = {clean_name(name) for name in self.names()}
+        for player in self.players:
+            action = self.menu.addAction(player)
+            action.setCheckable(True)
+            action.setChecked(clean_name(player) in chosen)
+            action.toggled.connect(lambda checked, p=player: self.toggle(p, checked))
+        if not self.players:
+            self.menu.addAction("Play a demo to choose its players").setEnabled(False)
+        self.menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def toggle(self, player, checked):
+        names = [name for name in self.names() if clean_name(name) != clean_name(player)]
+        self.setText(", ".join(names + [player] if checked else names))
+
+
 def is_on(value):
     return value in ("1", "true", True)
 
@@ -1056,14 +1237,15 @@ def range_clip(demo, start, end):
             "commands": ["demoonly", f"demoseek {seconds(start)}", "demopause 0", f"demovideo {{part}} {seconds(end)}"]}
 
 
-def only_clip(demo, only="", player="", spans=None):
-    """A clip of what demoonly plays ("kills", "shownkills" or "watched"), or
-    of all of demo; spans: what that is,
-    from demoonly_plan(), if known."""
+def only_clip(demo, only="", player="", spans=None, kill_filter=None):
+    """A clip of what demoonly plays ("kills", "shownkills" or "watched")
+    with kill_filter, or of all of demo; spans: what that is, from
+    demoonly_plan(), if known."""
     command = f"demoonly {only}" + (" " + quoted(player) if player else "") if only else "demoonly"
     start = spans[0][0] if (spans and spans[0][0] > 0) else 0
+    told = (kill_filter or KillFilter()).commands() if only else []
     return {"demo": demo, "start": start, "end": None, "spans": spans,
-            "commands": [f"demoseek {seconds(start)}", "demopause 0", command, "demovideo {part}"]}
+            "commands": [*told, f"demoseek {seconds(start)}", "demopause 0", command, "demovideo {part}"]}
 
 
 def stretches(spans, switches=()):
@@ -1094,28 +1276,37 @@ def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
     return max(start, first, kill["time"] - before), min(end, last, kill["time"] + after)
 
 
-def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None):
+def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None, kill_filter=None):
     """What demoonly <only> [player] plays in a demo, as the engine does,
-    from its index: (how many kills, [(start, end)] in msec), all of the demo
-    without only. Team kills aren't counted, and only play with a kill of
-    their killer near them; the deaths of the player shown aren't kills."""
+    from its index, with demofilter's kill_filter: (how many kills, [(start,
+    end)] in msec), all of the demo without only. The player given, or
+    whoever is shown for shownkills, is the killer instead of the filter's.
+    Team kills aren't counted, and only play with a kill of their killer near
+    them; the deaths of the player shown aren't kills."""
+    kill_filter = kill_filter or KillFilter()
     duration = index.get("duration", 0)
     watched = index.get("watched", [])
     switches = [w["time"] for w in watched]
     if not only:
         return 0, [(0, duration)]
     if only == "watched":
+        # the player given, else the filter's killers
         spans = [(w["time"], watched[i + 1]["time"] if i + 1 < len(watched) else duration)
-                 for i, w in enumerate(watched) if same_player(w["name"], player)]
+                 for i, w in enumerate(watched)
+                 if (same_player(w["name"], player) if player
+                     else kill_filter.killers and kill_filter.has_killer(clean_name(w["name"])))]
         return 0, stretches(spans, switches)
-    if only.startswith("shown") or player:
+    whoever = only.startswith("shown")
+    if whoever or player or kill_filter.by_shown():
         kills = [(k, start, end) for k, start, end in shown_kills(index)
-                 if not player or same_player(player, k["killerName"])]
+                 if (same_player(player, k["killerName"]) if player
+                     else whoever or kill_filter.has_killer(clean_name(k["killerName"])))]
     else:
         # anyone's, whoever is shown
         kills, switches = [(k, 0, duration) for k in index.get("kills", [])], []
     deaths = deaths_shown(index)
-    frags = [x for x in kills if not x[0].get("teamKill") and not is_grenade(x[0]) and id(x[0]) not in deaths]
+    frags = [x for x in kills if not x[0].get("teamKill") and not is_grenade(x[0]) and id(x[0]) not in deaths
+             and kill_filter.keeps(x[0], killer=False)]
     count = len(frags)
     kills = frags + team_kills_with(kills, [k for k, _, _ in frags])
     kb = KILL_BEFORE if kill_before is None else kill_before
@@ -1545,7 +1736,6 @@ class Window(QMainWindow):
         self.library = Library(self.library_changed, self)
         self.demo_items = {}  # name: item
         self.folder_items = {}  # folder in the demos folder: item
-        self.wanted_player = None  # to choose once the demo plays
 
         self.setWindowTitle("MoH Demo Replay")
         self.resize(1200, 720)
@@ -1568,12 +1758,40 @@ class Window(QMainWindow):
         self.demos.itemActivated.connect(lambda item: item.data(COL_DEMO, Qt.UserRole)
                                          and self.play_demo(item.data(COL_DEMO, Qt.UserRole)))
         self.add_menu(self.demos, "Record the demos selected…", self.record_demos)
+        # the kills of the demos listed and of the demo playing
+        self.killer = NamesField("Kills by players whose names have one of these, separated by commas, while "
+                                 "they're shown, or by whoever is shown", offer_shown=True)
+        self.victim = NamesField("Kills of players whose names have one of these, separated by commas")
+        self.weapon = QToolButton()
+        self.weapon.setPopupMode(QToolButton.InstantPopup)
+        self.weapon.setToolTip("Kills made with these weapons, as the death messages tell")
+        menu = StayOpenMenu(self.weapon)
+        menu.setToolTipsVisible(True)
+        self.weapon_actions = {}
+        for key, label in WEAPONS.items():
+            action = self.weapon_actions[key] = menu.addAction(label)
+            action.setCheckable(True)
+            action.setToolTip(WEAPON_TIPS[key])
+            action.toggled.connect(self.weapons_changed)
+        menu.addSeparator()
+        menu.addAction("Any weapon", lambda: [a.setChecked(False) for a in self.weapon_actions.values()])
+        self.weapon.setMenu(menu)
+        # applied once typing stops
+        self.kill_filter_timer = QTimer(self, singleShot=True, interval=250, timeout=self.apply_kill_filter)
+        self.killer.edited.connect(self.kill_filter_timer.start)
+        self.victim.edited.connect(self.kill_filter_timer.start)
+        self.weapons_changed()
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
         row.addWidget(self.filter, 1)
         row.addWidget(self.rules)
+        box.addLayout(row)
+        row = QHBoxLayout()
+        for label, widget, stretch in (("Killer", self.killer, 3), ("Victim", self.victim, 2), ("Weapon", self.weapon, 0)):
+            row.addWidget(QLabel(label))
+            row.addWidget(widget, stretch)
         box.addLayout(row)
         box.addWidget(self.demos)
 
@@ -1589,9 +1807,6 @@ class Window(QMainWindow):
         palette = self.info.palette()
         palette.setColor(QPalette.WindowText, palette.color(QPalette.PlaceholderText))
         self.info.setPalette(palette)
-        self.player = QComboBox()
-        self.player.setToolTip("Whose kills are listed, played and recorded")
-        self.player.currentIndexChanged.connect(self.fill_kills)
         # what plays: one of three, as the game tells
         self.play_modes = QButtonGroup(self)
         self.everything_button = QPushButton("Everything")
@@ -1603,7 +1818,8 @@ class Window(QMainWindow):
                 (self.everything_button, "Play all of the demo", lambda: self.game.send("demoonly") or True),
                 (self.only_kills_button, "Play only the kills listed, from the one selected or the first",
                  self.only_kills),
-                (self.watched_button, "Play only while this player is shown, from the first time", self.only_watched)):
+                (self.watched_button, "Play only while one of the killers is shown, from the first time",
+                 self.only_watched)):
             button.setCheckable(True)
             button.setToolTip(text)
             button.clicked.connect(lambda _=False, a=action: self.play_mode_clicked(a))
@@ -1611,13 +1827,11 @@ class Window(QMainWindow):
             modes.addWidget(button)
         self.everything_button.setChecked(True)
         players = QHBoxLayout()
-        players.addWidget(QLabel("Player"))
-        players.addWidget(self.player, 1)
-        players.addSpacing(12)
         players.addWidget(QLabel("Play"))
         players.addLayout(modes)
+        players.addStretch(1)
 
-        self.kills = self.make_list(["Time", "Killer", "Victim"])
+        self.kills = self.make_list(["Time", "Killer", "Victim", "Weapon"])
         self.rounds = self.make_list(["Time", "Round", "Result"])
         # a click jumps, so does Enter
         for tree in (self.kills, self.rounds):
@@ -1660,16 +1874,17 @@ class Window(QMainWindow):
         # the kill buttons go to the kills listed
         for icon, tip, command in ((QStyle.SP_MediaSkipBackward, "Previous round (PgDn)", "demoprevround"),
                                    (QStyle.SP_MediaSeekBackward, "Previous kill listed (Down)",
-                                    lambda: self.kill_commands()[1]),
+                                    lambda: self.kill_commands("demoprevkill")),
                                    (None, "Back 10 seconds (Left: 5)", "demoskip -10")):
             controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
-                c() if callable(c) else c), "-10 s"))
+                *(c() if callable(c) else [c])), "-10 s"))
         controls.addWidget(self.play)
         for icon, tip, command in ((None, "Forward 10 seconds (Right: 5)", "demoskip 10"),
-                                   (QStyle.SP_MediaSeekForward, "Next kill listed (Up)", lambda: self.kill_commands()[0]),
+                                   (QStyle.SP_MediaSeekForward, "Next kill listed (Up)",
+                                    lambda: self.kill_commands("demonextkill")),
                                    (QStyle.SP_MediaSkipForward, "Next round (PgUp)", "demonextround")):
             controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
-                c() if callable(c) else c), "+10 s"))
+                *(c() if callable(c) else [c])), "+10 s"))
         controls.addSpacing(8)
         controls.addWidget(self.slider, 1)
         controls.addSpacing(8)
@@ -1967,12 +2182,32 @@ class Window(QMainWindow):
         self.settings.setValue("rules", self.rules.currentData())
         self.filter_demos()
 
+    def weapons_changed(self, _=None):
+        chosen = [label for key, label in WEAPONS.items() if self.weapon_actions[key].isChecked()]
+        self.weapon.setText(", ".join(chosen) if chosen else "Any weapon")
+        self.kill_filter_timer.start()
+
+    def kill_filter(self):
+        """The kills chosen with Killer, Victim and Weapon."""
+        return KillFilter(self.killer.names(), self.victim.names(),
+                          [key for key, action in self.weapon_actions.items() if action.isChecked()], self.killer.shown())
+
+    def apply_kill_filter(self):
+        """The demos with kills the filter keeps, and those of the demo
+        playing."""
+        self.kill_filter_timer.stop()
+        self.filter_demos()
+        self.fill_kills()
+        self.show_state()
+
     def filter_demos(self):
         """Shows the demos where each word is in the name, a map or a
-        player's name, and the players found; only those of the rules
-        chosen, if any, and not those shorter than MIN_LENGTH."""
+        player's name, and the players found; with the kill filter, only
+        those with kills it keeps, and their killers; only those of the
+        rules chosen, if any, and not those shorter than MIN_LENGTH."""
         words = [w for w in (clean_name(w) for w in self.filter.text().split()) if w]
         rules = self.rules.currentData()
+        kill_filter = self.kill_filter()
         found_any = False
         for name, item in self.demo_items.items():
             summary = self.library.demos.get(name) or {}
@@ -1988,10 +2223,12 @@ class Window(QMainWindow):
                     shown = False
                     break
                 found.update((key, players[key]) for key in hits)
+            if shown and kill_filter:
+                count, found = filter_kills(summary, kill_filter)
+                shown = count > 0
             item.setHidden(not shown)
             best = sorted(found.values(), key=lambda p: (-p[1], p[0].lower()))
             item.setText(COL_PLAYER, ", ".join(player_kills(p) for p in best))
-            item.setData(COL_PLAYER, Qt.UserRole, best[0][0] if best else None)
             found_any |= shown and bool(best)
         # a folder shows how many of its demos are shown, those in it first
         counts = {}
@@ -2002,7 +2239,7 @@ class Window(QMainWindow):
                                          for c in children)
             item.setText(COL_DEMO, f"{posixpath.basename(folder)} ({count})")
             item.setHidden(not count)
-            if words and count:
+            if (words or kill_filter) and count:
                 item.setExpanded(True)
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)
@@ -2014,10 +2251,6 @@ class Window(QMainWindow):
 
     def play_demo(self, name):
         self.pending_demo = name
-        # found by a player's name: that player's kills
-        item = self.demo_items.get(name)
-        self.wanted_player = (item.data(COL_PLAYER, Qt.UserRole)
-                              if item and not self.demos.isColumnHidden(COL_PLAYER) else None)
         if self.game.running():
             self.game.send("demo " + quoted(name))
         else:
@@ -2053,13 +2286,18 @@ class Window(QMainWindow):
             self.slider.setValue(time)
             self.time.setText(f"{clock(time)} / {clock(duration)}")
         only = self.state.get("only")
+        player = self.state.get("player", "")
+        kill_filter = self.kill_filter()
+        # of the kill filter, without a player
+        others = kill_filter.words(killers=False)
         if only in ("kills", "multikills"):
             mode = ("only the kills" if only == "kills" else "only the multi-kills") + (
-                " by " + self.state["player"] if self.state.get("player") else "")
+                " by " + player + others if player else " of whoever is shown" + others if kill_filter.shown
+                else kill_filter.words())
         elif only in ("shownkills", "shownmultikills"):
-            mode = ("only the kills" if only == "shownkills" else "only the multi-kills") + " of whoever is shown"
+            mode = ("only the kills" if only == "shownkills" else "only the multi-kills") + " of whoever is shown" + others
         elif only == "watched":
-            mode = "only while " + self.state.get("player", "") + " is watched"
+            mode = "only while " + (player or or_list(kill_filter.names)) + " is watched"
         else:
             mode = ""
         self.show_play_mode()
@@ -2101,23 +2339,11 @@ class Window(QMainWindow):
 
     def fill_index(self):
         index = self.index or {}
-        names = set()
+        names = {}
         for kill in index.get("kills", []):
-            names.update(n for n in (kill["killerName"], kill["victimName"]) if n)
-        current = self.player.currentData()
-        self.player.blockSignals(True)
-        self.player.clear()
-        self.player.addItem("All players", "")
-        self.player.addItem("Whoever is shown", SHOWN)
-        for name in sorted(names, key=str.lower):
-            self.player.addItem(name, name)
-        found = self.player.findData(current)
-        if self.wanted_player:
-            found = next((i for i in range(2, self.player.count())
-                          if same_player(self.player.itemData(i), self.wanted_player)), found)
-            self.wanted_player = None
-        self.player.setCurrentIndex(max(0, found))
-        self.player.blockSignals(False)
+            names.update((clean_name(n), n) for n in (kill["killerName"], kill["victimName"]) if n)
+        # for the menus of Killer and Victim
+        self.killer.players = self.victim.players = sorted(names.values(), key=str.lower)
 
         self.rounds.clear()
         ends = index.get("roundEnds", [])
@@ -2131,38 +2357,36 @@ class Window(QMainWindow):
         self.round_marks = [(start, f"Round {number}") for number, start in enumerate(starts, 1) if number > 1]
         self.fill_kills()
 
-    def player_kills(self, player):
-        """The kills to list, all of them, the player's while they're shown or
-        whoever's is shown (SHOWN), as {id(kill): (kill, from, to)} in order,
-        with when they can be played: as demoonly kills plays them. Team
-        kills too, for the clips of the kills near them."""
+    def listed_kills(self, kill_filter):
+        """The kills to list, as {id(kill): (kill, from, to)} in order, with when
+        they can be played, as demoonly kills plays them: those of the
+        filter's killers, or whoever's is shown, while they're shown, else
+        anyone's. Team kills too, for the clips of the kills near them; the
+        filter's victims and weapons aren't looked at."""
         index = self.index or {}
-        if not player:
+        if not kill_filter.by_shown():
             return {id(k): (k, 0, index.get("duration", 0) + KILL_AFTER) for k in index.get("kills", [])}
         return {id(k): (k, start, end) for k, start, end in shown_kills(index)
-                if player == SHOWN or same_player(player, k["killerName"])}
+                if kill_filter.has_killer(clean_name(k["killerName"]))}
 
-    def kill_commands(self):
-        """The commands to the next and previous kills listed: anyone's, the
-        player's while shown or whoever's is shown."""
-        player = self.player.currentData() or ""
-        if player == SHOWN:
-            return "demonextshownkill", "demoprevshownkill"
-        by = " " + quoted(player) if player else ""
-        return "demonextkill" + by, "demoprevkill" + by
+    def kill_commands(self, command):
+        """To the next or previous kill listed (demonextkill or demoprevkill),
+        telling the game the kill filter first, which it may not have yet."""
+        return [*self.kill_filter().commands(), command]
 
     def switches(self):
         """When the player shown changes: the kills of a player or of whoever
         is shown aren't joined across it, all the kills are."""
-        return [w["time"] for w in (self.index or {}).get("watched", [])] if self.player.currentData() else []
+        return [w["time"] for w in (self.index or {}).get("watched", [])] if self.kill_filter().by_shown() else []
 
     def fill_kills(self):
-        """The kills listed, each item with when it starts and its clips: the
-        stretches demoonly plays. Team kills aren't kills: they're only in
-        the clips of a kill of their killer near them, as demoonly plays.
-        Nor are the deaths of the player shown."""
-        player = self.player.currentData() or ""
-        kills = list(self.player_kills(player).values())
+        """The kills the filter keeps, listed, each item with when it starts
+        and its clips: the stretches demoonly plays. Team kills aren't kills:
+        they're only in the clips of a kill of their killer near them, as
+        demoonly plays. Nor are the deaths of the player shown. The game is
+        told the filter, for the kill keys and demoonly."""
+        kill_filter = self.kill_filter()
+        kills = list(self.listed_kills(kill_filter).values())
         kb, ka = self.get_kill_times()
         spans = {id(kill): kill_span(self.index or {}, kill, start, end, kb, ka) for kill, start, end in kills}
         switches = self.switches()
@@ -2172,24 +2396,30 @@ class Window(QMainWindow):
         self.kills.clear()
         self.kill_marks = []
         for kill, _, _ in kills:
-            if kill.get("teamKill") or is_grenade(kill) or id(kill) in deaths:
+            if kill.get("teamKill") or is_grenade(kill) or id(kill) in deaths or not kill_filter.keeps(kill, killer=False):
                 continue
             killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
             span = spans[id(kill)]
             clips = stretches([span] + [spans[id(k)] for k, _, _ in team_kills_with(kills, [kill])], switches)
-            item = QTreeWidgetItem([clock(kill["time"]), killer, victim])
-            for column in range(3):
+            item = QTreeWidgetItem([clock(kill["time"]), killer, victim, WEAPONS[weapon_of(kill)]])
+            for column in range(4):
                 item.setToolTip(column, plain_tip(how))
             item.setData(0, Qt.UserRole, span[0])
             item.setData(1, Qt.UserRole, clips)
             item.setData(2, Qt.UserRole, [place[id(kill)]])
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
-        self.tabs.setTabText(0, f"Kills ({self.kills.topLevelItemCount()})")
+        # of all those of the demo, when some are left out
+        listed = self.kills.topLevelItemCount()
+        if kill_filter:
+            every = sum(1 for kill in (self.index or {}).get("kills", [])
+                        if not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths)
+            self.tabs.setTabText(0, f"Kills ({listed} of {every})")
+        else:
+            self.tabs.setTabText(0, f"Kills ({listed})")
         self.tabs.setTabText(1, f"Rounds ({self.rounds.topLevelItemCount()})")
-        # Up and Down too
-        next_kill, prev_kill = self.kill_commands()
-        self.game.send("bind UPARROW " + next_kill, "bind DOWNARROW " + prev_kill)
+        # for Up and Down too
+        self.game.send(*kill_filter.commands())
         self.tab_changed()
 
     def tab_changed(self):
@@ -2216,57 +2446,60 @@ class Window(QMainWindow):
         if not item:
             QMessageBox.information(self, "Only these kills", "There are no kills to play.")
             return False
-        player = self.player.currentData() or ""
-        if player == SHOWN:
-            only = "demoonly shownkills"
-        else:
-            only = "demoonly kills" + (" " + quoted(player) if player else "")
-        self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)), only)
+        self.game.send(*self.kill_filter().commands(), "demoseek " + seconds(item.data(0, Qt.UserRole)),
+                       "demoonly kills")
         return True
 
     def only_watched(self):
-        """Plays while the player is watched, from the first time; False if
-        they aren't."""
-        player = self.player.currentData()
-        if not player or player == SHOWN:
-            QMessageBox.information(self, "Only while watched", "Choose a player first.")
+        """Plays while one of the filter's killers is watched, from the first
+        time; False if none is."""
+        kill_filter = self.kill_filter()
+        if not kill_filter.killers:
+            QMessageBox.information(self, "Only while watched", "Type a killer first.")
             return False
         watched = (self.index or {}).get("watched", [])
-        start = next((w["time"] for w in watched if same_player(w["name"], player)), None)
+        start = next((w["time"] for w in watched if kill_filter.has_killer(clean_name(w["name"]))), None)
         if start is None:
-            QMessageBox.information(self, "Only while watched", player + " isn't watched in this demo.")
+            QMessageBox.information(self, "Only while watched", or_list(kill_filter.names) + " isn't watched in this demo.")
             return False
-        self.game.send("demoseek " + seconds(start), "demoonly watched " + quoted(player))
+        self.game.send(*kill_filter.commands(), "demoseek " + seconds(start), "demoonly watched")
         return True
 
     # recording
 
+    def kill_texts(self, kill_filter):
+        """What Record… calls the filter's kills, the recorder's and those of
+        whoever is shown: {key: (one, several, after the count)}."""
+        others = kill_filter.words(killers=False)
+        shown = (SHOWN_KILLS[0] + others, SHOWN_KILLS[1] + others, SHOWN_WHO)
+        return {"kills": shown if kill_filter.shown else ("kill" + kill_filter.words(), "kills" + kill_filter.words(), ""),
+                "recorderkills": (RECORDER_KILLS[0] + others, RECORDER_KILLS[1] + others, ""), "shownkills": shown}
+
     def record(self):
-        """Record…: a stretch of the demo playing, its kills (by the player
-        chosen), those of whoever is shown, or while a player is watched."""
+        """Record…: a stretch of the demo playing, the kills of the filter,
+        those of the recorder or of whoever is shown with its victims and
+        weapons, or while one of its killers is watched."""
         demo = self.state.get("demo")
         if not demo:
             QMessageBox.information(self, "Record a video", "Play a demo first.")
             return
-        player = self.player.currentData() or ""
+        kill_filter = self.kill_filter()
         index = self.index or {}
         recorder = (index.get("recorder") or {}).get("name", "")
-        keys = ["kills", "shownkills", "watched"]
-        # whoever is shown in the Player menu: their kills are the frags shown
-        if player == SHOWN:
-            player, keys = "", keys[1:]
-        elif recorder and not same_player(player, recorder):
-            keys = ["kills", "recorderkills", "shownkills", "watched"]
-        by = " by " + player if player else ""
-        texts = {"kills": ("kill" + by, "kills" + by), "recorderkills": RECORDER_KILLS, "shownkills": SHOWN_KILLS}
-        # whose each choice plays
-        whose = {key: recorder if key in RECORDER_ONLY else "" if key.startswith("shown") else player for key in keys}
+        keys = ["kills", "recorderkills", "shownkills", "watched"]
+        # not twice the same kills
+        if kill_filter.shown:
+            keys.remove("shownkills")
+        if not recorder or kill_filter.killers and all(part in clean_name(recorder) for part in kill_filter.killers):
+            keys.remove("recorderkills")
+        texts = self.kill_texts(kill_filter)
+        # whose kills each choice plays instead of the filter's killers
+        whose = {"recorderkills": recorder}
 
         def plans_for(before, after):
             """{key: (count, spans)} with that lead-in and out."""
-            return {key: (demoonly_plan(index, key, player) if player else (0, [])) if key == "watched"
-                    else demoonly_plan(index, RECORDER_ONLY.get(key, key), whose[key], before, after)
-                    for key in keys}
+            return {key: (0, []) if key == "watched" and not kill_filter.killers
+                    else demoonly_plan(index, ONLY[key], whose.get(key, ""), before, after, kill_filter) for key in keys}
 
         def choices(plans):
             listed = []
@@ -2276,22 +2509,25 @@ class Window(QMainWindow):
             return listed
 
         plans = plans_for(*self.get_rec_kill_times())
-        labels = {key: the(plans[key][0], *texts[key]) + (SHOWN_WHO if key == "shownkills" else "")
-                  for key in keys if key != "watched"}
-        labels["watched"] = f"While {player} is watched" if player else "While a player is watched"
+        labels = {key: the(plans[key][0], *texts[key][:2]) + texts[key][2] for key in keys if key != "watched"}
+        labels["watched"] = (f"While {or_list(kill_filter.names)} is watched" if kill_filter.killers
+                             else "While a player is watched")
         dialog = RecordDialog(self.settings, choices(plans), self.state.get("time", 0), parent=self,
                               relabel=lambda before, after: choices(plans_for(before, after)))
         if not dialog.exec():
             return
         what = dialog.what()
+        # who's in the video's name
+        player = ", ".join(kill_filter.names)
         if what == "range":
             start, end = dialog.times()
             label = f"{demo}, {clock(start)} to {clock(end)}"
             clip = range_clip(demo, start, end)
         else:
             label = demo + ", " + labels[what][0].lower() + labels[what][1:]
-            player = whose[what]
-            clip = only_clip(demo, RECORDER_ONLY.get(what, what), player, plans_for(*dialog.kill_times())[what][1])
+            player = whose.get(what, "" if what == "shownkills" else player)
+            clip = only_clip(demo, ONLY[what], whose.get(what, ""), plans_for(*dialog.kill_times())[what][1],
+                             kill_filter)
         self.add_job(dialog.job(label, [clip], demo, player))
 
     def record_selected(self, tree):
@@ -2303,10 +2539,10 @@ class Window(QMainWindow):
             return
         one = "kill"
         kind = f"{len(items)} {one}s" if len(items) > 1 else one
-        player = self.player.currentData() or ""
-        # whoever is shown too: their kills only while they're shown
-        kills = self.player_kills(player)
-        player = "" if player == SHOWN else player
+        kill_filter = self.kill_filter()
+        # those of a killer, or of whoever is shown, only while they're shown
+        kills = self.listed_kills(kill_filter)
+        player = ", ".join(kill_filter.names)
         index = self.index or {}
         chains = [[index["kills"][i] for i in item.data(2, Qt.UserRole)] for item in items]
 
@@ -2334,22 +2570,20 @@ class Window(QMainWindow):
                 self.add_job(dialog.job(f"{demo}, {clock(clip['start'])} to {clock(clip['end'])}", [clip], demo, player))
 
     def record_demos(self):
-        """The demos selected, all of them, the kills of the player found by
-        the filter, or those of whoever is shown, in one video or one each."""
+        """The demos selected, all of them, or the kills of the filter, of
+        their recorder or of whoever is shown, with its victims and weapons,
+        in one video or one each."""
         names = self.demos_of(self.demos.selectedItems())
         if not names:
             QMessageBox.information(self, "Record a video", "Select demos first.")
             return
-        # the player found in each demo, the one with the most kills
-        found = {}
-        if not self.demos.isColumnHidden(COL_PLAYER):
-            found = {name: self.demo_items[name].data(COL_PLAYER, Qt.UserRole) for name in names}
-        player = next((p for p in found.values() if p), "")
-
+        kill_filter = self.kill_filter()
         indexes = {name: self.library.index(name) for name in names}
-        # whose kills each choice plays in each demo
+        # whose kills each choice plays in each demo instead of the filter's
         recorders = {name: (index.get("recorder") or {}).get("name", "") for name, index in indexes.items() if index}
-        keys = ("kills", "recorderkills", "shownkills", "everything")
+        # not twice the same kills
+        keys = [key for key in ("kills", "recorderkills", "shownkills", "everything")
+                if key != "shownkills" or not kill_filter.shown]
 
         def plans_for(before, after):
             """What each choice records of each demo with that lead-in and
@@ -2363,34 +2597,30 @@ class Window(QMainWindow):
                         if key == "everything":
                             plans[key][name] = (0, None)
                         continue
-                    if key in RECORDER_ONLY:
-                        plan = (demoonly_plan(index, RECORDER_ONLY[key], recorders[name], before, after)
+                    if key == "recorderkills":
+                        plan = (demoonly_plan(index, "kills", recorders[name], before, after, kill_filter)
                                 if recorders[name] else (0, []))
                     else:
-                        plan = demoonly_plan(index, "" if key == "everything" else key,
-                                             found.get(name) or "" if key == "kills" else "",
-                                             before, after)
+                        plan = demoonly_plan(index, "" if key == "everything" else key, "", before, after, kill_filter)
                     if plan[0] or key == "everything":
                         plans[key][name] = plan
             return plans
+
+        texts = self.kill_texts(kill_filter)
 
         def choices(plans):
             def text(key, label):
                 """label, in how many demos, how long."""
                 spans = [plan[1] for plan in plans[key].values()]
-                if len(names) > 1 and key != "everything":
+                if len(spans) < len(names) and len(names) > 1 and key != "everything":
                     label += f", in {len(spans)} of the {len(names)} demos"
                 if spans and None not in spans:
                     label += ", " + about(sum(length(s) for s in spans))
                 return key, label, bool(spans)
             count = {key: sum(plan[0] for plan in plans[key].values()) for key in plans}
-            by = " by " + player if player else ""
-            return [
-                text("kills", the(count["kills"], "kill" + by, "kills" + by)),
-                text("recorderkills", the(count["recorderkills"], *RECORDER_KILLS)),
-                text("shownkills", the(count["shownkills"], *SHOWN_KILLS) + SHOWN_WHO),
-                text("everything", "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos"),
-            ]
+            return [text(key, the(count[key], *texts[key][:2]) + texts[key][2]) if key != "everything" else
+                    text(key, "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos")
+                    for key in keys]
 
         dialog = RecordDialog(self.settings, choices(plans_for(*self.get_rec_kill_times())), join=len(names) > 1,
                               parent=self, relabel=lambda before, after: choices(plans_for(before, after)))
@@ -2399,24 +2629,22 @@ class Window(QMainWindow):
         what = dialog.what()
         plans = plans_for(*dialog.kill_times())
         chosen = list(plans[what])
-        whose = player + "'s" if player else "all the"
-        kind = {"kills": f"{whose} kills", "recorderkills": "recorder frags", "shownkills": SHOWN_KILLS[1],
-                "everything": ""}[what]
-        # no player for whoever is shown
-        if what.startswith("shown"):
-            found, player = {}, ""
-        elif what in RECORDER_ONLY:
-            found = recorders
-            player = found.get(chosen[0], "") if len(chosen) == 1 else ""
-        only = "" if what == "everything" else RECORDER_ONLY.get(what, what)
-        clips = [only_clip(name, only, found.get(name) or "", plans[what][name][1]) for name in chosen]
+        kind = {"kills": SHOWN_KILLS[1] if kill_filter.shown else "kills" + kill_filter.words(),
+                "recorderkills": RECORDER_KILLS[1], "shownkills": SHOWN_KILLS[1], "everything": ""}[what]
+        # who's in the videos' names, and whose kills play in each demo
+        player = "" if what in ("shownkills", "everything") or kill_filter.shown else ", ".join(kill_filter.names)
+        whose = recorders if what == "recorderkills" else {}
+        if what == "recorderkills":
+            player = whose.get(chosen[0], "") if len(chosen) == 1 else ""
+        only = "" if what == "everything" else ONLY[what]
+        clips = [only_clip(name, only, whose.get(name) or "", plans[what][name][1], kill_filter) for name in chosen]
         if dialog.join.isChecked() or len(clips) == 1:
             demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
             self.add_job(dialog.job(demo + (f", {kind}" if kind else ""), clips, demo, player))
         else:
             for name, clip in zip(chosen, clips):
                 label = name + (f", {kind}" if kind else "")
-                self.add_job(dialog.job(label, [clip], name, found.get(name) or player))
+                self.add_job(dialog.job(label, [clip], name, whose.get(name) or player))
 
     def add_job(self, job):
         """Records it after the ones before it."""

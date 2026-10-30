@@ -6,7 +6,8 @@ writes demostate.json and demoindex.json like the game (cl_demoFiles 1).
 Demos are JSON files with a .dm3 extension holding the index the game would
 make (duration, kills, rounds…). Every command read is appended to
 main/commands.log in its home folder, and demovideo writes
-main/videos/<name>.mp4 holding what would have been recorded, as JSON.
+main/videos/<name>.mp4 holding what would have been recorded, as JSON,
+with what demoonly plays and demofilter keeps.
 
 Run as mohdemoindex (a link with that name), it is the indexing tool:
 mohdemoindex <output folder> <demo>..., and as ffmpeg, it joins videos as
@@ -87,8 +88,13 @@ class FakeGame:
         self.timescale = 1.0
         self.carry = 0.0  # msec not yet added to the time
         self.video = None
+        self.filter = self.clear_filter()
         self.pipe = None
         self.buffer = b""
+
+    @staticmethod
+    def clear_filter():
+        return {"shown": False, "killers": [], "victims": [], "weapons": []}
 
     def open_pipe(self):
         path = os.path.join(self.main, self.cvars["com_pipefile"])
@@ -144,13 +150,27 @@ class FakeGame:
         elif name == "demoonly":
             only, _, player = rest.partition(" ")
             state["only"], state["player"] = only, player.strip('"')
+        elif name == "demofilter":
+            what, _, arg = rest.partition(" ")
+            if what == "clear":
+                self.filter = self.clear_filter()
+            elif what == "shown":
+                self.filter.update(shown=True, killers=[])
+            elif what == "killer":
+                self.filter["shown"] = False
+                self.filter["killers"].append(arg.strip('"'))
+            elif what == "victim":
+                self.filter["victims"].append(arg.strip('"'))
+            elif what == "weapon":
+                self.filter["weapons"] += arg.split()
         elif name == "timescale":
             self.timescale = float(arg)
         elif name == "demovideo" and state["demo"] and not self.video:
             parts = rest.split()
             self.video = {"name": parts[0], "start": state["time"],
                           "end": parse_time(parts[1]) if len(parts) > 1 else None,
-                          "only": state["only"], "player": state["player"], "cvars": self.cvars}
+                          "only": state["only"], "player": state["player"],
+                          "filter": json.loads(json.dumps(self.filter)), "cvars": self.cvars}
             state["recording"] = parts[0]
         elif name == "stopvideo":
             self.finish_video()
