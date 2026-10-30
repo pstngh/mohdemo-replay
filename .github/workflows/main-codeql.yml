@@ -53,12 +53,28 @@ jobs:
         packages: libpulse-dev portaudio19-dev libasound2-dev libjack-dev libpipewire-0.3-dev qtbase5-dev libdbus-1-dev
         version: "0.1"
 
-    # Setup SDL
+    # Setup SDL, with the packages SDL 3 needs to build (X11, Wayland...)
     - name: Set up SDL
       id: sdl
       uses: libsdl-org/setup-sdl@main
       with:
         version: 3.4.18
+        install-linux-dependencies: true
+
+    # The Vulkan headers the renderer builds with, as the Linux builds
+    - name: Checkout Vulkan-Headers
+      uses: actions/checkout@v4
+      with:
+        repository: 'KhronosGroup/Vulkan-Headers'
+        path: 'vulkan-headers-src'
+        ref: 'v1.4.341'
+
+    - name: Install Vulkan-Headers
+      run: |
+        cmake -S vulkan-headers-src -B "$RUNNER_TEMP/vulkan-headers-build" -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/vulkan-headers"
+        cmake --install "$RUNNER_TEMP/vulkan-headers-build"
+        rm -rf vulkan-headers-src
+        echo "CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH:+$CMAKE_PREFIX_PATH:}$RUNNER_TEMP/vulkan-headers" >> "$GITHUB_ENV"
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
