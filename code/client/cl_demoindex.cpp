@@ -601,12 +601,29 @@ static demoWeapon_t DI_Weapon(const char *text, const char *afterVictim, const c
 DemoIndex_WeaponName
 ===============
 */
+static const char *diWeaponNames[DEMOWEAPON_COUNT] = {
+    "", "pistol", "rifle", "sniper", "smg", "mg", "shotgun", "rocket", "grenade", "melee", "other"};
+
 const char *DemoIndex_WeaponName(demoWeapon_t weapon)
 {
-    static const char *names[DEMOWEAPON_COUNT] = {
-        "", "pistol", "rifle", "sniper", "smg", "mg", "shotgun", "rocket", "grenade", "melee", "other"};
+    return weapon >= 0 && weapon < DEMOWEAPON_COUNT ? diWeaponNames[weapon] : "";
+}
 
-    return weapon >= 0 && weapon < DEMOWEAPON_COUNT ? names[weapon] : "";
+/*
+===============
+DemoIndex_WeaponNamed
+===============
+*/
+demoWeapon_t DemoIndex_WeaponNamed(const char *name)
+{
+    int i;
+
+    for (i = DEMOWEAPON_UNKNOWN + 1; i < DEMOWEAPON_COUNT; i++) {
+        if (!Q_stricmp(name, diWeaponNames[i])) {
+            return (demoWeapon_t)i;
+        }
+    }
+    return DEMOWEAPON_COUNT;
 }
 
 /*

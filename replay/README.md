@@ -104,14 +104,15 @@ binds, without the app:
 | `demoseek <time>` | jump to a time (seconds or minutes:seconds), alone prints the time |
 | `demoskip <time>` | move forward, or back with a negative time |
 | `demopause [0\|1]` | pause or play, toggles without an argument |
-| `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill, by that player while shown if given |
+| `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill of `demofilter`, by that player while shown if given |
 | `demonextshownkill`, `demoprevshownkill` | jump to before the next or previous kill of whoever is shown |
 | `demonextround`, `demoprevround` | jump to the next or previous round |
-| `demoonly kills [player]` | play only the kills, by that player while shown if given |
+| `demofilter [clear \| shown \| killer <name> \| victim <name> \| weapon <weapon>...]` | the kills the kill commands go to: by players whose names have one of the killers in them, while shown, or by whoever is shown, of players whose names have one of the victims, made with one of the weapons (`pistol`, `rifle`, `sniper`, `smg`, `mg`, `shotgun`, `rocket`, `melee`, `other`); each adds, but `clear`; alone, it prints them. A player given to a command is the killer instead, the victims and weapons still apply |
+| `demoonly kills [player]` | play only the kills of `demofilter`, by that player while shown if given |
 | `demoonly multikills [player]` | play only the multi-kills, by that player while shown if given |
 | `demoonly shownkills` | play only the kills of whoever is shown (the recorder playing, or the player they follow), while they're shown |
 | `demoonly shownmultikills` | the same, of the multi-kills |
-| `demoonly watched <player>` | play only while that player is shown |
+| `demoonly watched [player]` | play only while that player is shown, or one of `demofilter`'s killers |
 | `demoonly` | play everything again |
 | `timescale <speed>` | playback speed, 1 is normal |
 | `demovideo <name> [end time]` | record into an MP4, see below |

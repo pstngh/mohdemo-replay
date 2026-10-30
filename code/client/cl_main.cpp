@@ -726,6 +726,24 @@ typedef enum {
 static demoOnly_t	cl_demoOnly;
 static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
 
+// the kills demoonly and the kill jumps go to without a player given, set by
+// demofilter and kept from one demo to the next: by players whose names
+// have one of killers in them, or by whoever is shown, of players whose
+// names have one of victims, made with one of weapons; anyone's, with
+// anything, when empty
+#define DEMOFILTER_NAMES	16
+
+typedef struct {
+	qboolean	shown;
+	int			numKillers;
+	char		killers[DEMOFILTER_NAMES][MAX_NAME_LENGTH];
+	int			numVictims;
+	char		victims[DEMOFILTER_NAMES][MAX_NAME_LENGTH];
+	int			weapons;	// 1 << demoWeapon_t of each, 0 for any
+} demoFilter_t;
+
+static demoFilter_t	cl_demoFilter;
+
 // msec at most between a team kill and a kill of its killer that plays, for
 // the team kill to play too: a teammate hit while shooting at an enemy
 #define DEMO_TEAMKILL_NEAR	2000
@@ -1113,6 +1131,85 @@ static qboolean CL_DemoPlayerIs( const char *playerName, const char *player ) {
 
 /*
 ====================
+CL_DemoNameHas
+
+Whether a player's name has part in it, without colors, case and extra
+spaces, as the replay app's search takes it
+====================
+*/
+static qboolean CL_DemoNameHas( const char *playerName, const char *part ) {
+	char	a[MAX_NAME_LENGTH];
+	char	b[MAX_NAME_LENGTH];
+
+	Q_strncpyz( a, playerName, sizeof( a ) );
+	Q_strncpyz( b, part, sizeof( b ) );
+	return Q_stristr( CL_DemoCleanName( a ), CL_DemoCleanName( b ) ) != NULL;
+}
+
+/*
+====================
+CL_DemoNamesHave
+
+Whether a player's name has one of the parts in it
+====================
+*/
+static qboolean CL_DemoNamesHave( const char *playerName, char parts[][MAX_NAME_LENGTH], int numParts ) {
+	int		i;
+
+	for ( i = 0; i < numParts; i++ ) {
+		if ( CL_DemoNameHas( playerName, parts[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+====================
+CL_DemoKillersShown
+
+Whether the kills gone to are only those made while their killer is shown:
+those of a player, given or the filter's, and those of whoever is shown
+====================
+*/
+static qboolean CL_DemoKillersShown( const char *player, qboolean shown ) {
+	return player[0] || shown || cl_demoFilter.shown || cl_demoFilter.numKillers;
+}
+
+/*
+====================
+CL_DemoKillerIs
+
+Whether the killer of kill event ev is one gone to: the player given, else
+whoever is shown, else the filter's
+====================
+*/
+static qboolean CL_DemoKillerIs( const demoEvent_t *ev, const char *player, qboolean shown ) {
+	if ( player[0] ) {
+		return CL_DemoPlayerIs( ev->name, player );
+	}
+	if ( shown || cl_demoFilter.shown || !cl_demoFilter.numKillers ) {
+		return qtrue;
+	}
+	return CL_DemoNamesHave( ev->name, cl_demoFilter.killers, cl_demoFilter.numKillers );
+}
+
+/*
+====================
+CL_DemoFilterPasses
+
+Whether kill event ev has one of the filter's victims and weapons
+====================
+*/
+static qboolean CL_DemoFilterPasses( const demoEvent_t *ev ) {
+	if ( cl_demoFilter.weapons && !( cl_demoFilter.weapons & ( 1 << ev->weapon ) ) ) {
+		return qfalse;
+	}
+	return !cl_demoFilter.numVictims || CL_DemoNamesHave( ev->otherName, cl_demoFilter.victims, cl_demoFilter.numVictims );
+}
+
+/*
+====================
 CL_DemoKillBefore
 ====================
 */
@@ -1342,14 +1439,16 @@ static qboolean CL_DemoTeamKillPlays( int i ) {
 ====================
 CL_DemoKillStretch
 
-The stretch around kill event i that demoonly plays, if any
+The stretch around kill event i that demoonly plays, if any: of the player
+given, or of whoever is shown, else of the filter's killers, of its victims
+and weapons
 ====================
 */
 static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
-	qboolean			player = cl_demoOnlyPlayer[0] != 0;
 	qboolean			multi = cl_demoOnly == DEMOONLY_MULTIKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
-	qboolean			shown = player || cl_demoOnly == DEMOONLY_SHOWNKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
+	qboolean			whoever = cl_demoOnly == DEMOONLY_SHOWNKILLS || cl_demoOnly == DEMOONLY_SHOWNMULTIKILLS;
+	qboolean			shown = CL_DemoKillersShown( cl_demoOnlyPlayer, whoever );
 	int					from, to;
 
 	if ( ev->type != DEMOEVENT_KILL || ev->grenade ) {
@@ -1359,7 +1458,7 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 		if ( !CL_DemoTeamKillPlays( i ) ) {
 			return qfalse;
 		}
-	} else if ( !CL_DemoIsKill( i ) || ( player && !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) )
+	} else if ( !CL_DemoIsKill( i ) || !CL_DemoKillerIs( ev, cl_demoOnlyPlayer, whoever ) || !CL_DemoFilterPasses( ev )
 		|| ( multi && !CL_DemoInMultiKill( i, shown ) ) ) {
 		return qfalse;
 	}
@@ -1396,7 +1495,9 @@ static qboolean CL_DemoStretch( int i, int *start, int *end ) {
 		return CL_DemoKillStretch( i, start, end );
 
 	case DEMOONLY_WATCHED:
-		if ( ev->type != DEMOEVENT_WATCH || !CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer ) ) {
+		// the player given, else the filter's killers
+		if ( ev->type != DEMOEVENT_WATCH || !( cl_demoOnlyPlayer[0] ? CL_DemoPlayerIs( ev->name, cl_demoOnlyPlayer )
+			: CL_DemoNamesHave( ev->name, cl_demoFilter.killers, cl_demoFilter.numKillers ) ) ) {
 			return qfalse;
 		}
 		*start = ev->time;
@@ -1432,7 +1533,7 @@ static qboolean CL_DemoJoins( int i, int end, int start ) {
 	if ( start > end + 1000 ) {
 		return qfalse;
 	}
-	if ( ( cl_demoOnly == DEMOONLY_KILLS || cl_demoOnly == DEMOONLY_MULTIKILLS ) && !cl_demoOnlyPlayer[0] ) {
+	if ( ( cl_demoOnly == DEMOONLY_KILLS || cl_demoOnly == DEMOONLY_MULTIKILLS ) && !CL_DemoKillersShown( cl_demoOnlyPlayer, qfalse ) ) {
 		return qtrue;
 	}
 
@@ -1517,7 +1618,10 @@ static void CL_RunDemoOnly( void ) {
 ====================
 CL_DemoOnly_f
 
-demoonly [kills [player] | multikills [player] | shownkills | shownmultikills | watched <player>]
+demoonly [kills [player] | multikills [player] | shownkills | shownmultikills | watched [player]]
+
+Without a player, kills are demofilter's, and watched is while one of its
+killers is
 ====================
 */
 static void CL_DemoOnly_f( void ) {
@@ -1543,10 +1647,10 @@ static void CL_DemoOnly_f( void ) {
 		only = DEMOONLY_SHOWNKILLS;
 	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "shownmultikills" ) && !player[0] ) {
 		only = DEMOONLY_SHOWNMULTIKILLS;
-	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "watched" ) && player[0] ) {
+	} else if ( !Q_stricmp( Cmd_Argv( 1 ), "watched" ) && ( player[0] || cl_demoFilter.numKillers ) ) {
 		only = DEMOONLY_WATCHED;
 	} else {
-		Com_Printf( "demoonly [kills [player] | multikills [player] | shownkills | shownmultikills | watched <player>]: play only the kills, the multi-kills, the kills or multi-kills of whoever is shown, or while a player is watched, all without arguments\n" );
+		Com_Printf( "demoonly [kills [player] | multikills [player] | shownkills | shownmultikills | watched [player]]: play only the kills, the multi-kills, the kills or multi-kills of whoever is shown, or while a player is watched, all without arguments; without a player, the kills demofilter keeps, and while one of its killers is watched\n" );
 		return;
 	}
 
@@ -1564,7 +1668,7 @@ static void CL_DemoOnly_f( void ) {
 	} else if ( only == DEMOONLY_SHOWNKILLS || only == DEMOONLY_SHOWNMULTIKILLS ) {
 		Com_Printf( "Playing only the %s of whoever is shown\n", only == DEMOONLY_SHOWNKILLS ? "kills" : "multi-kills" );
 	} else {
-		Com_Printf( "Playing only while %s is watched\n", player );
+		Com_Printf( "Playing only while %s is watched\n", player[0] ? player : "a killer of demofilter's" );
 	}
 }
 
@@ -1574,7 +1678,8 @@ CL_DemoJumpToKill
 
 To the start of the next kill, or of the previous one, or of this one if
 more than a second in, by the player given as argument if any, or by
-whoever is shown if shown is set
+whoever is shown if shown is set, else by the filter's killers, of its
+victims and weapons
 ====================
 */
 static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
@@ -1596,13 +1701,13 @@ static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
 	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
 		ev = &cl_demoIndex.events[i];
 		// team kills, grenade kills and the deaths of the player shown aren't kills to go to
-		if ( !CL_DemoIsKill( i ) || ( player[0] && !CL_DemoPlayerIs( ev->name, player ) ) ) {
+		if ( !CL_DemoIsKill( i ) || !CL_DemoKillerIs( ev, player, shown ) || !CL_DemoFilterPasses( ev ) ) {
 			continue;
 		}
 
 		target = Q_max( CL_DemoMapTimeFor( i ), ev->time - CL_DemoKillBefore() );
 		// a player's kills, or whoever's is shown, only while they're the one shown
-		if ( player[0] || shown ) {
+		if ( CL_DemoKillersShown( player, shown ) ) {
 			if ( !CL_DemoKillShown( i, &from, &to ) ) {
 				continue;
 			}
@@ -1639,6 +1744,97 @@ static void CL_DemoNextShownKill_f( void ) {
 
 static void CL_DemoPrevShownKill_f( void ) {
 	CL_DemoJumpToKill( qfalse, qtrue );
+}
+
+/*
+====================
+CL_DemoAddFilterName
+====================
+*/
+static void CL_DemoAddFilterName( char names[][MAX_NAME_LENGTH], int *numNames, const char *name ) {
+	if ( *numNames == DEMOFILTER_NAMES ) {
+		Com_Printf( "demofilter takes %d names of each at most\n", DEMOFILTER_NAMES );
+		return;
+	}
+	Q_strncpyz( names[( *numNames )++], name, MAX_NAME_LENGTH );
+}
+
+/*
+====================
+CL_DemoPrintFilterNames
+====================
+*/
+static void CL_DemoPrintFilterNames( const char *what, char names[][MAX_NAME_LENGTH], int numNames ) {
+	int		i;
+
+	Com_Printf( "%s ", what );
+	for ( i = 0; i < numNames; i++ ) {
+		Com_Printf( "%s\"%s\"", i ? ", " : "", names[i] );
+	}
+	Com_Printf( numNames ? "\n" : "anyone\n" );
+}
+
+/*
+====================
+CL_DemoFilter_f
+
+demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>...]
+
+Which kills demoonly kills, demonextkill and demoprevkill go to without a
+player given: by players whose names have one of the killers in them, while
+they're shown, or by whoever is shown, of players whose names have one of
+the victims, with one of the weapons. Each adds to it, but clear; without
+arguments, it tells what it is.
+====================
+*/
+static void CL_DemoFilter_f( void ) {
+	const char		*what = Cmd_Argv( 1 );
+	demoWeapon_t	weapon;
+	int				weapons;
+	int				i;
+
+	if ( Cmd_Argc() == 1 ) {
+		if ( cl_demoFilter.shown ) {
+			Com_Printf( "Killers: whoever is shown\n" );
+		} else {
+			CL_DemoPrintFilterNames( "Killers:", cl_demoFilter.killers, cl_demoFilter.numKillers );
+		}
+		CL_DemoPrintFilterNames( "Victims:", cl_demoFilter.victims, cl_demoFilter.numVictims );
+		Com_Printf( "Weapons:" );
+		for ( i = 1; i < DEMOWEAPON_COUNT; i++ ) {
+			if ( cl_demoFilter.weapons & ( 1 << i ) ) {
+				Com_Printf( " %s", DemoIndex_WeaponName( (demoWeapon_t)i ) );
+			}
+		}
+		Com_Printf( cl_demoFilter.weapons ? "\n" : " any\n" );
+		return;
+	}
+
+	if ( !Q_stricmp( what, "clear" ) && Cmd_Argc() == 2 ) {
+		memset( &cl_demoFilter, 0, sizeof( cl_demoFilter ) );
+	} else if ( !Q_stricmp( what, "shown" ) && Cmd_Argc() == 2 ) {
+		cl_demoFilter.shown = qtrue;
+		cl_demoFilter.numKillers = 0;
+	} else if ( !Q_stricmp( what, "killer" ) && Cmd_Argc() > 2 ) {
+		cl_demoFilter.shown = qfalse;
+		CL_DemoAddFilterName( cl_demoFilter.killers, &cl_demoFilter.numKillers, Cmd_ArgsFrom( 2 ) );
+	} else if ( !Q_stricmp( what, "victim" ) && Cmd_Argc() > 2 ) {
+		CL_DemoAddFilterName( cl_demoFilter.victims, &cl_demoFilter.numVictims, Cmd_ArgsFrom( 2 ) );
+	} else if ( !Q_stricmp( what, "weapon" ) && Cmd_Argc() > 2 ) {
+		weapons = 0;
+		for ( i = 2; i < Cmd_Argc(); i++ ) {
+			weapon = DemoIndex_WeaponNamed( Cmd_Argv( i ) );
+			if ( weapon == DEMOWEAPON_COUNT ) {
+				Com_Printf( "No weapon %s: pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee or other\n", Cmd_Argv( i ) );
+				return;
+			}
+			// the messages not known with the others
+			weapons |= ( 1 << weapon ) | ( weapon == DEMOWEAPON_OTHER ? 1 << DEMOWEAPON_UNKNOWN : 0 );
+		}
+		cl_demoFilter.weapons |= weapons;
+	} else {
+		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>...]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other\n" );
+	}
 }
 
 /*
@@ -4833,6 +5029,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("demoprevkill", CL_DemoPrevKill_f);
 	Cmd_AddCommand ("demonextshownkill", CL_DemoNextShownKill_f);
 	Cmd_AddCommand ("demoprevshownkill", CL_DemoPrevShownKill_f);
+	Cmd_AddCommand ("demofilter", CL_DemoFilter_f);
 	Cmd_AddCommand ("demonextround", CL_DemoNextRound_f);
 	Cmd_AddCommand ("demoprevround", CL_DemoPrevRound_f);
 	Cmd_AddCommand ("demovideo", CL_DemoVideo_f);
@@ -4948,6 +5145,7 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("demoprevkill");
 	Cmd_RemoveCommand ("demonextshownkill");
 	Cmd_RemoveCommand ("demoprevshownkill");
+	Cmd_RemoveCommand ("demofilter");
 	Cmd_RemoveCommand ("demonextround");
 	Cmd_RemoveCommand ("demoprevround");
 	Cmd_RemoveCommand ("demovideo");

@@ -93,6 +93,9 @@ const char *DemoIndex_LevelRules(const demoEvent_t *level);
 // "pistol", "rifle", "sniper", "smg", "mg", "shotgun", "rocket", "grenade",
 // "melee", "other", or "" for a message not known
 const char *DemoIndex_WeaponName(demoWeapon_t weapon);
+// the weapon of a name DemoIndex_WeaponName gives, any case, DEMOWEAPON_COUNT
+// for none
+demoWeapon_t DemoIndex_WeaponNamed(const char *name);
 // returns the index as JSON, to free with free()
 char *DemoIndex_ToJSON(const demoIndex_t *index, const char *demoName);
 typedef struct {
