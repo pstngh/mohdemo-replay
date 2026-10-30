@@ -1044,6 +1044,9 @@ void CG_ServerRestarted(void)
     // Added in OPM
     //  Drop the tracers and impacts of the last game
     CG_ClearBulletEffects();
+    // Added in OPM
+    //  and the parts of effects still to come
+    CG_ClearPendingEffects();
     // Reset objectives
     CG_InitializeObjectives();
 }

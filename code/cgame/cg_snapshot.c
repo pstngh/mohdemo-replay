@@ -216,6 +216,12 @@ static void CG_TransitionSnapshot(qboolean differentServer)
         if (differentServer) {
             cent->interpolate = qfalse;
             cent->teleported  = qfalse;
+            // Added in OPM
+            //  The animations began in the time jumped over (a demo seek):
+            //  their commands start from where they are, instead of the
+            //  entry commands of all of them at once (the smoke of the last
+            //  shot of every gun...)
+            cent->animJump = qtrue;
         }
         CG_TransitionEntity(cent);
 

@@ -1020,6 +1020,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     const char    *szTagName;
     int            iAnimFlags;
     qboolean       bThirdPerson = qfalse;
+    qboolean       bJumped;
 
     s1 = &cent->currentState;
 
@@ -1551,7 +1552,12 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
 
     CG_UpdateEntityEmitters(s1->number, &model, cent);
 
-    if (s1->usageIndex == cent->usageIndexLast) {
+    // Added in OPM
+    //  After a jump in time, the animations are only taken where they are
+    bJumped        = cent->animJump;
+    cent->animJump = qfalse;
+
+    if (s1->usageIndex == cent->usageIndexLast && !bJumped) {
         // process the exit commands of the last animations
         for (i = 0; i < MAX_FRAMEINFOS; i++) {
             if ((cent->animLastWeight >> i) & 1) {
@@ -1564,7 +1570,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
 
     for (i = 0; i < MAX_FRAMEINFOS; i++) {
         // process the entry commands of the current anim
-        if (model.frameInfo[i].weight) {
+        if (model.frameInfo[i].weight && !bJumped) {
             if (!((cent->animLastWeight >> i) & 1) || model.frameInfo[i].index != cent->animLast[i]) {
                 CG_ProcessEntityCommands(TIKI_FRAME_ENTRY, model.frameInfo[i].index, s1->number, &model, cent);
                 if (cent->animLastTimes[i] == -1) {

@@ -438,6 +438,12 @@ void CG_AddPendingEffects()
     }
 }
 
+// Added in OPM
+void CG_ClearPendingEffects()
+{
+    sfxManager.ClearPendingEffects();
+}
+
 void ClientSpecialEffectsManager::ContinueEffectExecution(Event *ev)
 {
     Vector norm;
@@ -1193,6 +1199,22 @@ void CG_Splash(centity_t *cent)
 qboolean ClientSpecialEffectsManager::EffectsPending()
 {
     return sfxManager.m_iNumPendingEvents > 0;
+}
+
+/*
+===============
+ClearPendingEffects
+
+Added in OPM
+Drops the parts of effects waiting for their time: after a jump in time
+(a demo seek), the explosions read over the time jumped over would all
+add their smoke at once
+===============
+*/
+void ClientSpecialEffectsManager::ClearPendingEffects()
+{
+    CancelEventsOfType(EV_SFX_EffectDelay);
+    m_iNumPendingEvents = 0;
 }
 
 specialeffect_t *ClientSpecialEffectsManager::GetTestEffectPointer()

@@ -188,6 +188,7 @@ public:
 
     void             LoadEffects();
     qboolean         EffectsPending();
+    void             ClearPendingEffects(); // Added in OPM
     void             MakeEffect_Normal(int iEffect, Vector vPos, Vector vNormal);
     void             MakeEffect_Angles(int iEffect, Vector vPos, Vector vAngles);
     void             MakeEffect_Axis(int iEffect, Vector vPos, float axis[3][3]);

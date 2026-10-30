@@ -132,6 +132,8 @@ extern "C" {
         qboolean bFootOnGround_Right;
         qboolean bFootOnGround_Left;
         int      iNextLandTime;
+        // Added in OPM
+        qboolean animJump; // time jumped (a demo seek): no animation commands this frame
     } centity_t;
 
     //======================================================================
@@ -941,6 +943,7 @@ qboolean CG_LightStyleColor(int style, int realtime, vec4_t color, qboolean clam
     void CG_BodyFallSound(centity_t *ent, refEntity_t *pREnt, float volume);
     void CG_InitializeSpecialEffectsManager();
     void CG_AddPendingEffects();
+    void CG_ClearPendingEffects(); // Added in OPM
 
     //
     // cg_swipe.cpp
