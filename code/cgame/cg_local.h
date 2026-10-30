@@ -224,6 +224,8 @@ extern "C" {
         qboolean thisFrameTeleport;
         qboolean nextFrameTeleport;
         qboolean nextFrameCameraCut;
+        // Added in OPM
+        qboolean vmAnimJump; // time jumped (a demo seek): the view model's animation is picked again
 
         int frametime; // cg.time - cg.oldTime
 

@@ -173,6 +173,9 @@ void CG_SetInitialSnapshot(snapshot_t *snap)
     // Added in OPM
     //  Same as CG_TransitionSnapshot(), so the first snapshot can bob the view
     cg.snap->ps.walking = cg.snap->ps.groundEntityNum != ENTITYNUM_NONE;
+    // Added in OPM
+    //  The view model's animation is the first snapshot's, where it is
+    cg.vmAnimJump = qtrue;
 }
 
 /*

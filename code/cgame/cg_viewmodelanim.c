@@ -339,10 +339,13 @@ void CG_ViewModelAnimation(refEntity_t *pModel)
     dtiki_t    *pTiki;
     qboolean    bAnimChanged;
     qboolean    bWeaponChanged;
+    qboolean    bJumped;
+    int         iAnimElapsed;
 
     fCrossblendFrac = 0.0;
     bAnimChanged    = qfalse;
     bWeaponChanged  = qfalse; // Added in OPM
+    bJumped         = qfalse; // Added in OPM
     pTiki           = pModel->tiki;
 
     if (cgi.anim->g_iLastEquippedWeaponStat == cg.snap->ps.stats[STAT_EQUIPPED_WEAPON]
@@ -370,6 +373,19 @@ void CG_ViewModelAnimation(refEntity_t *pModel)
         cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].time   = 0.0;
         cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].weight = 1.0;
         cgi.anim->g_iLastVMAnim                                        = 0;
+    }
+
+    // Added in OPM
+    //  After a jump in time (a demo seek) the animation is the snapshot's,
+    //  even if its counter (2 bits) is the one from before, and nothing is
+    //  blended from the one before (as for a new weapon)
+    if (cg.vmAnimJump) {
+        cg.vmAnimJump                  = qfalse;
+        bJumped                        = qtrue;
+        bAnimChanged                   = qtrue;
+        bWeaponChanged                 = qtrue;
+        cgi.anim->g_iLastVMAnim        = cg.snap->ps.iViewModelAnim;
+        cgi.anim->g_iLastVMAnimChanged = cg.snap->ps.iViewModelAnimChanged;
     }
 
     if (cg.snap->ps.iViewModelAnimChanged != cgi.anim->g_iLastVMAnimChanged) {
@@ -460,9 +476,20 @@ void CG_ViewModelAnimation(refEntity_t *pModel)
             cgi.DPrintf("Warning: Couldn't find view model animation %s\n", szAnimName);
         }
 
-        cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].time   = 0.0;
+        // Added in OPM
+        //  Where the animation is, from when it began, less this frame's time
+        //  that's added below: a frame in as before when it just began, and
+        //  where it is after a demo seek landed in the middle of it (whose
+        //  frame is a second long or more)
+        iAnimElapsed = Q_max(cg.time - cg.snap->vmAnimTime, 0);
+        if (!bJumped) {
+            iAnimElapsed = Q_max(iAnimElapsed, cg.frametime);
+        }
+        iAnimElapsed -= cg.frametime;
+
+        cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].time   = iAnimElapsed / 1000.0;
         cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].weight = 1.0;
-        cgi.anim->g_iCurrentVMDuration                                 = 0;
+        cgi.anim->g_iCurrentVMDuration                                 = iAnimElapsed;
 
         if (!bWeaponChanged) {
             fCrossblendTime =

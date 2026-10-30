@@ -375,6 +375,17 @@ void CL_ParseSnapshot( msg_t *msg ) {
 		cl.serverStartTime = newSnap.serverTime;
 	}
 
+	// Added in OPM
+	//  When the view model's animation began: the first snapshot with it,
+	//  so a demo seek, read without cgame, can land in the middle of it
+	if ( cl.snap.valid && newSnap.ps.clientNum == cl.snap.ps.clientNum
+		&& newSnap.ps.iViewModelAnim == cl.snap.ps.iViewModelAnim
+		&& newSnap.ps.iViewModelAnimChanged == cl.snap.ps.iViewModelAnimChanged ) {
+		newSnap.vmAnimTime = cl.snap.vmAnimTime;
+	} else {
+		newSnap.vmAnimTime = newSnap.serverTime;
+	}
+
 	// copy to the current good spot
 	cl.snap = newSnap;
 	cl.snap.ping = 999;

@@ -72,6 +72,9 @@ int serverTimeResidual;
 											// making the snapshot current
 	int				number_of_sounds;
 	server_sound_t	sounds[64];
+
+	// Added in OPM
+	int				vmAnimTime;		// server time the view model's animation began
 } clSnapshot_t;
 
 

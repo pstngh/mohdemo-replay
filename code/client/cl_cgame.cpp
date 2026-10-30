@@ -200,6 +200,8 @@ qboolean	CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
 	snapshot->serverTime = clSnap->serverTime;
 	Com_Memcpy( snapshot->areamask, clSnap->areamask, sizeof( snapshot->areamask ) );
 	snapshot->ps = clSnap->ps;
+	// Added in OPM
+	snapshot->vmAnimTime = clSnap->vmAnimTime;
 
 	// wombat: sounds
 	count = clSnap->number_of_sounds;

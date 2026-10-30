@@ -63,6 +63,9 @@ extern "C" {
 
         int            number_of_sounds;
         server_sound_t sounds[MAX_SERVER_SOUNDS];
+
+        // Added in OPM
+        int vmAnimTime; // server time ps.iViewModelAnim began, from the snapshots before
     } snapshot_t;
 
     typedef struct stopWatch_s {

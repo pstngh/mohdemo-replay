@@ -1029,6 +1029,8 @@ void CG_ServerRestarted(void)
     CG_ParseServerinfo();
 
     cg.thisFrameTeleport = qtrue;
+    // Added in OPM
+    cg.vmAnimJump = qtrue;
     // free up any temp models currently spawned
     CG_RestartCommandManager();
     // get rid of left over decals from the last game
