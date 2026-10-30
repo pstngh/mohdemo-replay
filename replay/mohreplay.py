@@ -30,10 +30,10 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMenu, QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider, QSplitter, QStyle,
+    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider, QSplitter, QStyle,
     QStyleOptionSlider, QTabWidget, QToolBar, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QWidgetAction,
 )
 
 PIPE = "replay_pipe"
@@ -904,9 +904,11 @@ class StayOpenMenu(QMenu):
 class NamesField(QLineEdit):
     """Parts of players' names, separated by commas, anyone if none. Its menu
     adds or takes off players (those of the demo playing by default, with
-    labels if given), and whoever is shown instead of names, if offered."""
+    labels if given), in a list that scrolls, and whoever is shown instead
+    of names, if offered."""
 
     edited = Signal()
+    ROWS = 15  # players the menu shows at once: a long list fits the screen
 
     def __init__(self, tip, offer_shown=False, menu_tip="The players of the demo playing",
                  empty="Play a demo to choose its players"):
@@ -956,15 +958,35 @@ class NamesField(QLineEdit):
         if self.shown_action:
             self.menu.addAction(self.shown_action)
             self.menu.addSeparator()
-        chosen = {clean_name(name) for name in self.names()}
-        for player in self.players:
-            action = self.menu.addAction(self.labels.get(player, player))
-            action.setCheckable(True)
-            action.setChecked(clean_name(player) in chosen)
-            action.toggled.connect(lambda checked, p=player: self.toggle(p, checked))
-        if not self.players:
+        if self.players:
+            self.menu.addAction(self.player_list())
+        else:
             self.menu.addAction(self.empty).setEnabled(False)
         self.menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def player_list(self):
+        """The players, ticked if named, as a menu's action."""
+        chosen = {clean_name(name) for name in self.names()}
+        self.list = QListWidget()
+        self.list.setFrameShape(QListWidget.NoFrame)
+        for player in self.players:
+            item = QListWidgetItem(self.labels.get(player, player))
+            item.setData(Qt.UserRole, player)
+            # ticked by a click anywhere on it, not only on its box
+            item.setFlags(Qt.ItemIsEnabled)
+            item.setCheckState(Qt.Checked if clean_name(player) in chosen else Qt.Unchecked)
+            self.list.addItem(item)
+        self.list.itemClicked.connect(self.list_clicked)
+        self.list.setFixedHeight(min(len(self.players), self.ROWS) * self.list.sizeHintForRow(0))
+        self.list.setMinimumWidth(self.list.sizeHintForColumn(0) + self.list.verticalScrollBar().sizeHint().width())
+        action = QWidgetAction(self.menu)
+        action.setDefaultWidget(self.list)
+        return action
+
+    def list_clicked(self, item):
+        checked = item.checkState() != Qt.Checked
+        item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.toggle(item.data(Qt.UserRole), checked)
 
     def toggle(self, player, checked):
         names = [name for name in self.names() if clean_name(name) != clean_name(player)]

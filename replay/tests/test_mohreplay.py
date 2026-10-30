@@ -203,6 +203,20 @@ class FakeGameCase(unittest.TestCase):
                 action.setChecked(key in weapons)
         window.apply_kill_filter()
 
+    def tick(self, field, label):
+        """Clicks a player in the menu of a names field."""
+        item = next(field.list.item(i) for i in range(field.list.count()) if field.list.item(i).text() == label)
+        point = QPointF(field.list.visualItemRect(item).center())
+        viewport = field.list.viewport()
+        for kind, buttons in ((QEvent.MouseButtonPress, Qt.LeftButton), (QEvent.MouseButtonRelease, Qt.NoButton)):
+            QApplication.sendEvent(viewport, QMouseEvent(kind, point, viewport.mapToGlobal(point), Qt.LeftButton, buttons,
+                                                         Qt.NoModifier))
+
+    def players(self, field):
+        """The players in the menu of a names field, and those ticked."""
+        items = [field.list.item(i) for i in range(field.list.count())]
+        return [i.text() for i in items], [i.text() for i in items if i.checkState() == Qt.Checked]
+
     def listed(self, window):
         """The times of the kills listed."""
         return [window.kills.topLevelItem(i).text(0) for i in range(window.kills.topLevelItemCount())]
@@ -657,17 +671,19 @@ class TestWindow(FakeGameCase):
         window.killer.setText("phil")
         self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14", "4:10"])
         self.assertTrue(wait_until(lambda: self.listed(window) == [], 2))
-        # the menu adds and takes off the players of the demo playing
+        # the menu adds and takes off the players of the demo playing, a
+        # click on one at a time, staying open
         window.killer.open_menu()
-        actions = {action.text(): action for action in window.killer.menu.actions()}
-        self.assertTrue(actions["^1Phil"].isChecked())
-        actions["t-"].trigger()
+        self.assertEqual(self.players(window.killer), (["^1Phil", "Al", "Bob", "t-"], ["^1Phil"]))
+        self.tick(window.killer, "t-")
         self.assertEqual(window.killer.text(), "phil, t-")
-        actions["^1Phil"].trigger()
+        self.tick(window.killer, "^1Phil")
         self.assertEqual(window.killer.text(), "t-")
+        self.assertEqual(self.players(window.killer)[1], ["t-"])
+        self.assertTrue(window.killer.menu.isVisible())
         window.killer.menu.close()
         # whoever is shown instead of names, and names instead of it
-        actions["Whoever is shown"].trigger()
+        window.killer.shown_action.trigger()
         self.assertTrue(window.killer.shown())
         self.assertEqual((window.killer.text(), window.killer.placeholderText()), ("", "Whoever is shown"))
         self.assertTrue(window.kill_filter().shown)
@@ -676,7 +692,14 @@ class TestWindow(FakeGameCase):
         self.assertEqual(window.killer.placeholderText(), "Anyone")
         # Victim's has no whoever is shown
         window.victim.open_menu()
-        self.assertEqual([a.text() for a in window.victim.menu.actions()], ["^1Phil", "Al", "Bob", "t-"])
+        self.assertEqual(len(window.victim.menu.actions()), 1)
+        self.assertEqual(self.players(window.victim), (["^1Phil", "Al", "Bob", "t-"], []))
+        window.victim.menu.close()
+        # a long list scrolls instead of leaving the screen
+        window.victim.players = [f"player {n}" for n in range(100)]
+        window.victim.open_menu()
+        self.assertEqual(window.victim.list.height(), mohreplay.NamesField.ROWS * window.victim.list.sizeHintForRow(0))
+        self.assertLess(window.victim.menu.sizeHint().height(), 600)
         window.victim.menu.close()
         # Weapon's menu takes several, and any
         menu = window.weapon.menu()
@@ -1122,9 +1145,8 @@ class TestLibrary(FakeGameCase):
         # those who recorded the most first, in the menu
         self.assertEqual(window.recorded_by.players, ["t-", "<KoS>Bob"])
         window.recorded_by.open_menu()
-        actions = window.recorded_by.menu.actions()
-        self.assertEqual([a.text() for a in actions], ["t- (2)", "<KoS>Bob (1)"])
-        actions[1].trigger()
+        self.assertEqual(self.players(window.recorded_by), (["t- (2)", "<KoS>Bob (1)"], []))
+        self.tick(window.recorded_by, "<KoS>Bob (1)")
         window.recorded_by.menu.close()
         self.assertEqual(window.recorded_by.text(), "<KoS>Bob")
         self.assertEqual(self.shown(window), ["clan/bobs"])
