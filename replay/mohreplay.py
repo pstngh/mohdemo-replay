@@ -174,6 +174,23 @@ def clean_name(name):
     return " ".join(word for word in printable.lower().split(" ") if word)
 
 
+# what the names of the objective maps' levels have, any case (obj/obj_team4,
+# OBJ/obj_Team2, obj/harbor...), and not those of the deathmatch maps (dm/)
+OBJ_LEVELS = "obj/"
+
+
+def kill_levels(index):
+    """Gives each kill of index the name of its level, "level", lower case:
+    the last one loaded before it, "" before the first, as the engine looks
+    it up. Returns index."""
+    maps = index.get("maps", [])
+    times = [m["time"] for m in maps]
+    for kill in index.get("kills", []):
+        i = bisect.bisect_right(times, kill["time"]) - 1
+        kill["level"] = maps[i]["map"].lower() if i >= 0 else ""
+    return index
+
+
 def same_player(a, b):
     return clean_name(a) == clean_name(b)
 
@@ -203,12 +220,13 @@ class KillFilter:
     """The kills listed, played and recorded: by players whose names have one
     of killers in them, while they're shown, as a player's kills are, or by
     whoever is shown (shown), of players whose names have one of victims,
-    made with one of weapons (keys of WEAPONS). Names are parts of names as
-    the search takes its words; none is anyone, no weapons any weapon. The
-    game is told it with demofilter."""
+    made with one of weapons (keys of WEAPONS), on the objective maps only if
+    obj. Names are parts of names as the search takes its words; none is
+    anyone, no weapons any weapon. The game is told it with demofilter."""
 
-    def __init__(self, killers=(), victims=(), weapons=(), shown=False):
+    def __init__(self, killers=(), victims=(), weapons=(), shown=False, obj=False):
         self.shown = bool(shown)
+        self.obj = bool(obj)
         # as given, for the game and the labels; whoever is shown, or names
         self.names = [] if shown else [n.strip() for n in killers if clean_name(n)]
         self.victim_names = [n.strip() for n in victims if clean_name(n)]
@@ -217,7 +235,7 @@ class KillFilter:
         self.weapons = [w for w in WEAPONS if w in weapons]
 
     def __bool__(self):
-        return bool(self.shown or self.killers or self.victims or self.weapons)
+        return bool(self.shown or self.killers or self.victims or self.weapons or self.obj)
 
     def by_shown(self):
         """Whether its kills are only those made while their killer is shown."""
@@ -228,30 +246,34 @@ class KillFilter:
         shown."""
         return not self.killers or any(part in killer for part in self.killers)
 
-    def has(self, victim, weapon):
-        """Whether a kill of a victim (clean name) made with weapon is one of
-        its, whoever the killer."""
-        return (not self.weapons or weapon in self.weapons) and (
-            not self.victims or any(part in victim for part in self.victims))
+    def has(self, victim, weapon, level=""):
+        """Whether a kill of a victim (clean name) made with weapon in a level
+        (lower case) is one of its, whoever the killer."""
+        return ((not self.weapons or weapon in self.weapons)
+                and (not self.victims or any(part in victim for part in self.victims))
+                and (not self.obj or OBJ_LEVELS in level))
 
     def keeps(self, kill, killer=True):
-        """Whether kill is one of its, whoever the killer unless killer."""
+        """Whether kill, given its level (kill_levels), is one of its, whoever
+        the killer unless killer."""
         return ((not killer or self.has_killer(clean_name(kill["killerName"])))
-                and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill)))
+                and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill), kill.get("level", "")))
 
     def commands(self):
         """The demofilter commands telling it to the game."""
         return (["demofilter clear"] + (["demofilter shown"] if self.shown else [])
                 + ["demofilter killer " + quoted(name) for name in self.names]
                 + ["demofilter victim " + quoted(name) for name in self.victim_names]
-                + (["demofilter weapon " + " ".join(self.weapons)] if self.weapons else []))
+                + (["demofilter weapon " + " ".join(self.weapons)] if self.weapons else [])
+                + (["demofilter level " + OBJ_LEVELS] if self.obj else []))
 
     def words(self, killers=True):
         """What it keeps after "kills", the killers too if killers: " by
         pstn or Phil of Bob with sniper", "" for all."""
         text = " by " + or_list(self.names) if killers and self.names else ""
         text += " of " + or_list(self.victim_names) if self.victim_names else ""
-        return text + (" with " + or_list(WEAPON_WORDS[w] for w in self.weapons) if self.weapons else "")
+        text += " with " + or_list(WEAPON_WORDS[w] for w in self.weapons) if self.weapons else ""
+        return text + (" on obj maps" if self.obj else "")
 
 
 def watching(index):
@@ -356,7 +378,9 @@ def summarize(index):
     """What the demo list shows of an index: its maps, length, recorder and
     players, {clean name: [name, kills]}, counting the kills made while
     they're shown, and its kills for the kill filter: [(killer, clean
-    killer, clean victim, weapon, whether made while the killer is shown)]."""
+    killer, clean victim, weapon, whether made while the killer is shown,
+    level)]."""
+    kill_levels(index)
     players = {}
 
     def add(name, kills=0):
@@ -381,7 +405,7 @@ def summarize(index):
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
             "recorder": index.get("recorder", {}).get("name", ""), "players": players, "rules": rules,
             "kills": [(kill["killerName"], clean_name(kill["killerName"]), clean_name(kill.get("victimName", "")),
-                       weapon_of(kill), id(kill) in shown) for kill in kills]}
+                       weapon_of(kill), id(kill) in shown, kill["level"]) for kill in kills]}
 
 
 def filter_kills(summary, kill_filter):
@@ -389,8 +413,8 @@ def filter_kills(summary, kill_filter):
     their killers, {clean name: [name, kills]}."""
     count, killers = 0, {}
     by_shown = kill_filter.by_shown()
-    for name, killer, victim, weapon, shown in summary.get("kills", []):
-        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon):
+    for name, killer, victim, weapon, shown, level in summary.get("kills", []):
+        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon, level):
             count += 1
             if name:
                 killers.setdefault(killer, [name, 0])[1] += 1
@@ -1414,6 +1438,7 @@ def planned_kills(index, only, player="", kill_filter=None):
     whether the player shown changing cuts joined clips (when they're
     someone's)."""
     kill_filter = kill_filter or KillFilter()
+    kill_levels(index)
     whoever = only.startswith("shown")
     if whoever or player or kill_filter.by_shown():
         kills = [(k, start, end) for k, start, end in shown_kills(index)
@@ -1917,6 +1942,10 @@ class Window(QMainWindow):
         self.killer.edited.connect(self.kill_filter_timer.start)
         self.victim.edited.connect(self.kill_filter_timer.start)
         self.weapons_changed()
+        self.obj = QCheckBox("Obj maps only")
+        self.obj.setToolTip("Only the frags made on the objective maps (obj/, as obj_team4 or harbor), "
+                            "not on the deathmatch ones (dm/)")
+        self.obj.toggled.connect(self.kill_filter_timer.start)
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
@@ -1930,6 +1959,7 @@ class Window(QMainWindow):
         for label, widget, stretch in (("Fragger", self.killer, 3), ("Victim", self.victim, 2), ("Weapon", self.weapon, 0)):
             row.addWidget(QLabel(label))
             row.addWidget(widget, stretch)
+        row.addWidget(self.obj)
         box.addLayout(row)
         box.addWidget(self.demos)
 
@@ -2326,9 +2356,10 @@ class Window(QMainWindow):
         self.kill_filter_timer.start()
 
     def kill_filter(self):
-        """The kills chosen with Killer, Victim and Weapon."""
+        """The kills chosen with Killer, Victim, Weapon and Obj maps only."""
         return KillFilter(self.killer.names(), self.victim.names(),
-                          [key for key, action in self.weapon_actions.items() if action.isChecked()], self.killer.shown())
+                          [key for key, action in self.weapon_actions.items() if action.isChecked()], self.killer.shown(),
+                          self.obj.isChecked())
 
     def apply_kill_filter(self):
         """The demos with kills the filter keeps, and those of the demo
@@ -2414,7 +2445,7 @@ class Window(QMainWindow):
 
     def load_index(self, demo):
         index = self.game.read_json("demoindex.json")
-        self.index = index if index and index.get("demo") == demo else None
+        self.index = kill_levels(index) if index and index.get("demo") == demo else None
         self.pending_demo = None
         self.statusBar().showMessage("Playing " + demo)
         self.fill_index()

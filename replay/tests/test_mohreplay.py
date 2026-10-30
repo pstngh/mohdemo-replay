@@ -191,8 +191,10 @@ class FakeGameCase(unittest.TestCase):
         window.play_demo(name)
         self.assertTrue(wait_until(lambda: window.state.get("demo") == name and window.index), "the demo didn't load")
 
-    def choose(self, window, killer=None, victim=None, weapons=None, shown=None):
+    def choose(self, window, killer=None, victim=None, weapons=None, shown=None, obj=None):
         """The kill filter, as typed and ticked, applied at once."""
+        if obj is not None:
+            window.obj.setChecked(obj)
         if killer is not None:
             window.killer.setText(killer)
         if shown is not None:
@@ -321,6 +323,30 @@ class TestFunctions(unittest.TestCase):
         self.assertFalse(nothing or nothing.by_shown())
         self.assertEqual(nothing.commands(), ["demofilter clear"])
         self.assertEqual(mohreplay.or_list(["a", "b", "c"]), "a, b or c")
+
+    def test_obj_maps(self):
+        """Obj maps only: the frags made in the levels of obj/, any case, as
+        the last level loaded before each tells."""
+        mixed = json.loads(json.dumps(DEMO))
+        mixed["maps"] = [{"time": 0, "map": "dm/mohdm6"}, {"time": 100000, "map": "OBJ/obj_Team4"}]
+        mohreplay.kill_levels(mixed)
+        self.assertEqual([k["level"] for k in mixed["kills"]], ["dm/mohdm6"] * 3 + ["obj/obj_team4"] * 3)
+        self.assertEqual(mohreplay.kill_levels({"maps": [{"time": 5, "map": "dm/x"}], "kills": [{"time": 1}]})["kills"],
+                         [{"time": 1, "level": ""}])
+        obj = mohreplay.KillFilter(["t-"], obj=True)
+        self.assertTrue(mohreplay.KillFilter(obj=True))
+        self.assertEqual(obj.commands()[-1], "demofilter level obj/")
+        self.assertEqual(obj.words(), " by t- on obj maps")
+        # t-'s 3 frags while shown are in the dm level, and then in the obj one
+        summary = mohreplay.summarize(mixed)
+        self.assertEqual(mohreplay.filter_kills(summary, mohreplay.KillFilter(["t-"]))[0], 3)
+        self.assertEqual(mohreplay.filter_kills(summary, obj), (0, {}))
+        self.assertEqual(mohreplay.demoonly_plan(mixed, "kills", "t-", kill_filter=obj), (0, []))
+        mixed = json.loads(json.dumps(DEMO))
+        mixed["maps"] = [{"time": 0, "map": "obj/obj_team1"}, {"time": 100000, "map": "dm/mohdm6"}]
+        self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(mixed), obj), (3, {"t-": ["t-", 3]}))
+        self.assertEqual(mohreplay.demoonly_plan(mixed, "kills", "t-", kill_filter=obj)[0], 3)
+        self.assertFalse(obj.keeps(dict(mixed["kills"][5], level="dm/mohdm6")))
 
     def test_weapons(self):
         self.assertEqual([mohreplay.weapon_of(kill) for kill in DEMO["kills"]],
@@ -1192,7 +1218,10 @@ class TestLibrary(FakeGameCase):
         window.filter.setText("mohdm6")
         self.assertEqual(self.shown(window), ["other"])
         window.filter.setText("")
-        self.choose(window, shown=False)
+        # on the obj maps: other is on a dm one
+        self.choose(window, obj=True)
+        self.assertEqual(self.shown(window), ["first"])
+        self.choose(window, obj=False, shown=False)
         self.assertEqual(self.shown(window), ["broken", "first", "other"])
         self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
 
@@ -1996,8 +2025,10 @@ class TestRealGame(FakeGameCase):
                        and not mohreplay.same_player(k["victimName"], k["killerName"])])
         cases = ((dict(killer=recorder[:3], weapons=[weapon]), ), (dict(shown=True, victim=victim), ),
                  (dict(weapons=["mg", "sniper"]), ))
+        if any(mohreplay.OBJ_LEVELS in m["map"].lower() for m in index["maps"]):
+            cases += ((dict(killer=recorder[:3], obj=True), ), )
         for case, in cases:
-            self.choose(window, **{"killer": "", "victim": "", "weapons": [], "shown": False, **case})
+            self.choose(window, **{"killer": "", "victim": "", "weapons": [], "shown": False, "obj": False, **case})
             starts = [window.kills.topLevelItem(i).data(0, Qt.UserRole) for i in range(window.kills.topLevelItemCount())]
             self.assertTrue(starts, case)
             # as demonextkill goes, from the start: the next more than 0.1 s on

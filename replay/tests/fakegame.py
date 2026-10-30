@@ -163,6 +163,8 @@ class FakeGame:
                 self.filter["victims"].append(arg.strip('"'))
             elif what == "weapon":
                 self.filter["weapons"] += arg.split()
+            elif what == "level":
+                self.filter.setdefault("levels", []).append(arg.strip('"'))
         elif name == "timescale":
             self.timescale = float(arg)
         elif name == "set":

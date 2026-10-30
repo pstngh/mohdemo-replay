@@ -23,8 +23,9 @@ player names are made up.*
   is in, with their frags. Words separated by spaces must all match, and
   commas separate searches: `pstn, tommeh` finds the demos of either.
 - **Choose the frags.** By fragger, by victim and by weapon (sniper, rifle,
-  SMG, StG / BAR, shotgun, pistol, bazooka, melee), several of each, on
-  their own or together: the list shows only the demos with such frags, and
+  SMG, StG / BAR, shotgun, pistol, bazooka, melee), several of each, and
+  on the objective maps only, on their own or together: the list shows
+  only the demos with such frags, and
   the demo playing lists, plays and records only those.
 - **Move around a demo.** Its frags and rounds are listed and
   marked on the time slider. A click jumps there, 4 seconds before a frag.

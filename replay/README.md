@@ -34,7 +34,10 @@ their menus add the players of the demo playing; Weapon ticks sniper, rifle,
 SMG, StG / BAR (the StG 44 and the BAR, which the game calls machine guns),
 shotgun, pistol, bazooka, melee (a hit with a gun's butt) or other, as the
 death messages tell (also the French, German, Spanish and Portuguese ones
-seen; the French write a rifle frag as a sniper frag). The list then shows
+seen; the French write a rifle frag as a sniper frag), and Obj maps only
+keeps the frags made on the objective maps (the levels in `obj/`, as
+obj_team4 or harbor), not on the deathmatch ones (`dm/`), as a demo can
+have both. The list then shows
 only the demos with such frags, with how many of each fragger, and the
 demo playing lists only those. A player's frags are only those made while the
 demo shows them (the recorder playing, or the player the recorder follows),
