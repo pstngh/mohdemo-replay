@@ -163,7 +163,9 @@ Demos don't show the server's messages about players coming and going
 player enters, as at every round, has left the battle, has joined the
 Allies or the Axis, is preparing for deployment), what the player picks
 up (ammo, health and weapons, the yellow messages) or the bomb's messages
-(planted, defused, still set): they fill the message box.
+(planted, defused, still set): they fill the message box. After a jump, the message
+boxes start empty: the messages of the time jumped over aren't shown, nor
+those from before it.
 
 ## Recording
 

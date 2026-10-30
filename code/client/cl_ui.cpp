@@ -4353,14 +4353,14 @@ void UI_LoadInventory_f(void)
 
 /*
 ====================
-UI_ClearState
+UI_ClearMessages
+
+Added in OPM
+Empties the game and death message boxes
 ====================
 */
-void UI_ClearState(void)
+void UI_ClearMessages(void)
 {
-    S_FadeSound(0.0);
-    UI_ClearCenterPrint();
-
     if (gmbox) {
         gmbox->Clear();
     }
@@ -4368,6 +4368,18 @@ void UI_ClearState(void)
     if (dmbox) {
         dmbox->Clear();
     }
+}
+
+/*
+====================
+UI_ClearState
+====================
+*/
+void UI_ClearState(void)
+{
+    S_FadeSound(0.0);
+    UI_ClearCenterPrint();
+    UI_ClearMessages();
 
     // Added in OPM
     SCR_StopCinematic();

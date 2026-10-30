@@ -479,6 +479,23 @@ static qboolean CL_DemoHidesPrint( const char *text ) {
 
 /*
 ===================
+CL_DemoHidesCommand
+
+Added in OPM
+Whether a demo doesn't show this server command's message: one a seek went
+over, or one CL_DemoHidesPrint doesn't show
+===================
+*/
+static qboolean CL_DemoHidesCommand( int serverCommandNumber, const char *cmd ) {
+	if ( strcmp( cmd, "print" ) && strcmp( cmd, "hudprint" ) && strcmp( cmd, "printdeathmsg" ) ) {
+		return qfalse;
+	}
+
+	return serverCommandNumber <= clc.demoSkippedCommand || ( !strcmp( cmd, "print" ) && CL_DemoHidesPrint( Cmd_Argv( 1 ) ) );
+}
+
+/*
+===================
 CL_GetServerCommand
 
 Set up argc/argv for the given command
@@ -515,7 +532,7 @@ qboolean CL_GetServerCommand( int serverCommandNumber, qboolean differentServer 
 	cmd = Cmd_Argv(0);
 
 	// Added in OPM
-	if ( clc.demoplaying && !strcmp( cmd, "print" ) && CL_DemoHidesPrint( Cmd_Argv( 1 ) ) ) {
+	if ( clc.demoplaying && CL_DemoHidesCommand( serverCommandNumber, cmd ) ) {
 		return qfalse;
 	}
 
@@ -1348,8 +1365,14 @@ static void CL_SeekDemo( void ) {
 	cl.oldServerTime = cl.serverStartTime;
 	cl.serverTimeDelta = cl.serverTime - cls.realtime;
 
+	// the messages of the time gone over aren't shown when cgame executes
+	// them, and those shown before go: after the jump, only what happens
+	// from there on is (CL_GetServerCommand)
+	clc.demoSkippedCommand = cl.snapshots[keptMessageNum & PACKET_MASK].serverCommandNum;
+
 	S_StopAllSounds( qfalse );
 	UI_ClearCenterPrint();
+	UI_ClearMessages();
 }
 
 static int lastSnapFlags;

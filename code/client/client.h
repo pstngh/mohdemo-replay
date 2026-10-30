@@ -256,6 +256,7 @@ typedef struct {
 	int			demoStartTime;	// server time of the demo's first snapshot
 	qboolean	demoSeeking;	// reading ahead to demoSeekTime without drawing
 	int			demoSeekTime;	// demo time to seek to, in msec
+	int			demoSkippedCommand;	// the last server command a seek went over
 
 	int			timeDemoFrames;		// counter of rendered frames
 	int			timeDemoStart;		// cls.realtime before first frame
