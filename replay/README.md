@@ -16,8 +16,10 @@ of demos (the filter finds a folder's name too). The list shows each
 demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
 too little), the menu next to the filter shows only default or realism
-demos, and the filter finds demos by name, level or player: for a player, it
-shows their frags in each demo. For that, `mohdemoindex`, built next to the
+demos, Recorder only the demos recorded by the players named (parts of
+names separated by commas, as the filter takes them; its menu lists the
+recorders, those of the most demos first), and the filter finds demos by
+name, level or player: for a player, it shows their frags in each demo. For that, `mohdemoindex`, built next to the
 game, indexes the demos in the background the first time (about two minutes
 for 700, and again once after it changes), and the indexes are kept in
 `~/.cache/mohdemo-replay`.

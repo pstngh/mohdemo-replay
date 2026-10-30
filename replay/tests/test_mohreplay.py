@@ -1112,6 +1112,38 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(self.shown(window), ["broken", "first", "other"])
         self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
 
+    def test_filter_by_recorder(self):
+        bobs = json.loads(json.dumps(DEMO))
+        bobs["recorder"] = {"client": 0, "name": "<KoS>Bob"}
+        os.makedirs(os.path.join(self.demos, "clan"))
+        self.add_demo("clan/bobs", bobs)
+        window = self.window()
+        self.indexed(window, ("first", "other", "clan/bobs"))
+        # those who recorded the most first, in the menu
+        self.assertEqual(window.recorded_by.players, ["t-", "<KoS>Bob"])
+        window.recorded_by.open_menu()
+        actions = window.recorded_by.menu.actions()
+        self.assertEqual([a.text() for a in actions], ["t- (2)", "<KoS>Bob (1)"])
+        actions[1].trigger()
+        window.recorded_by.menu.close()
+        self.assertEqual(window.recorded_by.text(), "<KoS>Bob")
+        self.assertEqual(self.shown(window), ["clan/bobs"])
+        # several, by parts of their names; a demo not indexed has no recorder
+        window.recorded_by.setText("kos, T-")
+        self.assertEqual(self.shown(window), ["clan/bobs", "first", "other"])
+        # with the search and the frag filters
+        window.filter.setText("mohdm6")
+        self.assertEqual(self.shown(window), ["other"])
+        window.filter.setText("")
+        self.choose(window, killer="kos")
+        self.assertEqual(self.shown(window), ["other"])
+        window.recorded_by.setText("bob")
+        self.assertEqual(self.shown(window), [])
+        self.choose(window, killer="")
+        self.assertEqual(self.shown(window), ["clan/bobs"])
+        window.recorded_by.setText("")
+        self.assertEqual(self.shown(window), ["broken", "clan/bobs", "first", "other"])
+
     def test_short_demos_hidden(self):
         self.add_demo("short", dict(DEMO, duration=mohreplay.MIN_LENGTH - 1))
         self.add_demo("long enough", dict(DEMO, duration=mohreplay.MIN_LENGTH))

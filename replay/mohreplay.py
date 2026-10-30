@@ -903,16 +903,19 @@ class StayOpenMenu(QMenu):
 
 class NamesField(QLineEdit):
     """Parts of players' names, separated by commas, anyone if none. Its menu
-    adds or takes off the players of the demo playing (players), and
-    whoever is shown instead of names, if offered."""
+    adds or takes off players (those of the demo playing by default, with
+    labels if given), and whoever is shown instead of names, if offered."""
 
     edited = Signal()
 
-    def __init__(self, tip, offer_shown=False):
+    def __init__(self, tip, offer_shown=False, menu_tip="The players of the demo playing",
+                 empty="Play a demo to choose its players"):
         super().__init__(placeholderText="Anyone")
         self.setClearButtonEnabled(True)
         self.setToolTip(tip)
         self.players = []
+        self.labels = {}  # player: what the menu shows
+        self.empty = empty
         self.menu = StayOpenMenu(self)
         self.shown_action = None
         if offer_shown:
@@ -920,7 +923,7 @@ class NamesField(QLineEdit):
             self.shown_action.setToolTip("The recorder's frags, and those of the players they follow while they do")
             self.shown_action.toggled.connect(self.shown_toggled)
         menu_action = self.addAction(theme_icon("go-down", QStyle.SP_ArrowDown), QLineEdit.TrailingPosition)
-        menu_action.setToolTip("The players of the demo playing")
+        menu_action.setToolTip(menu_tip)
         menu_action.triggered.connect(self.open_menu)
         self.textChanged.connect(self.text_changed)
 
@@ -955,12 +958,12 @@ class NamesField(QLineEdit):
             self.menu.addSeparator()
         chosen = {clean_name(name) for name in self.names()}
         for player in self.players:
-            action = self.menu.addAction(player)
+            action = self.menu.addAction(self.labels.get(player, player))
             action.setCheckable(True)
             action.setChecked(clean_name(player) in chosen)
             action.toggled.connect(lambda checked, p=player: self.toggle(p, checked))
         if not self.players:
-            self.menu.addAction("Play a demo to choose its players").setEnabled(False)
+            self.menu.addAction(self.empty).setEnabled(False)
         self.menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
 
     def toggle(self, player, checked):
@@ -1752,6 +1755,10 @@ class Window(QMainWindow):
         self.rules.setToolTip("Default or realism servers, told by the speeds of the recorder's weapons")
         self.rules.setCurrentIndex(max(0, self.rules.findData(settings.value("rules", ""))))
         self.rules.currentIndexChanged.connect(self.rules_changed)
+        self.recorded_by = NamesField("Demos recorded by players whose names have one of these, separated by commas",
+                                   menu_tip="The recorders of the demos, those of the most first",
+                                   empty="No demos indexed yet")
+        self.recorded_by.edited.connect(self.filter_demos)
         self.demos = self.make_list(DEMO_COLUMNS, fit=False)
         self.demos.setSortingEnabled(True)
         self.demos.sortByColumn(COL_DATE, Qt.DescendingOrder)
@@ -1785,7 +1792,9 @@ class Window(QMainWindow):
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        row.addWidget(self.filter, 1)
+        row.addWidget(self.filter, 2)
+        row.addWidget(QLabel("Recorder"))
+        row.addWidget(self.recorded_by, 1)
         row.addWidget(self.rules)
         box.addLayout(row)
         row = QHBoxLayout()
@@ -2203,10 +2212,12 @@ class Window(QMainWindow):
     def filter_demos(self):
         """Shows the demos where each word is in the name, a map or a
         player's name, and the players found; with the kill filter, only
-        those with kills it keeps, and their killers; only those of the
-        rules chosen, if any, and not those shorter than MIN_LENGTH."""
+        those with kills it keeps, and their killers; only those recorded by
+        the recorders named, and of the rules chosen, if any, and not those
+        shorter than MIN_LENGTH."""
         words = [w for w in (clean_name(w) for w in self.filter.text().split()) if w]
         rules = self.rules.currentData()
+        recorders = [clean_name(name) for name in self.recorded_by.names()]
         kill_filter = self.kill_filter()
         found_any = False
         for name, item in self.demo_items.items():
@@ -2215,6 +2226,9 @@ class Window(QMainWindow):
             maps = " ".join(summary.get("maps", [])).lower()
             found, shown = {}, not rules or summary.get("rules") in (rules, "both")
             shown = shown and summary.get("duration", MIN_LENGTH) >= MIN_LENGTH
+            if shown and recorders:
+                recorder = clean_name(summary.get("recorder", ""))
+                shown = bool(recorder) and any(part in recorder for part in recorders)
             for word in words if shown else ():
                 if word in name.lower() or word in maps:
                     continue
@@ -2239,12 +2253,20 @@ class Window(QMainWindow):
                                          for c in children)
             item.setText(COL_DEMO, f"{posixpath.basename(folder)} ({count})")
             item.setHidden(not count)
-            if (words or kill_filter) and count:
+            if (words or recorders or kill_filter) and count:
                 item.setExpanded(True)
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)
 
     def library_changed(self):
+        # those who recorded the most first
+        recorders = {}
+        for summary in self.library.demos.values():
+            if summary["recorder"]:
+                recorders.setdefault(clean_name(summary["recorder"]), [summary["recorder"], 0])[1] += 1
+        ranked = sorted(recorders.values(), key=lambda r: (-r[1], r[0].lower()))
+        self.recorded_by.players = [name for name, _ in ranked]
+        self.recorded_by.labels = {name: f"{name} ({count})" for name, count in ranked}
         self.fill_demos()
         progress = self.library.progress()
         self.indexing.setText(f"Indexing demos: {progress[0]} of {progress[1]}" if progress else "")
