@@ -177,6 +177,10 @@ def clean_name(name):
 # what the names of the objective maps' levels have, any case (obj/obj_team4,
 # OBJ/obj_Team2, obj/harbor...), and not those of the deathmatch maps (dm/)
 OBJ_LEVELS = "obj/"
+# what Great frags leaves out: sniper frags seen from their fragger's
+# view with the scope on for longer than this, in msec, and the fragger at
+# this speed or slower, the slow scoped shots of someone standing still
+GREAT_SCOPE, GREAT_SPEED = 1000, 30
 
 
 def kill_levels(index):
@@ -189,6 +193,14 @@ def kill_levels(index):
         i = bisect.bisect_right(times, kill["time"]) - 1
         kill["level"] = maps[i]["map"].lower() if i >= 0 else ""
     return index
+
+
+def slow_snipe(kill):
+    """Whether kill is one Great frags leaves out: a sniper frag its
+    index saw from the fragger's view, made with the scope on for over
+    GREAT_SCOPE msec at GREAT_SPEED or slower. Not one when not seen, as in
+    an index made before scopes were."""
+    return weapon_of(kill) == "sniper" and kill.get("scope", -1) > GREAT_SCOPE and kill.get("speed", 0) <= GREAT_SPEED
 
 
 def same_player(a, b):
@@ -221,12 +233,14 @@ class KillFilter:
     of killers in them, while they're shown, as a player's kills are, or by
     whoever is shown (shown), of players whose names have one of victims,
     made with one of weapons (keys of WEAPONS), on the objective maps only if
-    obj. Names are parts of names as the search takes its words; none is
-    anyone, no weapons any weapon. The game is told it with demofilter."""
+    obj, great ones only if great (not slow snipes). Names are parts of
+    names as the search takes its words; none is anyone, no weapons any
+    weapon. The game is told it with demofilter."""
 
-    def __init__(self, killers=(), victims=(), weapons=(), shown=False, obj=False):
+    def __init__(self, killers=(), victims=(), weapons=(), shown=False, obj=False, great=False):
         self.shown = bool(shown)
         self.obj = bool(obj)
+        self.great = bool(great)
         # as given, for the game and the labels; whoever is shown, or names
         self.names = [] if shown else [n.strip() for n in killers if clean_name(n)]
         self.victim_names = [n.strip() for n in victims if clean_name(n)]
@@ -235,7 +249,7 @@ class KillFilter:
         self.weapons = [w for w in WEAPONS if w in weapons]
 
     def __bool__(self):
-        return bool(self.shown or self.killers or self.victims or self.weapons or self.obj)
+        return bool(self.shown or self.killers or self.victims or self.weapons or self.obj or self.great)
 
     def by_shown(self):
         """Whether its kills are only those made while their killer is shown."""
@@ -246,18 +260,20 @@ class KillFilter:
         shown."""
         return not self.killers or any(part in killer for part in self.killers)
 
-    def has(self, victim, weapon, level=""):
+    def has(self, victim, weapon, level="", slow=False):
         """Whether a kill of a victim (clean name) made with weapon in a level
-        (lower case) is one of its, whoever the killer."""
+        (lower case), a slow snipe or not, is one of its, whoever the
+        killer."""
         return ((not self.weapons or weapon in self.weapons)
                 and (not self.victims or any(part in victim for part in self.victims))
-                and (not self.obj or OBJ_LEVELS in level))
+                and (not self.obj or OBJ_LEVELS in level) and not (self.great and slow))
 
     def keeps(self, kill, killer=True):
         """Whether kill, given its level (kill_levels), is one of its, whoever
         the killer unless killer."""
         return ((not killer or self.has_killer(clean_name(kill["killerName"])))
-                and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill), kill.get("level", "")))
+                and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill), kill.get("level", ""),
+                             slow_snipe(kill)))
 
     def commands(self):
         """The demofilter commands telling it to the game."""
@@ -265,7 +281,8 @@ class KillFilter:
                 + ["demofilter killer " + quoted(name) for name in self.names]
                 + ["demofilter victim " + quoted(name) for name in self.victim_names]
                 + (["demofilter weapon " + " ".join(self.weapons)] if self.weapons else [])
-                + (["demofilter level " + OBJ_LEVELS] if self.obj else []))
+                + (["demofilter level " + OBJ_LEVELS] if self.obj else [])
+                + ([f"demofilter great {GREAT_SCOPE} {GREAT_SPEED}"] if self.great else []))
 
     def words(self, killers=True):
         """What it keeps after "kills", the killers too if killers: " by
@@ -273,7 +290,7 @@ class KillFilter:
         text = " by " + or_list(self.names) if killers and self.names else ""
         text += " of " + or_list(self.victim_names) if self.victim_names else ""
         text += " with " + or_list(WEAPON_WORDS[w] for w in self.weapons) if self.weapons else ""
-        return text + (" on obj maps" if self.obj else "")
+        return text + (" on obj maps" if self.obj else "") + (", great ones" if self.great else "")
 
 
 def watching(index):
@@ -379,7 +396,7 @@ def summarize(index):
     players, {clean name: [name, kills]}, counting the kills made while
     they're shown, and its kills for the kill filter: [(killer, clean
     killer, clean victim, weapon, whether made while the killer is shown,
-    level)]."""
+    level, whether a slow snipe)]."""
     kill_levels(index)
     players = {}
 
@@ -405,7 +422,7 @@ def summarize(index):
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
             "recorder": index.get("recorder", {}).get("name", ""), "players": players, "rules": rules,
             "kills": [(kill["killerName"], clean_name(kill["killerName"]), clean_name(kill.get("victimName", "")),
-                       weapon_of(kill), id(kill) in shown, kill["level"]) for kill in kills]}
+                       weapon_of(kill), id(kill) in shown, kill["level"], slow_snipe(kill)) for kill in kills]}
 
 
 def filter_kills(summary, kill_filter):
@@ -413,8 +430,8 @@ def filter_kills(summary, kill_filter):
     their killers, {clean name: [name, kills]}."""
     count, killers = 0, {}
     by_shown = kill_filter.by_shown()
-    for name, killer, victim, weapon, shown, level in summary.get("kills", []):
-        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon, level):
+    for name, killer, victim, weapon, shown, level, slow in summary.get("kills", []):
+        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon, level, slow):
             count += 1
             if name:
                 killers.setdefault(killer, [name, 0])[1] += 1
@@ -1946,6 +1963,12 @@ class Window(QMainWindow):
         self.obj.setToolTip("Only the frags made on the objective maps (obj/, as obj_team4 or harbor), "
                             "not on the deathmatch ones (dm/)")
         self.obj.toggled.connect(self.kill_filter_timer.start)
+        self.great = QCheckBox("Great frags")
+        self.great.setToolTip("Leaves out the sniper frags made with the scope on for over a second while standing "
+                              "still, as the fragger's view shows them: no-scopes, quick scopes and shots on the move "
+                              "stay, and so do the frags of other weapons and those the demo doesn't show from the "
+                              "fragger's view")
+        self.great.toggled.connect(self.kill_filter_timer.start)
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
@@ -1960,6 +1983,7 @@ class Window(QMainWindow):
             row.addWidget(QLabel(label))
             row.addWidget(widget, stretch)
         row.addWidget(self.obj)
+        row.addWidget(self.great)
         box.addLayout(row)
         box.addWidget(self.demos)
 
@@ -2356,10 +2380,11 @@ class Window(QMainWindow):
         self.kill_filter_timer.start()
 
     def kill_filter(self):
-        """The kills chosen with Killer, Victim, Weapon and Obj maps only."""
+        """The kills chosen with Killer, Victim, Weapon, Obj maps only and
+        Great frags."""
         return KillFilter(self.killer.names(), self.victim.names(),
                           [key for key, action in self.weapon_actions.items() if action.isChecked()], self.killer.shown(),
-                          self.obj.isChecked())
+                          self.obj.isChecked(), self.great.isChecked())
 
     def apply_kill_filter(self):
         """The demos with kills the filter keeps, and those of the demo

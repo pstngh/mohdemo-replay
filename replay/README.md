@@ -37,7 +37,12 @@ death messages tell (also the French, German, Spanish and Portuguese ones
 seen; the French write a rifle frag as a sniper frag), and Obj maps only
 keeps the frags made on the objective maps (the levels in `obj/`, as
 obj_team4 or harbor), not on the deathmatch ones (`dm/`), as a demo can
-have both. The list then shows
+have both. Great frags leaves out the slow scoped snipes: sniper frags made
+with the scope on for over a second while standing still, as the fragger's
+view shows them; no-scopes, quick scopes and shots on the move stay, and so
+do the frags of other weapons and those the demo doesn't show from the
+fragger's view (demos indexed by an older version are indexed again once
+for it). The list then shows
 only the demos with such frags, with how many of each fragger, and the
 demo playing lists only those. A player's frags are only those made while the
 demo shows them (the recorder playing, or the player the recorder follows),

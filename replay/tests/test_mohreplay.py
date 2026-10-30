@@ -191,10 +191,12 @@ class FakeGameCase(unittest.TestCase):
         window.play_demo(name)
         self.assertTrue(wait_until(lambda: window.state.get("demo") == name and window.index), "the demo didn't load")
 
-    def choose(self, window, killer=None, victim=None, weapons=None, shown=None, obj=None):
+    def choose(self, window, killer=None, victim=None, weapons=None, shown=None, obj=None, great=None):
         """The kill filter, as typed and ticked, applied at once."""
         if obj is not None:
             window.obj.setChecked(obj)
+        if great is not None:
+            window.great.setChecked(great)
         if killer is not None:
             window.killer.setText(killer)
         if shown is not None:
@@ -347,6 +349,31 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(mixed), obj), (3, {"t-": ["t-", 3]}))
         self.assertEqual(mohreplay.demoonly_plan(mixed, "kills", "t-", kill_filter=obj)[0], 3)
         self.assertFalse(obj.keeps(dict(mixed["kills"][5], level="dm/mohdm6")))
+
+    def test_great_frags(self):
+        """Great frags: not the sniper frags seen scoped for over a
+        second while standing still."""
+        slow = mohreplay.slow_snipe
+        self.assertTrue(slow({"weapon": "sniper", "scope": 1001, "speed": 30}))
+        # quick scopes, no-scopes, shots on the move, other weapons, frags not
+        # seen from the fragger's view and indexes made before scopes were
+        for kill in ({"weapon": "sniper", "scope": 1000, "speed": 0}, {"weapon": "sniper", "scope": 0, "speed": 0},
+                     {"weapon": "sniper", "scope": 5000, "speed": 31}, {"weapon": "rifle", "scope": 5000, "speed": 0},
+                     {"weapon": "sniper"}):
+            self.assertFalse(slow(kill), kill)
+        snipes = json.loads(json.dumps(DEMO))
+        for kill, scope, speed in zip(snipes["kills"], (1500, 2500, 400), (0, 10, 0)):
+            kill.update(weapon="sniper", scope=scope, speed=speed)
+        great = mohreplay.KillFilter(["t-"], great=True)
+        self.assertTrue(mohreplay.KillFilter(great=True))
+        self.assertEqual(great.commands()[-1], "demofilter great 1000 30")
+        self.assertEqual(great.words(), " by t-, great ones")
+        # t-'s 3 frags while shown, the first 2 slow snipes
+        summary = mohreplay.summarize(snipes)
+        self.assertEqual(mohreplay.filter_kills(summary, mohreplay.KillFilter(["t-"]))[0], 3)
+        self.assertEqual(mohreplay.filter_kills(summary, great), (1, {"t-": ["t-", 1]}))
+        self.assertEqual(mohreplay.demoonly_plan(snipes, "kills", "t-", kill_filter=great)[0], 1)
+        self.assertEqual([great.keeps(kill) for kill in snipes["kills"][:3]], [False, False, True])
 
     def test_weapons(self):
         self.assertEqual([mohreplay.weapon_of(kill) for kill in DEMO["kills"]],
@@ -1225,6 +1252,29 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(self.shown(window), ["broken", "first", "other"])
         self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
 
+    def test_great_frags(self):
+        """Great frags, in the list and the demo playing: snipes has two
+        slow snipes of t-'s 3 frags."""
+        snipes = json.loads(json.dumps(DEMO))
+        for kill, scope in zip(snipes["kills"], (1500, 2500, 400)):
+            kill.update(weapon="sniper", scope=scope, speed=0)
+        self.add_demo("snipes", snipes)
+        window = self.window()
+        self.indexed(window, ("first", "other", "snipes"))
+        self.choose(window, killer="t-")
+        self.assertEqual(window.demo_items["snipes"].text(mohreplay.COL_PLAYER), "t- (3)")
+        self.choose(window, great=True)
+        self.assertEqual(self.shown(window), ["first", "snipes"])
+        self.assertEqual(window.demo_items["snipes"].text(mohreplay.COL_PLAYER), "t- (1)")
+        self.assertEqual(window.demo_items["first"].text(mohreplay.COL_PLAYER), "t- (3)")
+        self.choose(window, weapons=["sniper"])
+        self.assertEqual(self.shown(window), ["snipes"])
+        self.playing(window, "snipes")
+        self.assertEqual(window.kills.topLevelItemCount(), 1)
+        self.assertTrue(wait_until(lambda: "demofilter great 1000 30" in self.commands(window.game)))
+        self.choose(window, great=False)
+        self.assertEqual(window.kills.topLevelItemCount(), 3)
+
     def test_filter_by_recorder(self):
         bobs = json.loads(json.dumps(DEMO))
         bobs["recorder"] = {"client": 0, "name": "<KoS>Bob"}
@@ -2027,8 +2077,11 @@ class TestRealGame(FakeGameCase):
                  (dict(weapons=["mg", "sniper"]), ))
         if any(mohreplay.OBJ_LEVELS in m["map"].lower() for m in index["maps"]):
             cases += ((dict(killer=recorder[:3], obj=True), ), )
+        if any(mohreplay.slow_snipe(k) for k in frags):
+            cases += ((dict(weapons=["sniper"], great=True), ), )
         for case, in cases:
-            self.choose(window, **{"killer": "", "victim": "", "weapons": [], "shown": False, "obj": False, **case})
+            self.choose(window, **{"killer": "", "victim": "", "weapons": [], "shown": False, "obj": False,
+                                   "great": False, **case})
             starts = [window.kills.topLevelItem(i).data(0, Qt.UserRole) for i in range(window.kills.topLevelItemCount())]
             self.assertTrue(starts, case)
             # as demonextkill goes, from the start: the next more than 0.1 s on
