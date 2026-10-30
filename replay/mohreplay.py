@@ -2409,9 +2409,9 @@ class Window(QMainWindow):
             item.setData(2, Qt.UserRole, [place[id(kill)]])
             self.kills.addTopLevelItem(item)
             self.kill_marks.append((kill["time"], how))
-        # of all those of the demo, when some are left out
+        # of all those of the demo playing, when some are left out
         listed = self.kills.topLevelItemCount()
-        if kill_filter:
+        if kill_filter and self.index:
             every = sum(1 for kill in (self.index or {}).get("kills", [])
                         if not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths)
             self.tabs.setTabText(0, f"Kills ({listed} of {every})")

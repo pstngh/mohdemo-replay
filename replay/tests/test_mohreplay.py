@@ -624,9 +624,12 @@ class TestWindow(FakeGameCase):
 
     def test_victims_and_weapons(self):
         window = self.window()
+        # no demo, no kills of none
+        self.choose(window, weapons=["rifle"])
+        self.assertEqual(window.tabs.tabText(0), "Kills (0)")
         self.playing(window)
         # anyone's, whoever is shown: Bob's suicide too
-        self.choose(window, victim="bob")
+        self.choose(window, victim="bob", weapons=[])
         self.assertEqual(self.listed(window), ["0:12", "4:10"])
         self.choose(window, victim="", weapons=["rifle"])
         self.assertEqual(self.listed(window), ["0:10", "0:12"])
