@@ -63,7 +63,11 @@ watched. A right-click on frags selected records those, and on demos or
 folders selected, all of their demos, the frags chosen, the recorder's, or
 the frags shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
 frags it holds and how long the video will be, and the last one is chosen
-again next time. Videos are recorded one after the
+again next time. Clips, Number them, puts a number on each clip of the
+video (#1, #2 and on through all of its demos, at the bottom of the
+screen), and the list of the clips next to it, a `.csv` of the same name:
+each one's number, start in the video and demo, and the time, fragger,
+victim and weapon of each of its frags. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
 Linux and faster than real time, while you keep watching; FFmpeg joins the
 clips of a video without encoding them again. The Videos panel lists them,

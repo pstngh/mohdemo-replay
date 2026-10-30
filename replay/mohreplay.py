@@ -11,6 +11,7 @@ do is a console command, so it all works with key binds too.
 
 import argparse
 import bisect
+import csv
 import errno
 import functools
 import hashlib
@@ -153,19 +154,24 @@ def find_ffmpeg():
     return "ffmpeg"
 
 
-@functools.lru_cache(maxsize=4096)
-def clean_name(name):
-    """The engine's rule for names: without ^ and a letter or digit, only
-    printable ASCII, any case (Q_CleanStr), spaces as one."""
+def without_colors(name):
+    """name without its colour codes, ^ and a letter or digit."""
     out, i = [], 0
     while i < len(name):
         if name[i] == "^" and i + 1 < len(name) and name[i + 1].isascii() and name[i + 1].isalnum():
             i += 2
             continue
-        if " " <= name[i] <= "~":
-            out.append(name[i])
+        out.append(name[i])
         i += 1
-    return " ".join(word for word in "".join(out).lower().split(" ") if word)
+    return "".join(out)
+
+
+@functools.lru_cache(maxsize=4096)
+def clean_name(name):
+    """The engine's rule for names: without ^ and a letter or digit, only
+    printable ASCII, any case (Q_CleanStr), spaces as one."""
+    printable = "".join(c for c in without_colors(name) if " " <= c <= "~")
+    return " ".join(word for word in printable.lower().split(" ") if word)
 
 
 def same_player(a, b):
@@ -1303,6 +1309,49 @@ def only_clip(demo, only="", player="", spans=None, kill_filter=None):
             "commands": [*told, f"demoseek {seconds(start)}", "demopause 0", command, "demovideo {part}"]}
 
 
+def numbered(clips, numbers):
+    """The clips of a video, with the number the game draws on the first of
+    each (cl_demoClipNumbers), the next ones counting on through the video,
+    or none: a clip has one for each stretch it plays."""
+    number = 1
+    for clip in clips:
+        clip["number"] = number if numbers else 0
+        clip["commands"] = [f"set cl_demoClipNumbers {clip['number']}", *clip["commands"]]
+        number += len(clip["spans"] or [None])
+    return clips
+
+
+CLIP_LIST = ["Clip", "Video", "Demo", "Time", "Fragger", "Victim", "Weapon"]
+
+
+def clip_rows(clips):
+    """The list of a video's numbered clips, as CLIP_LIST: each one's number,
+    start in the video and demo, and the time, fragger, victim and weapon of
+    each of its frags, a row each (one without frags for a clip with none).
+    The start in the video is the planned one, unknown after a demo not
+    indexed."""
+    rows, video = [], 0
+    for clip in clips:
+        spans = clip["spans"] or [(clip["start"], None)]
+        frags = clip.get("frags") or [[] for _ in spans]
+        for i, ((start, end), kills) in enumerate(zip(spans, frags)):
+            at = clock(video) if video is not None else ""
+            for kill in kills or [None]:
+                rows.append([clip["number"] + i, at, clip["demo"], clock(kill["time"] if kill else start)]
+                            + ([without_colors(kill["killerName"]), without_colors(kill["victimName"]),
+                                WEAPONS[weapon_of(kill)]] if kill else ["", "", ""]))
+            video = video + end - start if video is not None and end is not None else None
+    return rows
+
+
+def write_clip_list(clips, video):
+    """The list of the numbered clips of video, next to it: video.csv."""
+    with open(os.path.splitext(video)[0] + ".csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(CLIP_LIST)
+        writer.writerows(clip_rows(clips))
+
+
 def stretches(spans, switches=()):
     """(start, end) spans in msec, joined as demoonly does: when less than a
     second apart, unless the player shown changes in between (switches: the
@@ -1351,23 +1400,42 @@ def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None, 
                  if (same_player(w["name"], player) if player
                      else kill_filter.killers and kill_filter.has_killer(clean_name(w["name"])))]
         return 0, stretches(spans, switches)
+    frags, kills, cut = planned_kills(index, only, player, kill_filter)
+    kb = KILL_BEFORE if kill_before is None else kill_before
+    ka = KILL_AFTER if kill_after is None else kill_after
+    spans = [kill_span(index, k, start, end, kb, ka) for k, start, end in kills]
+    return len(frags), stretches([span for span in spans if span[1] > span[0]], switches if cut else [])
+
+
+def planned_kills(index, only, player="", kill_filter=None):
+    """The kills demoonly <only> [player] plays, as demoonly_plan tells:
+    (frags, kills, cut), [(kill, start, end)] with when each can play: the
+    frags it counts, those and the team kills that play with them, and
+    whether the player shown changing cuts joined clips (when they're
+    someone's)."""
+    kill_filter = kill_filter or KillFilter()
     whoever = only.startswith("shown")
     if whoever or player or kill_filter.by_shown():
         kills = [(k, start, end) for k, start, end in shown_kills(index)
                  if (same_player(player, k["killerName"]) if player
                      else whoever or kill_filter.has_killer(clean_name(k["killerName"])))]
+        cut = True
     else:
         # anyone's, whoever is shown
-        kills, switches = [(k, 0, duration) for k in index.get("kills", [])], []
+        kills, cut = [(k, 0, index.get("duration", 0)) for k in index.get("kills", [])], False
     deaths = deaths_shown(index)
     frags = [x for x in kills if not x[0].get("teamKill") and not is_grenade(x[0]) and id(x[0]) not in deaths
              and kill_filter.keeps(x[0], killer=False)]
-    count = len(frags)
-    kills = frags + team_kills_with(kills, [k for k, _, _ in frags])
-    kb = KILL_BEFORE if kill_before is None else kill_before
-    ka = KILL_AFTER if kill_after is None else kill_after
-    spans = [kill_span(index, k, start, end, kb, ka) for k, start, end in kills]
-    return count, stretches([span for span in spans if span[1] > span[0]], switches)
+    return frags, frags + team_kills_with(kills, [k for k, _, _ in frags]), cut
+
+
+def clip_frags(index, spans, only="", player="", kill_filter=None):
+    """The frags in each of spans, the clips demoonly <only> [player] plays:
+    [[kill]], none for all of the demo or while a player is watched."""
+    if only in ("", "watched"):
+        return [[] for _ in spans]
+    frags = [k for k, _, _ in planned_kills(index, only, player, kill_filter)[0]]
+    return [[k for k in frags if start <= k["time"] < end] for start, end in spans]
 
 
 def the(count, one, many):
@@ -1443,6 +1511,11 @@ class RecordDialog(QDialog):
         self.kill_after = seconds_box(settings, "rec/kill_after", 2.0,
                                       "Time recorded after each frag (cl_demoKillAfter)", "kill_after")
         form.addRow("Each frag", lead_row(self.kill_before, self.kill_after, "it"))
+        self.numbers = QCheckBox("Number them")
+        self.numbers.setToolTip("A number on each clip of the video, and next to it the list of the clips with "
+                                "their frags (a .csv of the same name)")
+        self.numbers.setChecked(settings.value("rec/numbers", "false") == "true")
+        form.addRow("Clips", self.numbers)
         if relabel:
             # once they stop changing, as a choice of many demos takes a while
             timer = QTimer(self, singleShot=True, interval=150)
@@ -1512,7 +1585,8 @@ class RecordDialog(QDialog):
                 return
         for key, value in (("folder", self.folder.text()), ("pattern", self.pattern.text()),
                            ("kill_before", str(self.kill_before.value())),
-                           ("kill_after", str(self.kill_after.value()))):
+                           ("kill_after", str(self.kill_after.value())),
+                           ("numbers", "true" if self.numbers.isChecked() else "false")):
             self.settings.setValue("rec/" + key, value)
         if self.offers_join:
             self.settings.setValue("rec/join", "true" if self.join.isChecked() else "false")
@@ -1532,7 +1606,8 @@ class RecordDialog(QDialog):
         except (KeyError, ValueError, IndexError):
             name = demo
         name = "".join(c for c in name if c not in '/\\:*?"<>|').strip() or demo
-        return {"label": label, "clips": clips, **video_settings(self.settings),
+        return {"label": label, "clips": numbered(clips, self.numbers.isChecked()),
+                "numbers": self.numbers.isChecked(), **video_settings(self.settings),
                 "kill_before": str(self.kill_before.value()),
                 "kill_after": str(self.kill_after.value()),
                 "output": os.path.join(self.folder.text(), name + ".mp4"), "status": "waiting"}
@@ -2597,6 +2672,7 @@ class Window(QMainWindow):
             player = whose.get(what, "" if what == "shownkills" else player)
             clip = only_clip(demo, ONLY[what], whose.get(what, ""), plans_for(*dialog.kill_times())[what][1],
                              kill_filter)
+            clip["frags"] = clip_frags(index, clip["spans"], ONLY[what], whose.get(what, ""), kill_filter)
         self.add_job(dialog.job(label, [clip], demo, player))
 
     def record_selected(self, tree):
@@ -2632,6 +2708,8 @@ class Window(QMainWindow):
         if not dialog.exec():
             return
         clips = [range_clip(demo, start, end) for start, end in spans_for(*dialog.kill_times())]
+        for clip in clips:
+            clip["frags"] = [[k for chain in chains for k in chain if clip["start"] <= k["time"] < clip["end"]]]
         if dialog.join.isChecked() or len(clips) == 1:
             self.add_job(dialog.job(f"{demo}, {kind}", clips, demo, player))
         else:
@@ -2707,6 +2785,10 @@ class Window(QMainWindow):
             player = whose.get(chosen[0], "") if len(chosen) == 1 else ""
         only = "" if what == "everything" else ONLY[what]
         clips = [only_clip(name, only, whose.get(name) or "", plans[what][name][1], kill_filter) for name in chosen]
+        for clip in clips:
+            if clip["spans"]:
+                clip["frags"] = clip_frags(indexes[clip["demo"]], clip["spans"], only, whose.get(clip["demo"]) or "",
+                                           kill_filter)
         if dialog.join.isChecked() or len(clips) == 1:
             demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
             self.add_job(dialog.job(demo + (f", {kind}" if kind else ""), clips, demo, player))
@@ -2746,6 +2828,11 @@ class Window(QMainWindow):
             item.setText(2, "Done")
             item.setToolTip(0, video)
             self.statusBar().showMessage("Recorded " + video)
+            if job.get("numbers"):
+                try:
+                    write_clip_list(job["clips"], video)
+                except OSError as e:
+                    self.statusBar().showMessage(f"Recorded {video}, but couldn't write its list of clips: {e}")
         elif error == "canceled":
             job["status"] = "canceled"
             item.setText(2, "Canceled")

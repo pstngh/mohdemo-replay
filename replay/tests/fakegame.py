@@ -165,12 +165,15 @@ class FakeGame:
                 self.filter["weapons"] += arg.split()
         elif name == "timescale":
             self.timescale = float(arg)
+        elif name == "set":
+            var, _, value = rest.partition(" ")
+            self.cvars[var] = value.strip('"')
         elif name == "demovideo" and state["demo"] and not self.video:
             parts = rest.split()
             self.video = {"name": parts[0], "start": state["time"],
                           "end": parse_time(parts[1]) if len(parts) > 1 else None,
                           "only": state["only"], "player": state["player"],
-                          "filter": json.loads(json.dumps(self.filter)), "cvars": self.cvars}
+                          "filter": json.loads(json.dumps(self.filter)), "cvars": dict(self.cvars)}
             state["recording"] = parts[0]
         elif name == "stopvideo":
             self.finish_video()

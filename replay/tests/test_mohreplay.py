@@ -11,6 +11,7 @@ MOHREPLAY_TEST_EXE), without a window; MOHREPLAY_TEST_DEMO picks the demo.
 Without PySide6, it exits with 77, which ctest takes as skipped.
 """
 
+import csv
 import json
 import os
 import shutil
@@ -340,6 +341,40 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(summary, kf(["phil"])), (0, {}))
         self.assertEqual(mohreplay.filter_kills(summary, kf(victims=["bob"])), (2, {"t-": ["t-", 1]}))
         self.assertEqual(mohreplay.filter_kills(summary, kf(shown=True, weapons=["rifle"])), (2, {"t-": ["t-", 2]}))
+
+    def test_numbered_clips(self):
+        """The game numbers each stretch a clip plays, counting on through the
+        video, from the number it's given."""
+        clips = [mohreplay.only_clip("a", "kills", "t-", [(0, 5000), (9000, 15000)]),
+                 mohreplay.range_clip("b", 1000, 2000), mohreplay.only_clip("c")]
+        mohreplay.numbered(clips, True)
+        self.assertEqual([clip["number"] for clip in clips], [1, 3, 4])
+        self.assertEqual([clip["commands"][0] for clip in clips],
+                         ["set cl_demoClipNumbers 1", "set cl_demoClipNumbers 3", "set cl_demoClipNumbers 4"])
+        clip = mohreplay.numbered([mohreplay.range_clip("b", 1000, 2000)], False)[0]
+        self.assertEqual(clip["commands"][0], "set cl_demoClipNumbers 0")
+
+    def test_clip_rows(self):
+        """The list of a video's clips: a row for each frag, the clip's
+        number, start in the video and the demo, and the frag."""
+        count, spans = mohreplay.demoonly_plan(DEMO, "kills", "t-", 4000, 2000)
+        frags = mohreplay.clip_frags(DEMO, spans, "kills", "t-")
+        self.assertEqual(sum(len(f) for f in frags), count)
+        clip = mohreplay.only_clip("first", "kills", "t-", spans)
+        clip["frags"] = frags
+        other = mohreplay.range_clip("other", 60000, 70000)
+        rows = mohreplay.clip_rows(mohreplay.numbered([clip, other], True))
+        self.assertEqual(rows[0][:3], [1, "0:00", "first"])
+        killed = [k for k in DEMO["kills"] if k["time"] == spans[0][0] + 4000][0]
+        self.assertEqual(rows[0][3:], [mohreplay.clock(killed["time"]), "t-",
+                                       mohreplay.without_colors(killed["victimName"]),
+                                       mohreplay.WEAPONS[mohreplay.weapon_of(killed)]])
+        self.assertEqual([row[0] for row in rows[:-1]], sorted(row[0] for row in rows[:-1]))
+        self.assertEqual(len(rows) - 1, count)
+        # a clip without frags has a row, after the time of those before
+        self.assertEqual(rows[-1], [len(spans) + 1, mohreplay.clock(mohreplay.length(spans)), "other", "1:00",
+                                    "", "", ""])
+        self.assertEqual(mohreplay.without_colors("^1Phil^^7 x"), "Phil^ x")
 
     def test_search_demo(self):
         """Words separated by spaces must all be in a demo, commas separate
@@ -1790,6 +1825,45 @@ class TestRecording(FakeGameCase):
                          ["first each.mp4", "followed each.mp4"])
         self.assertEqual(self.video("followed each.mp4")["only"], "kills")
         self.assertEqual(self.video("followed each.mp4")["player"], "t-")
+
+    def test_numbered_clips(self):
+        self.add_demo("followed", followed_demo())
+        window = self.window()
+        TestLibrary.indexed(self, window, ("first", "followed"))
+        for name in ("first", "followed"):
+            window.demo_items[name].setSelected(True)
+
+        def setup(dialog):
+            dialog.choices["recorderkills"].setChecked(True)
+            dialog.join.setChecked(True)
+            dialog.numbers.setChecked(True)
+            dialog.pattern.setText("{demo} numbered")
+        self.record(window, setup, window.record_demos)
+        job, = self.done(window)
+        self.assertEqual(job["status"], "done", job["item"].toolTip(2))
+        self.assertEqual(self.settings.value("rec/numbers"), "true")
+        # each demo's first clip has the number after the last of the one before
+        parts = self.video("2 demos numbered.mp4")["joined"]
+        first, second = (len(clip["spans"]) for clip in job["clips"])
+        self.assertEqual([p["cvars"]["cl_demoClipNumbers"] for p in parts], ["1", str(1 + first)])
+        with open(os.path.join(self.videos, "2 demos numbered.csv"), encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        self.assertEqual(rows[0], mohreplay.CLIP_LIST)
+        self.assertEqual(sorted({int(row[0]) for row in rows[1:]}), list(range(1, first + second + 1)))
+        self.assertEqual({row[2] for row in rows[1:]}, {"first", "followed"})
+        self.assertEqual({row[4] for row in rows[1:]}, {"t-"})
+        self.assertEqual(len(rows) - 1, 6)
+
+        # not numbered: no number drawn, no list
+        def plain(dialog):
+            setup(dialog)
+            dialog.numbers.setChecked(False)
+            dialog.pattern.setText("{demo} plain")
+        self.record(window, plain, window.record_demos)
+        self.done(window, 2)
+        self.assertEqual([p["cvars"]["cl_demoClipNumbers"] for p in self.video("2 demos plain.mp4")["joined"]],
+                         ["0", "0"])
+        self.assertFalse(os.path.exists(os.path.join(self.videos, "2 demos plain.csv")))
 
     def test_whole_demos_one_video_each(self):
         # short, to record quickly, so listed anyway
