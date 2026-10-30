@@ -58,6 +58,7 @@ extern const UColor UGreenChatMessageColor;
 const char *CvarGetForUI(const char *name, const char *defval);
 void        UI_ClearState(void);
 void        UI_ClearMessages(void);
+void        UI_DrawClipNumber(void);
 void        CL_BeginRegistration(void);
 void        CL_EndRegistration(void);
 float       UI_GetObjectivesTop(void);

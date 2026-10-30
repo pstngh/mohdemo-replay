@@ -67,6 +67,7 @@ cvar_t	*cl_demoFiles;
 cvar_t	*cl_demoKillBefore;
 cvar_t	*cl_demoKillAfter;
 cvar_t	*cl_demoMultiKill;
+cvar_t	*cl_demoClipNumbers;
 cvar_t	*cl_csAppend;
 
 cvar_t	*cl_shownet;
@@ -1557,11 +1558,13 @@ CL_DemoNextStretch
 
 The first stretch demoonly plays that ends after time, with the ones that
 it joins, from the start of the demo: from within a joined stretch, it
-plays on to the next
+plays on to the next. number, if not NULL, is how many stretches come
+before it
 ====================
 */
-static qboolean CL_DemoNextStretch( int time, int *start, int *end ) {
+static qboolean CL_DemoNextStretch( int time, int *start, int *end, int *number ) {
 	qboolean	found = qfalse;
+	int			stretches = 0;
 	int			s, e;
 	int			i;
 
@@ -1579,10 +1582,39 @@ static qboolean CL_DemoNextStretch( int time, int *start, int *end ) {
 		}
 		*start = Q_max( 0, s );
 		*end = e;
+		if ( found ) {
+			stretches++;
+		}
 		found = qtrue;
 	}
 
+	if ( number ) {
+		*number = stretches;
+	}
 	return found && *end > time;
+}
+
+/*
+====================
+CL_DemoClipNumber
+
+The number of the clip playing, from cl_demoClipNumbers, 0 for none: the
+stretch demoonly plays, or all of the demo
+====================
+*/
+int CL_DemoClipNumber( void ) {
+	int		start, end, before;
+
+	if ( cl_demoClipNumbers->integer <= 0 || !clc.demoplaying || clc.state != CA_ACTIVE ) {
+		return 0;
+	}
+	if ( cl_demoOnly == DEMOONLY_ALL ) {
+		return cl_demoClipNumbers->integer;
+	}
+	if ( !CL_DemoNextStretch( CL_DemoTime(), &start, &end, &before ) ) {
+		return 0;
+	}
+	return cl_demoClipNumbers->integer + before;
 }
 
 /*
@@ -1601,7 +1633,7 @@ static void CL_RunDemoOnly( void ) {
 	}
 
 	time = CL_DemoTime();
-	if ( !CL_DemoNextStretch( time, &start, &end ) ) {
+	if ( !CL_DemoNextStretch( time, &start, &end, NULL ) ) {
 		Com_Printf( "Nothing more to play, paused\n" );
 		cl_demoOnly = DEMOONLY_ALL;
 		Cvar_Set( "cl_freezeDemo", "1" );
@@ -1657,7 +1689,7 @@ static void CL_DemoOnly_f( void ) {
 	cl_demoOnly = only;
 	Q_strncpyz( cl_demoOnlyPlayer, player, sizeof( cl_demoOnlyPlayer ) );
 
-	if ( !CL_DemoNextStretch( CL_DemoTime(), &start, &end ) ) {
+	if ( !CL_DemoNextStretch( CL_DemoTime(), &start, &end, NULL ) ) {
 		Com_Printf( "Nothing more to play\n" );
 		cl_demoOnly = DEMOONLY_ALL;
 		return;
@@ -4885,6 +4917,9 @@ void CL_Init( void ) {
 	cl_demoKillAfter = Cvar_Get ("cl_demoKillAfter", "2", CVAR_ARCHIVE );
 	//  Seconds at most between a player's kills in a multi-kill
 	cl_demoMultiKill = Cvar_Get ("cl_demoMultiKill", "3", CVAR_ARCHIVE );
+	//  The number drawn on the first clip demoonly plays, the next ones
+	//  counting on, or on all of the demo without demoonly; 0 for none
+	cl_demoClipNumbers = Cvar_Get ("cl_demoClipNumbers", "0", CVAR_TEMP );
 	// changed configstrings appended to the gamestate (CL_ConfigstringModified)
 	cl_csAppend = Cvar_Get ("cl_csAppend", "1", 0 );
 	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP );

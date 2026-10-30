@@ -4353,6 +4353,48 @@ void UI_LoadInventory_f(void)
 
 /*
 ====================
+UI_DrawClipNumber
+
+Added in OPM
+The number of the clip of the demo playing (cl_demoClipNumbers), at the
+bottom of the screen, between the health and the ammo and above the
+weapons, over all the rest
+====================
+*/
+void UI_DrawClipNumber(void)
+{
+    static UIFont *font;
+    int            number;
+    vec2_t         scale;
+
+    number = CL_DemoClipNumber();
+    if (!number || clc.demoSeeking) {
+        return;
+    }
+
+    if (!font) {
+        font = new UIFont("facfont-20");
+    }
+
+    // the whole screen, as the widgets drawn before leave theirs
+    re.Set2DWindow(0, 0, uid.vidWidth, uid.vidHeight, 0, uid.vidWidth, uid.vidHeight, 0, -1, 1);
+    re.Scissor(0, 0, uid.vidWidth, uid.vidHeight);
+    // twice the size of the HUD's
+    scale[0] = uid.scaleRes[0] * 2;
+    scale[1] = uid.scaleRes[1] * 2;
+    font->setColor(UWhite);
+    font->PrintOutlinedJustified(
+        UIRect2D(0, 0, uid.vidWidth, uid.vidHeight - 44.0f * uid.scaleRes[1]),
+        FONT_JUSTHORZ_CENTER,
+        FONT_JUSTVERT_BOTTOM,
+        va("#%d", number),
+        UBlack,
+        scale
+    );
+}
+
+/*
+====================
 UI_ClearMessages
 
 Added in OPM

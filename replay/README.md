@@ -174,7 +174,9 @@ those from before it.
 time, `stopvideo`, the end of the demo or the end of what `demoonly` plays.
 Seeks and pauses aren't recorded, so `demoseek 12:30; demovideo clip 12:45`
 records exactly 15 seconds, and `demoonly kills t-; demovideo frags` all of
-a player's kills one after the other.
+a player's kills one after the other. `cl_demoClipNumbers <n>` draws a
+number on what plays: n on the first clip `demoonly` plays and the next
+ones counting on, or n on all of the demo; 0 (the default) draws none.
 
 The game steps exactly 1/`cl_aviFrameRate` of a second per frame, so videos
 are smooth whatever the screen does; it records faster than real time when

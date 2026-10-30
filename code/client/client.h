@@ -793,6 +793,8 @@ void CL_WriteAVIVideoFrame( const byte *imageBuffer, int size );
 void CL_WriteAVIAudioFrame( const byte *pcmBuffer, int size );
 qboolean CL_CloseAVI( void );
 qboolean CL_VideoRecording( void );
+// Added in OPM
+int CL_DemoClipNumber( void );
 
 //
 // cl_consolecmds.cpp

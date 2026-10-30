@@ -486,6 +486,8 @@ void UpdateStereoSide( stereoFrame_t s ) {
 		SCR_DrawCinematic();
 	}
 	UI_Update();
+	// Added in OPM
+	UI_DrawClipNumber();
 }
 
 /*
