@@ -433,21 +433,34 @@ Added in OPM
 Whether a demo doesn't show this message, of those that fill the message
 box: the yellow ones, which tell what the player picked up (ammo, health,
 weapons, in any language; also a server's "( 3 ) players are active and
-clean"), and "<player> has entered the battle", which the server tells
-everyone each time a player enters, as at every round
+clean"), and the server's own about players coming and going, like
+"<player> has entered the battle", which it tells everyone each time a
+player enters, as at every round
 ===================
 */
 static qboolean CL_DemoHidesPrint( const char *text ) {
-	static const char entered[] = " has entered the battle\n";
-	size_t len;
+	static const char *const comings[] = {
+		" has entered the battle\n", " has left the battle\n", " has joined the Allies\n",
+		" has joined the Axis\n", " is preparing for deployment\n"
+	};
+	size_t len, endLen;
+	int i;
 
 	if ( text[0] == HUD_MESSAGE_YELLOW[0] ) {
 		return qtrue;
 	}
+	if ( text[0] != HUD_MESSAGE_WHITE[0] ) {
+		return qfalse;
+	}
 
 	len = strlen( text );
-	return text[0] == HUD_MESSAGE_WHITE[0] && len >= sizeof( entered ) - 1
-		&& !strcmp( text + len - ( sizeof( entered ) - 1 ), entered );
+	for ( i = 0; i < (int)ARRAY_LEN( comings ); i++ ) {
+		endLen = strlen( comings[i] );
+		if ( len > endLen && !strcmp( text + len - endLen, comings[i] ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
 }
 
 /*

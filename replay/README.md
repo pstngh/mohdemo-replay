@@ -158,8 +158,10 @@ put the camera in that player's head, where their own arms and gun are in
 the way. `cg_followcamera 1` (the default) puts it behind them, where stock
 servers do; `cg_followcamera 0` shows it as recorded.
 
-Demos don't show "<player> has entered the battle", which the server tells
-everyone each time a player enters, as at every round, nor what the player
+Demos don't show the server's messages about players coming and going
+("<player> has entered the battle", which it tells everyone each time a
+player enters, as at every round, has left the battle, has joined the
+Allies or the Axis, is preparing for deployment), nor what the player
 picks up (ammo, health and weapons, the yellow messages): they fill the
 message box.
 
