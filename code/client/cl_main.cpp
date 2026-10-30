@@ -731,8 +731,11 @@ static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
 // demofilter and kept from one demo to the next: by players whose names
 // have one of killers in them, or by whoever is shown, of players whose
 // names have one of victims, made with one of weapons; anyone's, with
-// anything, when empty
+// anything, when empty. With great, not the sniper kills seen with the
+// scope on for over greatScope msec and the killer at greatSpeed or slower.
 #define DEMOFILTER_NAMES	16
+#define DEMOFILTER_GREAT_SCOPE	1000
+#define DEMOFILTER_GREAT_SPEED	30
 
 typedef struct {
 	qboolean	shown;
@@ -743,6 +746,9 @@ typedef struct {
 	int			weapons;	// 1 << demoWeapon_t of each, 0 for any
 	int			numLevels;
 	char		levels[DEMOFILTER_NAMES][MAX_NAME_LENGTH];	// parts of level names, any case
+	qboolean	great;
+	int			greatScope;
+	int			greatSpeed;
 } demoFilter_t;
 
 static demoFilter_t	cl_demoFilter;
@@ -1218,7 +1224,7 @@ static const char *CL_DemoLevelOf( const demoEvent_t *ev ) {
 CL_DemoFilterPasses
 
 Whether kill event ev has one of the filter's victims and weapons, in one
-of its levels
+of its levels, and is great if only those are
 ====================
 */
 static qboolean CL_DemoFilterPasses( const demoEvent_t *ev ) {
@@ -1226,6 +1232,10 @@ static qboolean CL_DemoFilterPasses( const demoEvent_t *ev ) {
 	int			i;
 
 	if ( cl_demoFilter.weapons && !( cl_demoFilter.weapons & ( 1 << ev->weapon ) ) ) {
+		return qfalse;
+	}
+	if ( cl_demoFilter.great && ev->weapon == DEMOWEAPON_SNIPER && ev->scope > cl_demoFilter.greatScope
+		&& ev->speed <= cl_demoFilter.greatSpeed ) {
 		return qfalse;
 	}
 	if ( cl_demoFilter.numVictims && !CL_DemoNamesHave( ev->otherName, cl_demoFilter.victims, cl_demoFilter.numVictims ) ) {
@@ -1844,14 +1854,17 @@ static void CL_DemoPrintFilterNames( const char *what, char names[][MAX_NAME_LEN
 ====================
 CL_DemoFilter_f
 
-demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name>]
+demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed>]]]
 
 Which kills demoonly kills, demonextkill and demoprevkill go to without a
 player given: by players whose names have one of the killers in them, while
 they're shown, or by whoever is shown, of players whose names have one of
 the victims, with one of the weapons, in levels whose names have one of the
-levels in them (any case: "obj/" for the objective maps). Each adds to it,
-but clear; without arguments, it tells what it is.
+levels in them (any case: "obj/" for the objective maps), and great ones
+only: not the sniper kills their killer's view shows made with the scope on
+for over msec (1000) at speed (30) or slower, the slow scoped shots of
+someone standing still, against no-scopes, quick scopes and shots on the
+move. Each adds to it, but clear; without arguments, it tells what it is.
 ====================
 */
 static void CL_DemoFilter_f( void ) {
@@ -1878,6 +1891,10 @@ static void CL_DemoFilter_f( void ) {
 			CL_DemoPrintFilterNames( "Levels:", cl_demoFilter.levels, cl_demoFilter.numLevels );
 		} else {
 			Com_Printf( "Levels: any\n" );
+		}
+		if ( cl_demoFilter.great ) {
+			Com_Printf( "Great only: not the sniper kills seen scoped for over %d msec at a speed of %d or less\n",
+				cl_demoFilter.greatScope, cl_demoFilter.greatSpeed );
 		}
 		return;
 	}
@@ -1906,8 +1923,12 @@ static void CL_DemoFilter_f( void ) {
 		cl_demoFilter.weapons |= weapons;
 	} else if ( !Q_stricmp( what, "level" ) && Cmd_Argc() > 2 ) {
 		CL_DemoAddFilterName( cl_demoFilter.levels, &cl_demoFilter.numLevels, Cmd_ArgsFrom( 2 ) );
+	} else if ( !Q_stricmp( what, "great" ) && Cmd_Argc() <= 4 ) {
+		cl_demoFilter.great = qtrue;
+		cl_demoFilter.greatScope = Cmd_Argc() > 2 ? atoi( Cmd_Argv( 2 ) ) : DEMOFILTER_GREAT_SCOPE;
+		cl_demoFilter.greatSpeed = Cmd_Argc() > 3 ? atoi( Cmd_Argv( 3 ) ) : DEMOFILTER_GREAT_SPEED;
 	} else {
-		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name>]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, and level obj/ keeps the objective maps'\n" );
+		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed>]]]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower\n" );
 	}
 }
 
