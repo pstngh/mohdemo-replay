@@ -734,11 +734,13 @@ static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
 // anything, when empty. With great, not the sniper kills seen with the
 // scope on for over greatScope msec and the killer at greatSpeed or slower,
 // but those of a streak: with another kill of their killer at most
-// greatStreak msec before or after.
+// greatStreak msec before or after. Nor the kills of victims who had given
+// no input for over greatIdle msec, AFK, which don't make streaks either.
 #define DEMOFILTER_NAMES	16
 #define DEMOFILTER_GREAT_SCOPE	1000
 #define DEMOFILTER_GREAT_SPEED	30
 #define DEMOFILTER_GREAT_STREAK	5000
+#define DEMOFILTER_GREAT_IDLE	5000
 
 typedef struct {
 	qboolean	shown;
@@ -753,6 +755,7 @@ typedef struct {
 	int			greatScope;
 	int			greatSpeed;
 	int			greatStreak;
+	int			greatIdle;
 } demoFilter_t;
 
 static demoFilter_t	cl_demoFilter;
@@ -1223,7 +1226,7 @@ static const char *CL_DemoLevelOf( const demoEvent_t *ev ) {
 	return "";
 }
 
-static qboolean CL_DemoInMultiKill( int i, int gap, qboolean shown );
+static qboolean CL_DemoInMultiKill( int i, int gap, int idle, qboolean shown );
 
 /*
 ====================
@@ -1241,8 +1244,12 @@ static qboolean CL_DemoFilterPasses( int i ) {
 	if ( cl_demoFilter.weapons && !( cl_demoFilter.weapons & ( 1 << ev->weapon ) ) ) {
 		return qfalse;
 	}
+	if ( cl_demoFilter.great && ev->idle > cl_demoFilter.greatIdle ) {
+		return qfalse;
+	}
 	if ( cl_demoFilter.great && ev->weapon == DEMOWEAPON_SNIPER && ev->scope > cl_demoFilter.greatScope
-		&& ev->speed <= cl_demoFilter.greatSpeed && !CL_DemoInMultiKill( i, cl_demoFilter.greatStreak, qfalse ) ) {
+		&& ev->speed <= cl_demoFilter.greatSpeed
+		&& !CL_DemoInMultiKill( i, cl_demoFilter.greatStreak, cl_demoFilter.greatIdle, qfalse ) ) {
 		return qfalse;
 	}
 	if ( cl_demoFilter.numVictims && !CL_DemoNamesHave( ev->otherName, cl_demoFilter.victims, cl_demoFilter.numVictims ) ) {
@@ -1416,10 +1423,11 @@ static qboolean CL_DemoIsKill( int i ) {
 CL_DemoInMultiKill
 
 Whether kill event i is part of a multi-kill: its killer killed someone
-else at most gap msec before or after it, also while shown if shown is set
+else at most gap msec before or after it, also while shown if shown is set,
+and someone who had given input within idle msec if idle isn't negative
 ====================
 */
-static qboolean CL_DemoInMultiKill( int i, int gap, qboolean shown ) {
+static qboolean CL_DemoInMultiKill( int i, int gap, int idle, qboolean shown ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
 	const demoEvent_t	*other;
 	int					from, to;
@@ -1432,14 +1440,14 @@ static qboolean CL_DemoInMultiKill( int i, int gap, qboolean shown ) {
 	// the events go forward in time; team kills don't count
 	for ( j = i - 1; j >= 0 && ev->time - cl_demoIndex.events[j].time <= gap; j-- ) {
 		other = &cl_demoIndex.events[j];
-		if ( CL_DemoIsKill( j ) && CL_DemoPlayerIs( other->name, ev->name )
+		if ( CL_DemoIsKill( j ) && CL_DemoPlayerIs( other->name, ev->name ) && ( idle < 0 || other->idle <= idle )
 			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
 	}
 	for ( j = i + 1; j < cl_demoIndex.numEvents && cl_demoIndex.events[j].time - ev->time <= gap; j++ ) {
 		other = &cl_demoIndex.events[j];
-		if ( CL_DemoIsKill( j ) && CL_DemoPlayerIs( other->name, ev->name )
+		if ( CL_DemoIsKill( j ) && CL_DemoPlayerIs( other->name, ev->name ) && ( idle < 0 || other->idle <= idle )
 			&& ( !shown || CL_DemoKillShown( j, &from, &to ) ) ) {
 			return qtrue;
 		}
@@ -1509,7 +1517,7 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 			return qfalse;
 		}
 	} else if ( !CL_DemoIsKill( i ) || !CL_DemoKillerIs( ev, cl_demoOnlyPlayer, whoever ) || !CL_DemoFilterPasses( i )
-		|| ( multi && !CL_DemoInMultiKill( i, Q_max( 0, (int)( cl_demoMultiKill->value * 1000 ) ), shown ) ) ) {
+		|| ( multi && !CL_DemoInMultiKill( i, Q_max( 0, (int)( cl_demoMultiKill->value * 1000 ) ), -1, shown ) ) ) {
 		return qfalse;
 	}
 
@@ -1859,7 +1867,7 @@ static void CL_DemoPrintFilterNames( const char *what, char names[][MAX_NAME_LEN
 ====================
 CL_DemoFilter_f
 
-demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec>]]]]
+demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]]]
 
 Which kills demoonly kills, demonextkill and demoprevkill go to without a
 player given: by players whose names have one of the killers in them, while
@@ -1870,8 +1878,9 @@ only: not the sniper kills their killer's view shows made with the scope on
 for over msec (1000) at speed (30) or slower, the slow scoped shots of
 someone standing still, against no-scopes, quick scopes and shots on the
 move, but those of a streak, with another kill of their killer at most
-streak msec (5000) before or after. Each adds to it, but clear; without
-arguments, it tells what it is.
+streak msec (5000) before or after, and not the kills of victims who had
+given no input for over idle msec (5000), AFK, which make no streak either.
+Each adds to it, but clear; without arguments, it tells what it is.
 ====================
 */
 static void CL_DemoFilter_f( void ) {
@@ -1901,8 +1910,9 @@ static void CL_DemoFilter_f( void ) {
 		}
 		if ( cl_demoFilter.great ) {
 			Com_Printf( "Great only: not the sniper kills seen scoped for over %d msec at a speed of %d or less, "
-				"but those with another kill of their killer within %d msec\n",
-				cl_demoFilter.greatScope, cl_demoFilter.greatSpeed, cl_demoFilter.greatStreak );
+				"but those with another kill of their killer within %d msec, nor the kills of victims idle for "
+				"over %d msec\n",
+				cl_demoFilter.greatScope, cl_demoFilter.greatSpeed, cl_demoFilter.greatStreak, cl_demoFilter.greatIdle );
 		}
 		return;
 	}
@@ -1931,13 +1941,14 @@ static void CL_DemoFilter_f( void ) {
 		cl_demoFilter.weapons |= weapons;
 	} else if ( !Q_stricmp( what, "level" ) && Cmd_Argc() > 2 ) {
 		CL_DemoAddFilterName( cl_demoFilter.levels, &cl_demoFilter.numLevels, Cmd_ArgsFrom( 2 ) );
-	} else if ( !Q_stricmp( what, "great" ) && Cmd_Argc() <= 5 ) {
+	} else if ( !Q_stricmp( what, "great" ) && Cmd_Argc() <= 6 ) {
 		cl_demoFilter.great = qtrue;
 		cl_demoFilter.greatScope = Cmd_Argc() > 2 ? atoi( Cmd_Argv( 2 ) ) : DEMOFILTER_GREAT_SCOPE;
 		cl_demoFilter.greatSpeed = Cmd_Argc() > 3 ? atoi( Cmd_Argv( 3 ) ) : DEMOFILTER_GREAT_SPEED;
 		cl_demoFilter.greatStreak = Cmd_Argc() > 4 ? atoi( Cmd_Argv( 4 ) ) : DEMOFILTER_GREAT_STREAK;
+		cl_demoFilter.greatIdle = Cmd_Argc() > 5 ? atoi( Cmd_Argv( 5 ) ) : DEMOFILTER_GREAT_IDLE;
 	} else {
-		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec>]]]]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000)\n" );
+		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]]]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000), and the kills of victims idle for over idle msec (5000)\n" );
 	}
 }
 
