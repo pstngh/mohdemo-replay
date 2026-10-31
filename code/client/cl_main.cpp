@@ -736,6 +736,8 @@ static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
 // but those of a streak: with another kill of their killer at most
 // greatStreak msec before or after. Nor the kills of victims who had given
 // no input for over greatIdle msec, AFK, which don't make streaks either.
+// With specced, only the kills of the players the recorder followed as a
+// spectator, while followed.
 #define DEMOFILTER_NAMES	16
 #define DEMOFILTER_GREAT_SCOPE	1000
 #define DEMOFILTER_GREAT_SPEED	30
@@ -756,6 +758,7 @@ typedef struct {
 	int			greatSpeed;
 	int			greatStreak;
 	int			greatIdle;
+	qboolean	specced;
 } demoFilter_t;
 
 static demoFilter_t	cl_demoFilter;
@@ -1185,11 +1188,12 @@ static qboolean CL_DemoNamesHave( const char *playerName, char parts[][MAX_NAME_
 CL_DemoKillersShown
 
 Whether the kills gone to are only those made while their killer is shown:
-those of a player, given or the filter's, and those of whoever is shown
+those of a player, given or the filter's, those of whoever is shown and
+those of the players followed
 ====================
 */
 static qboolean CL_DemoKillersShown( const char *player, qboolean shown ) {
-	return player[0] || shown || cl_demoFilter.shown || cl_demoFilter.numKillers;
+	return player[0] || shown || cl_demoFilter.shown || cl_demoFilter.numKillers || cl_demoFilter.specced;
 }
 
 /*
@@ -1227,22 +1231,31 @@ static const char *CL_DemoLevelOf( const demoEvent_t *ev ) {
 }
 
 static qboolean CL_DemoInMultiKill( int i, int gap, int idle, qboolean shown );
+static const demoEvent_t *CL_DemoWatchFor( int i );
 
 /*
 ====================
 CL_DemoFilterPasses
 
 Whether kill event i has one of the filter's victims and weapons, in one of
-its levels, and is great if only those are
+its levels, is great if only those are, and made while the recorder follows
+someone if only theirs are
 ====================
 */
 static qboolean CL_DemoFilterPasses( int i ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	const demoEvent_t	*watch;
 	const char			*level;
 	int					j;
 
 	if ( cl_demoFilter.weapons && !( cl_demoFilter.weapons & ( 1 << ev->weapon ) ) ) {
 		return qfalse;
+	}
+	if ( cl_demoFilter.specced ) {
+		watch = CL_DemoWatchFor( i );
+		if ( !watch || !watch->followed ) {
+			return qfalse;
+		}
 	}
 	if ( cl_demoFilter.great && ev->idle > cl_demoFilter.greatIdle ) {
 		return qfalse;
@@ -1867,7 +1880,7 @@ static void CL_DemoPrintFilterNames( const char *what, char names[][MAX_NAME_LEN
 ====================
 CL_DemoFilter_f
 
-demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]]]
+demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced]
 
 Which kills demoonly kills, demonextkill and demoprevkill go to without a
 player given: by players whose names have one of the killers in them, while
@@ -1880,7 +1893,8 @@ someone standing still, against no-scopes, quick scopes and shots on the
 move, but those of a streak, with another kill of their killer at most
 streak msec (5000) before or after, and not the kills of victims who had
 given no input for over idle msec (5000), AFK, which make no streak either.
-Each adds to it, but clear; without arguments, it tells what it is.
+With specced, only the kills of the players the recorder followed as a
+spectator, while followed. Each adds to it, but clear; without arguments, it tells what it is.
 ====================
 */
 static void CL_DemoFilter_f( void ) {
@@ -1913,6 +1927,9 @@ static void CL_DemoFilter_f( void ) {
 				"but those with another kill of their killer within %d msec, nor the kills of victims idle for "
 				"over %d msec\n",
 				cl_demoFilter.greatScope, cl_demoFilter.greatSpeed, cl_demoFilter.greatStreak, cl_demoFilter.greatIdle );
+		}
+		if ( cl_demoFilter.specced ) {
+			Com_Printf( "Specced only: the kills of the players followed by the recorder\n" );
 		}
 		return;
 	}
@@ -1947,8 +1964,10 @@ static void CL_DemoFilter_f( void ) {
 		cl_demoFilter.greatSpeed = Cmd_Argc() > 3 ? atoi( Cmd_Argv( 3 ) ) : DEMOFILTER_GREAT_SPEED;
 		cl_demoFilter.greatStreak = Cmd_Argc() > 4 ? atoi( Cmd_Argv( 4 ) ) : DEMOFILTER_GREAT_STREAK;
 		cl_demoFilter.greatIdle = Cmd_Argc() > 5 ? atoi( Cmd_Argv( 5 ) ) : DEMOFILTER_GREAT_IDLE;
+	} else if ( !Q_stricmp( what, "specced" ) && Cmd_Argc() == 2 ) {
+		cl_demoFilter.specced = qtrue;
 	} else {
-		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]]]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000), and the kills of victims idle for over idle msec (5000)\n" );
+		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000), and the kills of victims idle for over idle msec (5000), and specced keeps only the kills of the players the recorder followed\n" );
 	}
 }
 
