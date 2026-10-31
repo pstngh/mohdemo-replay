@@ -224,6 +224,18 @@ def kill_streaks(index):
     return index
 
 
+def kill_specced(index):
+    """Tells each kill of index whether its killer is the player the
+    recorder follows as a spectator then, "specced", as the engine looks
+    them up (demofilter specced). Returns index."""
+    at = watching(index)
+    for kill in index.get("kills", []):
+        watch = at(kill["time"]) if kill["killerName"] else None
+        kill["specced"] = bool(watch and watch[0].get("followed")
+                               and is_shown(watch[0], kill["killer"], kill["killerName"]))
+    return index
+
+
 def slow_snipe(kill):
     """Whether kill is one Great frags leaves out: a sniper frag its
     index saw from the fragger's view, made with the scope on for over
@@ -277,14 +289,15 @@ class KillFilter:
     whoever is shown (shown), of players whose names have one of victims,
     made with one of weapons (keys of WEAPONS), on the objective maps only if
     obj, great ones only if great (not slow snipes nor frags of AFK
-    players). Names are parts of
-    names as the search takes its words; none is anyone, no weapons any
-    weapon. The game is told it with demofilter."""
+    players), those of the players the recorder spectates only if specced.
+    Names are parts of names as the search takes its words; none is anyone,
+    no weapons any weapon. The game is told it with demofilter."""
 
-    def __init__(self, killers=(), victims=(), weapons=(), shown=False, obj=False, great=False):
+    def __init__(self, killers=(), victims=(), weapons=(), shown=False, obj=False, great=False, specced=False):
         self.shown = bool(shown)
         self.obj = bool(obj)
         self.great = bool(great)
+        self.specced = bool(specced)
         # as given, for the game and the labels; whoever is shown, or names
         self.names = [] if shown else [n.strip() for n in killers if clean_name(n)]
         self.victim_names = [n.strip() for n in victims if clean_name(n)]
@@ -293,31 +306,38 @@ class KillFilter:
         self.weapons = [w for w in WEAPONS if w in weapons]
 
     def __bool__(self):
-        return bool(self.shown or self.killers or self.victims or self.weapons or self.obj or self.great)
+        return bool(self.shown or self.killers or self.victims or self.weapons or self.obj or self.great
+                    or self.specced)
 
     def by_shown(self):
         """Whether its kills are only those made while their killer is shown."""
-        return self.shown or bool(self.killers)
+        return self.shown or bool(self.killers) or self.specced
+
+    def of_shown(self):
+        """Whether its kills are those of whoever is shown, whoever the
+        killers: shown, or specced without killers."""
+        return self.shown or self.specced and not self.killers
 
     def has_killer(self, killer):
         """Whether a killer's clean name is one of its, anyone if whoever is
         shown."""
         return not self.killers or any(part in killer for part in self.killers)
 
-    def has(self, victim, weapon, level="", poor=False):
+    def has(self, victim, weapon, level="", poor=False, specced=False):
         """Whether a kill of a victim (clean name) made with weapon in a level
-        (lower case), poor (poor_frag) or not, is one of its, whoever the
-        killer."""
+        (lower case), poor (poor_frag) or not, specced (kill_specced) or not,
+        is one of its, whoever the killer."""
         return ((not self.weapons or weapon in self.weapons)
                 and (not self.victims or any(part in victim for part in self.victims))
-                and (not self.obj or OBJ_LEVELS in level) and not (self.great and poor))
+                and (not self.obj or OBJ_LEVELS in level) and not (self.great and poor)
+                and (specced or not self.specced))
 
     def keeps(self, kill, killer=True):
         """Whether kill, given its level (kill_levels), is one of its, whoever
         the killer unless killer."""
         return ((not killer or self.has_killer(clean_name(kill["killerName"])))
                 and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill), kill.get("level", ""),
-                             poor_frag(kill)))
+                             poor_frag(kill), kill.get("specced", False)))
 
     def commands(self):
         """The demofilter commands telling it to the game."""
@@ -326,7 +346,8 @@ class KillFilter:
                 + ["demofilter victim " + quoted(name) for name in self.victim_names]
                 + (["demofilter weapon " + " ".join(self.weapons)] if self.weapons else [])
                 + (["demofilter level " + OBJ_LEVELS] if self.obj else [])
-                + ([f"demofilter great {GREAT_SCOPE} {GREAT_SPEED} {GREAT_STREAK} {GREAT_IDLE}"] if self.great else []))
+                + ([f"demofilter great {GREAT_SCOPE} {GREAT_SPEED} {GREAT_STREAK} {GREAT_IDLE}"] if self.great else [])
+                + (["demofilter specced"] if self.specced else []))
 
     def words(self, killers=True):
         """What it keeps after "kills", the killers too if killers: " by
@@ -334,7 +355,8 @@ class KillFilter:
         text = " by " + or_list(self.names) if killers and self.names else ""
         text += " of " + or_list(self.victim_names) if self.victim_names else ""
         text += " with " + or_list(WEAPON_WORDS[w] for w in self.weapons) if self.weapons else ""
-        return text + (" on obj maps" if self.obj else "") + (", great ones" if self.great else "")
+        return (text + (" on obj maps" if self.obj else "") + (" while specced" if self.specced else "")
+                + (", great ones" if self.great else ""))
 
 
 def watching(index):
@@ -440,8 +462,8 @@ def summarize(index):
     players, {clean name: [name, kills]}, counting the kills made while
     they're shown, and its kills for the kill filter: [(killer, clean
     killer, clean victim, weapon, whether made while the killer is shown,
-    level, whether poor (poor_frag))]."""
-    kill_streaks(kill_levels(index))
+    level, whether poor (poor_frag), whether specced (kill_specced))]."""
+    kill_specced(kill_streaks(kill_levels(index)))
     players = {}
 
     def add(name, kills=0):
@@ -466,7 +488,8 @@ def summarize(index):
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
             "recorder": index.get("recorder", {}).get("name", ""), "players": players, "rules": rules,
             "kills": [(kill["killerName"], clean_name(kill["killerName"]), clean_name(kill.get("victimName", "")),
-                       weapon_of(kill), id(kill) in shown, kill["level"], poor_frag(kill)) for kill in kills]}
+                       weapon_of(kill), id(kill) in shown, kill["level"], poor_frag(kill), kill["specced"])
+                      for kill in kills]}
 
 
 def filter_kills(summary, kill_filter):
@@ -474,8 +497,9 @@ def filter_kills(summary, kill_filter):
     their killers, {clean name: [name, kills]}."""
     count, killers = 0, {}
     by_shown = kill_filter.by_shown()
-    for name, killer, victim, weapon, shown, level, poor in summary.get("kills", []):
-        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon, level, poor):
+    for name, killer, victim, weapon, shown, level, poor, specced in summary.get("kills", []):
+        if ((shown or not by_shown) and kill_filter.has_killer(killer)
+                and kill_filter.has(victim, weapon, level, poor, specced)):
             count += 1
             if name:
                 killers.setdefault(killer, [name, 0])[1] += 1
@@ -1499,7 +1523,7 @@ def planned_kills(index, only, player="", kill_filter=None):
     whether the player shown changing cuts joined clips (when they're
     someone's)."""
     kill_filter = kill_filter or KillFilter()
-    kill_streaks(kill_levels(index))
+    kill_specced(kill_streaks(kill_levels(index)))
     whoever = only.startswith("shown")
     if whoever or player or kill_filter.by_shown():
         kills = [(k, start, end) for k, start, end in shown_kills(index)
@@ -2014,6 +2038,10 @@ class Window(QMainWindow):
                               "the demo doesn't show from the fragger's view. Leaves out the frags of AFK players too, "
                               "who had given no input for over 5 s")
         self.great.toggled.connect(self.kill_filter_timer.start)
+        self.specced = QCheckBox("Specced frags")
+        self.specced.setToolTip("Only the frags of the players the recorder spectated, while they followed them, "
+                                "not the recorder's own")
+        self.specced.toggled.connect(self.kill_filter_timer.start)
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)
@@ -2022,13 +2050,14 @@ class Window(QMainWindow):
         row.addWidget(QLabel("Recorder"))
         row.addWidget(self.recorded_by, 1)
         row.addWidget(self.rules)
+        row.addWidget(self.obj)
         box.addLayout(row)
         row = QHBoxLayout()
         for label, widget, stretch in (("Fragger", self.killer, 3), ("Victim", self.victim, 2), ("Weapon", self.weapon, 0)):
             row.addWidget(QLabel(label))
             row.addWidget(widget, stretch)
-        row.addWidget(self.obj)
         row.addWidget(self.great)
+        row.addWidget(self.specced)
         box.addLayout(row)
         box.addWidget(self.demos)
 
@@ -2425,11 +2454,11 @@ class Window(QMainWindow):
         self.kill_filter_timer.start()
 
     def kill_filter(self):
-        """The kills chosen with Killer, Victim, Weapon, Obj maps only and
-        Great frags."""
+        """The kills chosen with Killer, Victim, Weapon, Obj maps only, Great
+        frags and Specced frags."""
         return KillFilter(self.killer.names(), self.victim.names(),
                           [key for key, action in self.weapon_actions.items() if action.isChecked()], self.killer.shown(),
-                          self.obj.isChecked(), self.great.isChecked())
+                          self.obj.isChecked(), self.great.isChecked(), self.specced.isChecked())
 
     def apply_kill_filter(self):
         """The demos with kills the filter keeps, and those of the demo
@@ -2515,7 +2544,7 @@ class Window(QMainWindow):
 
     def load_index(self, demo):
         index = self.game.read_json("demoindex.json")
-        self.index = kill_streaks(kill_levels(index)) if index and index.get("demo") == demo else None
+        self.index = kill_specced(kill_streaks(kill_levels(index))) if index and index.get("demo") == demo else None
         self.pending_demo = None
         self.statusBar().showMessage("Playing " + demo)
         self.fill_index()
@@ -2732,10 +2761,12 @@ class Window(QMainWindow):
         index = self.index or {}
         recorder = (index.get("recorder") or {}).get("name", "")
         keys = ["kills", "recorderkills", "shownkills", "watched"]
-        # not twice the same kills
-        if kill_filter.shown:
+        # not twice the same kills, nor the recorder's when only those of
+        # the players they spectate are
+        if kill_filter.of_shown():
             keys.remove("shownkills")
-        if not recorder or kill_filter.killers and all(part in clean_name(recorder) for part in kill_filter.killers):
+        if (not recorder or kill_filter.specced
+                or kill_filter.killers and all(part in clean_name(recorder) for part in kill_filter.killers)):
             keys.remove("recorderkills")
         texts = self.kill_texts(kill_filter)
         # whose kills each choice plays instead of the filter's killers
@@ -2829,9 +2860,11 @@ class Window(QMainWindow):
         indexes = {name: self.library.index(name) for name in names}
         # whose kills each choice plays in each demo instead of the filter's
         recorders = {name: (index.get("recorder") or {}).get("name", "") for name, index in indexes.items() if index}
-        # not twice the same kills
+        # not twice the same kills, nor the recorder's when only those of
+        # the players they spectate are
         keys = [key for key in ("kills", "recorderkills", "shownkills", "everything")
-                if key != "shownkills" or not kill_filter.shown]
+                if not (key == "shownkills" and kill_filter.of_shown()
+                        or key == "recorderkills" and kill_filter.specced)]
 
         def plans_for(before, after):
             """What each choice records of each demo with that lead-in and
