@@ -462,6 +462,49 @@ class TestFunctions(unittest.TestCase):
         clip = mohreplay.numbered([mohreplay.range_clip("b", 1000, 2000)], False)[0]
         self.assertEqual(clip["commands"][0], "set cl_demoClipNumbers 0")
 
+    def test_split_clips(self):
+        """A video in parts of at most a length, cut between the stretches
+        it plays, a stretch longer than a part in pieces."""
+        split = mohreplay.split_clips
+        kills = mohreplay.only_clip("a", "kills", "t-", [(0, 10000), (20000, 30000), (40000, 50000)])
+        kills["frags"] = [[{"time": 4000}], [{"time": 24000}], [{"time": 44000}]]
+        rest = mohreplay.only_clip("b")
+        # short enough: as they are
+        part, = split([kills, rest], 30000)
+        self.assertIs(part[0], kills)
+        self.assertIs(part[1], rest)
+        # the first two stretches, then the last, where the video stops
+        first, second = split([kills], 25000)
+        self.assertEqual(len(first), 1)
+        self.assertEqual((first[0]["spans"], first[0]["start"], first[0]["end"]), ([(0, 10000), (20000, 30000)], 0, 30000))
+        self.assertEqual(first[0]["commands"][-4:], ["demoseek 0.000", "demopause 0", "demoonly kills \"t-\"",
+                                                     "demovideo {part} 30.000"])
+        self.assertEqual(first[0]["frags"], [[{"time": 4000}], [{"time": 24000}]])
+        self.assertEqual((second[0]["spans"], second[0]["end"], second[0]["frags"]), ([(40000, 50000)], None,
+                                                                                      [[{"time": 44000}]]))
+        self.assertEqual(second[0]["commands"][-4:], ["demoseek 40.000", "demopause 0", "demoonly kills \"t-\"",
+                                                      "demovideo {part}"])
+        self.assertEqual(kills["spans"], [(0, 10000), (20000, 30000), (40000, 50000)])
+        # a stretch longer than a part starts one and goes on in the next
+        long = mohreplay.range_clip("c", 60000, 210000)
+        parts = split([mohreplay.range_clip("d", 0, 20000), long], 60000)
+        self.assertEqual([[(c["demo"], c["spans"], c.get("continued", False)) for c in part] for part in parts],
+                         [[("d", [(0, 20000)], False)], [("c", [(60000, 120000)], False)],
+                          [("c", [(120000, 180000)], True)], [("c", [(180000, 210000)], True)]])
+        self.assertEqual([part[0]["commands"][-1] for part in parts[1:]],
+                         ["demovideo {part} 120.000", "demovideo {part} 180.000", "demovideo {part} 210.000"])
+        self.assertEqual(parts[2][0]["commands"][1], "demoseek 120.000")
+        # numbered on from part to part, a stretch going on keeping its number
+        first = 1
+        for part in parts:
+            mohreplay.numbered(part, True, first)
+            first += sum(len(c["spans"]) - bool(c.get("continued")) for c in part)
+        self.assertEqual([part[0]["number"] for part in parts], [1, 2, 2, 2])
+        # the length of a clip not indexed isn't known: it stays whole, with
+        # the clip after it
+        part, = split([rest, mohreplay.range_clip("d", 0, 5000)], 10000)
+        self.assertIs(part[0], rest)
+
     def test_clip_rows(self):
         """The list of a video's clips: a row for each frag, the clip's
         number, start in the video and the demo, and the frag."""
@@ -1475,6 +1518,39 @@ class TestRecording(FakeGameCase):
         # named after the demo's file
         video = self.video("first 1-00.mp4")
         self.assertEqual((video["start"], video["end"]), (60000, 70000))
+
+    def test_record_in_parts(self):
+        """A video longer than the parts' length is recorded in parts, each
+        with its list of clips, the numbers going on."""
+        window = self.window()
+        self.playing(window)
+
+        def setup(dialog):
+            dialog.start.setText("1:00")
+            dialog.end.setText("3:30")
+            dialog.pattern.setText("{demo} {start}")
+            dialog.numbers.setChecked(True)
+            self.assertFalse(dialog.split_minutes.isEnabled())
+            dialog.split.setChecked(True)
+            dialog.split_minutes.setValue(1)
+        self.record(window, setup)
+        jobs = self.done(window, 3, timeout=40)
+        self.assertEqual([job["status"] for job in jobs], ["done"] * 3)
+        self.assertEqual([job["item"].text(1) for job in jobs],
+                         [f"first, 1:00 to 3:30 (part {n} of 3)" for n in (1, 2, 3)])
+        videos = [self.video(f"first 1-00 part {n}.mp4") for n in (1, 2, 3)]
+        self.assertEqual([(v["start"], v["end"]) for v in videos], [(60000, 120000), (120000, 180000), (180000, 210000)])
+        self.assertFalse(os.path.exists(os.path.join(self.videos, "first 1-00.mp4")))
+        # the stretch goes on: the same clip number in each part
+        for n, start in ((1, "1:00"), (3, "3:00")):
+            with open(os.path.join(self.videos, f"first 1-00 part {n}.csv"), encoding="utf-8") as f:
+                self.assertEqual(f.read().splitlines()[1], f"1,0:00,first,{start},,,")
+        self.assertEqual((self.settings.value("rec/split"), self.settings.value("rec/split_minutes")), ("true", "1"))
+        # not split when short enough
+        self.record(window, lambda dialog: (dialog.start.setText("4:00"), dialog.end.setText("4:30"),
+                                            dialog.pattern.setText("short")))
+        self.done(window, 4)
+        self.assertEqual(self.video("short.mp4")["end"], 270000)
 
     def change_video(self, dialog, change):
         """Changes the video settings with the Record dialog's Change…"""

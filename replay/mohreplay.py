@@ -32,9 +32,9 @@ from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QP
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider, QSplitter, QStyle,
-    QStyleOptionSlider, QTabWidget, QToolBar, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget, QWidgetAction,
+    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider,
+    QSpinBox, QSplitter, QStyle, QStyleOptionSlider, QTabWidget, QToolBar, QToolButton, QToolTip, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction,
 )
 
 PIPE = "replay_pipe"
@@ -1418,16 +1418,72 @@ def only_clip(demo, only="", player="", spans=None, kill_filter=None):
             "commands": [*told, f"demoseek {seconds(start)}", "demopause 0", command, "demovideo {part}"]}
 
 
-def numbered(clips, numbers):
+def numbered(clips, numbers, first=1):
     """The clips of a video, with the number the game draws on the first of
-    each (cl_demoClipNumbers), the next ones counting on through the video,
-    or none: a clip has one for each stretch it plays."""
-    number = 1
+    each (cl_demoClipNumbers), from first, the next ones counting on through
+    the video, or none: a clip has one for each stretch it plays, and one
+    going on with the stretch of the clip before (split_clips) keeps its
+    number."""
+    number = first
     for clip in clips:
+        number -= bool(clip.get("continued"))
         clip["number"] = number if numbers else 0
         clip["commands"] = [f"set cl_demoClipNumbers {clip['number']}", *clip["commands"]]
         number += len(clip["spans"] or [None])
     return clips
+
+
+def clip_part(clip, taken, last):
+    """clip playing only some of its stretches, taken: [(start, end, frags,
+    continued)], to its own end if last, else to the end of the last."""
+    start, end = taken[0][0], taken[-1][1]
+
+    def command(text):
+        if text.startswith("demoseek "):
+            return f"demoseek {seconds(start)}"
+        if text.startswith("demovideo ") and not last:
+            return f"demovideo {{part}} {seconds(end)}"
+        return text
+    part = dict(clip, start=start, end=clip["end"] if last else end, spans=[(s, e) for s, e, _, _ in taken],
+                commands=[command(text) for text in clip["commands"]], continued=taken[0][3])
+    if "frags" in clip:
+        part["frags"] = [frags for _, _, frags, _ in taken]
+    return part
+
+
+def split_clips(clips, most):
+    """The clips of a video in parts at most most msec long, cut between the
+    stretches they play: [[clip]], each clip playing some of the stretches
+    of one given. A stretch longer than a part, as all of a long demo, starts
+    a part and goes on in the next ones, their first clip "continued".
+    Clips whose stretches aren't known stay whole."""
+    parts, part, room = [], [], most
+    for clip in clips:
+        if clip["spans"] is None:
+            part.append(clip)
+            continue
+        taken = []
+        frags = clip.get("frags") or [[] for _ in clip["spans"]]
+        for (start, end), kills in zip(clip["spans"], frags):
+            continued = False
+            while True:
+                if end - start > room and (part or taken):
+                    if taken:
+                        part.append(clip_part(clip, taken, False))
+                    parts.append(part)
+                    part, taken, room = [], [], most
+                if end - start <= room:
+                    taken.append((start, end, kills, continued))
+                    room -= end - start
+                    break
+                cut = start + room
+                taken.append((start, cut, [k for k in kills if k["time"] < cut], continued))
+                kills = [k for k in kills if k["time"] >= cut]
+                start, room, continued = cut, 0, True
+        if taken:
+            whole = [(start, end) for start, end, _, _ in taken] == [tuple(span) for span in clip["spans"]]
+            part.append(clip if whole else clip_part(clip, taken, True))
+    return parts + [part] if part else parts
 
 
 CLIP_LIST = ["Clip", "Video", "Demo", "Time", "Fragger", "Victim", "Weapon"]
@@ -1626,6 +1682,22 @@ class RecordDialog(QDialog):
                                 "their frags (a .csv of the same name)")
         self.numbers.setChecked(settings.value("rec/numbers", "false") == "true")
         form.addRow("Clips", self.numbers)
+        self.split = QCheckBox("Split into parts of at most")
+        self.split.setToolTip("A video longer than this is recorded in parts, \"<name> part 1.mp4\", \"<name> part "
+                              "2.mp4\"…, cut between frags; a stretch longer than a part, as all of a long demo, is "
+                              "cut in it. Clip numbers go on from one part to the next, and each has its list")
+        self.split.setChecked(settings.value("rec/split", "false") == "true")
+        self.split_minutes = QSpinBox()
+        self.split_minutes.setRange(1, 999)
+        self.split_minutes.setSuffix(" min")
+        self.split_minutes.setValue(int(settings.value("rec/split_minutes", 60)))
+        self.split_minutes.setEnabled(self.split.isChecked())
+        self.split.toggled.connect(self.split_minutes.setEnabled)
+        row = QHBoxLayout()
+        row.addWidget(self.split)
+        row.addWidget(self.split_minutes)
+        row.addStretch(1)
+        form.addRow("Parts", row)
         if relabel:
             # once they stop changing, as a choice of many demos takes a while
             timer = QTimer(self, singleShot=True, interval=150)
@@ -1696,7 +1768,9 @@ class RecordDialog(QDialog):
         for key, value in (("folder", self.folder.text()), ("pattern", self.pattern.text()),
                            ("kill_before", str(self.kill_before.value())),
                            ("kill_after", str(self.kill_after.value())),
-                           ("numbers", "true" if self.numbers.isChecked() else "false")):
+                           ("numbers", "true" if self.numbers.isChecked() else "false"),
+                           ("split", "true" if self.split.isChecked() else "false"),
+                           ("split_minutes", str(self.split_minutes.value()))):
             self.settings.setValue("rec/" + key, value)
         if self.offers_join:
             self.settings.setValue("rec/join", "true" if self.join.isChecked() else "false")
@@ -1704,9 +1778,9 @@ class RecordDialog(QDialog):
             self.settings.setValue("rec/what", self.what())
         super().accept()
 
-    def job(self, label, clips, demo, player=""):
-        """A video of clips for the recorder, with the settings chosen; demo
-        and player name it."""
+    def jobs(self, label, clips, demo, player=""):
+        """The video of clips for the recorder, with the settings chosen, or
+        its parts when it's split: [job]. demo and player name it."""
         # a demo's file name, without its folders
         demo = demo.rsplit("/", 1)[-1]
         try:
@@ -1716,11 +1790,19 @@ class RecordDialog(QDialog):
         except (KeyError, ValueError, IndexError):
             name = demo
         name = "".join(c for c in name if c not in '/\\:*?"<>|').strip() or demo
-        return {"label": label, "clips": numbered(clips, self.numbers.isChecked()),
-                "numbers": self.numbers.isChecked(), **video_settings(self.settings),
-                "kill_before": str(self.kill_before.value()),
-                "kill_after": str(self.kill_after.value()),
-                "output": os.path.join(self.folder.text(), name + ".mp4"), "status": "waiting"}
+        parts = split_clips(clips, self.split_minutes.value() * 60000) if self.split.isChecked() else [clips]
+        jobs, first = [], 1
+        for number, part in enumerate(parts, 1):
+            suffix = f" part {number}" if len(parts) > 1 else ""
+            jobs.append({"label": label + (f" (part {number} of {len(parts)})" if suffix else ""),
+                         "clips": numbered(part, self.numbers.isChecked(), first),
+                         "numbers": self.numbers.isChecked(), **video_settings(self.settings),
+                         "kill_before": str(self.kill_before.value()),
+                         "kill_after": str(self.kill_after.value()),
+                         "output": os.path.join(self.folder.text(), name + suffix + ".mp4"),
+                         "status": "waiting"})
+            first += sum(len(clip["spans"] or [None]) - bool(clip.get("continued")) for clip in part)
+        return jobs
 
 
 class Recorder(QObject):
@@ -2805,7 +2887,7 @@ class Window(QMainWindow):
             clip = only_clip(demo, ONLY[what], whose.get(what, ""), plans_for(*dialog.kill_times())[what][1],
                              kill_filter)
             clip["frags"] = clip_frags(index, clip["spans"], ONLY[what], whose.get(what, ""), kill_filter)
-        self.add_job(dialog.job(label, [clip], demo, player))
+        self.add_jobs(dialog.jobs(label, [clip], demo, player))
 
     def record_selected(self, tree):
         """The kills selected, in one video or one each."""
@@ -2843,10 +2925,11 @@ class Window(QMainWindow):
         for clip in clips:
             clip["frags"] = [[k for chain in chains for k in chain if clip["start"] <= k["time"] < clip["end"]]]
         if dialog.join.isChecked() or len(clips) == 1:
-            self.add_job(dialog.job(f"{demo}, {kind}", clips, demo, player))
+            self.add_jobs(dialog.jobs(f"{demo}, {kind}", clips, demo, player))
         else:
             for clip in clips:
-                self.add_job(dialog.job(f"{demo}, {clock(clip['start'])} to {clock(clip['end'])}", [clip], demo, player))
+                label = f"{demo}, {clock(clip['start'])} to {clock(clip['end'])}"
+                self.add_jobs(dialog.jobs(label, [clip], demo, player))
 
     def record_demos(self):
         """The demos selected, all of them, or the kills of the filter, of
@@ -2925,11 +3008,15 @@ class Window(QMainWindow):
                                            kill_filter)
         if dialog.join.isChecked() or len(clips) == 1:
             demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
-            self.add_job(dialog.job(demo + (f", {kind}" if kind else ""), clips, demo, player))
+            self.add_jobs(dialog.jobs(demo + (f", {kind}" if kind else ""), clips, demo, player))
         else:
             for name, clip in zip(chosen, clips):
                 label = name + (f", {kind}" if kind else "")
-                self.add_job(dialog.job(label, [clip], name, whose.get(name) or player))
+                self.add_jobs(dialog.jobs(label, [clip], name, whose.get(name) or player))
+
+    def add_jobs(self, jobs):
+        for job in jobs:
+            self.add_job(job)
 
     def add_job(self, job):
         """Records it after the ones before it."""
