@@ -1008,8 +1008,9 @@ static void DI_UpdateWatched(diParser_t *p)
     }
     p->watched = watched;
 
-    ev         = DI_AddEvent(p, DEMOEVENT_WATCH);
-    ev->client = watched;
+    ev           = DI_AddEvent(p, DEMOEVENT_WATCH);
+    ev->client   = watched;
+    ev->followed = watched >= 0 && (p->snap.ps.pm_flags & PMF_CAMERA_VIEW);
     DI_PlayerName(p, watched, ev->name, sizeof(ev->name));
 }
 
@@ -1573,6 +1574,7 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
         case DEMOEVENT_WATCH:
             DI_Printf(b, ", \"client\": %d, \"name\": ", ev->client);
             DI_String(b, ev->name);
+            DI_Printf(b, ", \"followed\": %s", ev->followed ? "true" : "false");
             break;
         case DEMOEVENT_KILL:
             DI_Printf(b, ", \"killer\": %d, \"killerName\": ", ev->client);

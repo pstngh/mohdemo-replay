@@ -66,6 +66,9 @@ typedef struct {
     qboolean        teamKill;
     qboolean        grenade; // weapon is DEMOWEAPON_GRENADE
     demoWeapon_t    weapon;
+    // for a watch: the recorder follows the player as a spectator, the
+    // player isn't the recorder
+    qboolean        followed;
     // for a kill seen from the killer's view (the recorder's, or the player
     // followed): msec the killer had a scope on before the shot, 0 for none,
     // and their speed then; -1 when not seen

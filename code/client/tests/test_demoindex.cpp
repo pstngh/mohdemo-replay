@@ -127,6 +127,7 @@ static bool TestDemo(const char *demo, bool json)
             break;
         case DEMOEVENT_WATCH:
             ok &= Check(demo, ev->client < MAX_CLIENTS, "a watched player is out of range");
+            ok &= Check(demo, !ev->followed || ev->client >= 0, "no one is followed");
             watched++;
             shown = true;
             seen  = i;

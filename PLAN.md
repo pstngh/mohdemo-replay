@@ -83,8 +83,8 @@ taken for the game; CI now builds `main` for macOS too.
    - `demoindex.json`, once per demo: `duration`, `truncated`, `recorder`,
      `maps` (levels loaded midway too, each with the `rules` it was played
      under: `realism`, `default`, `mixed` or empty), `watched` (who is shown from when:
-     the followed player while spectating, -1 in free view, else the
-     recorder), `kills` (`killer`/`killerName`, `victim`/`victimName`,
+     the followed player while spectating, `followed` then, -1 in free
+     view, else the recorder), `kills` (`killer`/`killerName`, `victim`/`victimName`,
      `text`; client numbers are -1 when unknown, killer is -1 for suicides;
      `teamKill` when both were last seen on the same team, from the
      recorder's `STAT_TEAM` and the others' `EF_ALLIES`/`EF_AXIS`; for a
