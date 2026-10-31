@@ -950,10 +950,30 @@ static qboolean DI_ParsePacketEntities(diParser_t *p, msg_t *msg, diSnapshot_t *
 
 /*
 ===============
-DI_UpdateWatched
+DI_InView
 
-The followed player while spectating, nobody in free view, else the
-player who recorded the demo
+The player ps shows: the followed player while spectating, whose view and
+movement ps then has, nobody in free view, else the player who recorded the
+demo
+===============
+*/
+static int DI_InView(const diParser_t *p, const playerState_t *ps)
+{
+    int client;
+
+    if (ps->pm_flags & PMF_CAMERA_VIEW) {
+        client = ps->stats[STAT_INFOCLIENT];
+        return client >= 0 && client < MAX_CLIENTS ? client : -1;
+    }
+    if (ps->pm_flags & PMF_SPECTATING) {
+        return -1;
+    }
+    return p->clientNum;
+}
+
+/*
+===============
+DI_UpdateWatched
 ===============
 */
 static void DI_UpdateWatched(diParser_t *p)
@@ -961,17 +981,7 @@ static void DI_UpdateWatched(diParser_t *p)
     demoEvent_t *ev;
     int          watched;
 
-    if (p->snap.ps.pm_flags & PMF_CAMERA_VIEW) {
-        watched = p->snap.ps.stats[STAT_INFOCLIENT];
-        if (watched < 0 || watched >= MAX_CLIENTS) {
-            watched = -1;
-        }
-    } else if (p->snap.ps.pm_flags & PMF_SPECTATING) {
-        watched = -1;
-    } else {
-        watched = p->clientNum;
-    }
-
+    watched = DI_InView(p, &p->snap.ps);
     if (watched == p->watched) {
         return;
     }
@@ -1102,15 +1112,25 @@ static void DI_SetKillAims(diParser_t *p, const diSnapshot_t *snap)
 {
     const float *velocity = snap->ps.velocity;
     demoEvent_t *ev;
+    char         name[MAX_NAME_LENGTH];
+    int          client;
     int          i;
 
-    if (!snap->valid || !p->snap.valid || p->snap.ps.clientNum != snap->ps.clientNum) {
+    if (!snap->valid || !p->snap.valid) {
         return;
     }
+    client = DI_InView(p, &snap->ps);
+    if (client < 0 || DI_InView(p, &p->snap.ps) != client) {
+        return;
+    }
+    DI_PlayerName(p, client, name, sizeof(name));
 
     for (i = p->firstUntimed; i < p->index->numEvents; i++) {
         ev = &p->index->events[i];
-        if (ev->type != DEMOEVENT_KILL || ev->client != snap->ps.clientNum) {
+        // kill messages only name the killer: a kill by the name of the
+        // player in view is theirs, also when someone else has that name,
+        // like a spectator recording the demo as the player they follow
+        if (ev->type != DEMOEVENT_KILL || (ev->client != client && (!name[0] || strcmp(ev->name, name)))) {
             continue;
         }
         ev->scope = p->snap.ps.fov < DI_SCOPE_FOV ? snap->serverTime - p->unscopedTime : 0;
@@ -1202,7 +1222,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
         DI_AddEvent(p, DEMOEVENT_ROUNDSTART);
     }
 
-    if (!p->snap.valid || p->snap.ps.clientNum != newSnap.ps.clientNum || newSnap.ps.fov >= DI_SCOPE_FOV) {
+    if (!p->snap.valid || DI_InView(p, &p->snap.ps) != DI_InView(p, &newSnap.ps) || newSnap.ps.fov >= DI_SCOPE_FOV) {
         p->unscopedTime = newSnap.serverTime;
     }
     p->snap                                       = newSnap;

@@ -93,7 +93,9 @@ static bool TestDemo(const char *demo, bool json)
     const char *rules;
     int         lastTime = 0;
     bool        shown    = false; // a watch event on the level so far
+    int         seen     = -1; // the last watch event on the level, -1 if none
     bool        later;
+    bool        byShown;
     int         i, j;
 
     f = fopen(demo, "rb");
@@ -121,11 +123,13 @@ static bool TestDemo(const char *demo, bool json)
             defaults += !strcmp(rules, "default");
             maps++;
             shown = false;
+            seen  = -1;
             break;
         case DEMOEVENT_WATCH:
             ok &= Check(demo, ev->client < MAX_CLIENTS, "a watched player is out of range");
             watched++;
             shown = true;
+            seen  = i;
             break;
         case DEMOEVENT_KILL:
             ok &= Check(demo, ev->text[0] != 0, "a kill has no message");
@@ -143,7 +147,12 @@ static bool TestDemo(const char *demo, bool json)
             ok &= Check(demo, !ev->grenade == (ev->weapon != DEMOWEAPON_GRENADE), "a grenade kill isn't one by its weapon");
             ok &= Check(demo, (ev->scope < 0) == (ev->speed < 0) && ev->scope <= index.duration && ev->speed < 2000,
                         "a kill's scope time or speed is wrong");
-            ok &= Check(demo, ev->scope < 0 || ev->client >= 0, "a kill without a killer has a scope time");
+            // a scope time is from the view of the player shown, the killer or
+            // someone with their name, as kill messages only name the killer
+            byShown = seen >= 0 && ev->client >= 0
+                   && (ev->client == index.events[seen].client
+                       || (index.events[seen].name[0] && !strcmp(ev->name, index.events[seen].name)));
+            ok &= Check(demo, ev->scope < 0 || byShown, "a kill with a scope time isn't by the player shown");
             unknownWeapons += ev->weapon == DEMOWEAPON_UNKNOWN;
             kills++;
             break;
