@@ -179,8 +179,10 @@ def clean_name(name):
 OBJ_LEVELS = "obj/"
 # what Great frags leaves out: sniper frags seen from their fragger's
 # view with the scope on for longer than this, in msec, and the fragger at
-# this speed or slower, the slow scoped shots of someone standing still
-GREAT_SCOPE, GREAT_SPEED = 1000, 30
+# this speed or slower, the slow scoped shots of someone standing still,
+# but not those of a streak: with another frag of the fragger at most
+# GREAT_STREAK msec before or after, as one clip shows them
+GREAT_SCOPE, GREAT_SPEED, GREAT_STREAK = 1000, 30, 5000
 
 
 def kill_levels(index):
@@ -195,12 +197,38 @@ def kill_levels(index):
     return index
 
 
+def kill_streaks(index):
+    """Tells each kill of index whether it's in a streak, "streak": with
+    another kill of its killer at most GREAT_STREAK msec before or after it,
+    as the engine looks them up (CL_DemoInMultiKill); team kills, grenade
+    kills and the deaths of the player shown don't count. Returns index."""
+    deaths = deaths_shown(index)
+
+    def counts(kill):
+        return kill["killerName"] and not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths
+    times = {}
+    for kill in index.get("kills", []):
+        if counts(kill):
+            times.setdefault(clean_name(kill["killerName"]), []).append(kill["time"])
+    for when in times.values():
+        when.sort()
+    for kill in index.get("kills", []):
+        when = times.get(clean_name(kill["killerName"]), []) if kill["killerName"] and not is_grenade(kill) else []
+        t = kill["time"]
+        near = bisect.bisect_right(when, t + GREAT_STREAK) - bisect.bisect_left(when, t - GREAT_STREAK)
+        # other than itself
+        kill["streak"] = near > (1 if counts(kill) else 0)
+    return index
+
+
 def slow_snipe(kill):
     """Whether kill is one Great frags leaves out: a sniper frag its
     index saw from the fragger's view, made with the scope on for over
-    GREAT_SCOPE msec at GREAT_SPEED or slower. Not one when not seen, as in
-    an index made before scopes were."""
-    return weapon_of(kill) == "sniper" and kill.get("scope", -1) > GREAT_SCOPE and kill.get("speed", 0) <= GREAT_SPEED
+    GREAT_SCOPE msec at GREAT_SPEED or slower, not in a streak (given by
+    kill_streaks). Not one when not seen, as in an index made before scopes
+    were."""
+    return (weapon_of(kill) == "sniper" and kill.get("scope", -1) > GREAT_SCOPE and kill.get("speed", 0) <= GREAT_SPEED
+            and not kill.get("streak"))
 
 
 def same_player(a, b):
@@ -282,7 +310,7 @@ class KillFilter:
                 + ["demofilter victim " + quoted(name) for name in self.victim_names]
                 + (["demofilter weapon " + " ".join(self.weapons)] if self.weapons else [])
                 + (["demofilter level " + OBJ_LEVELS] if self.obj else [])
-                + ([f"demofilter great {GREAT_SCOPE} {GREAT_SPEED}"] if self.great else []))
+                + ([f"demofilter great {GREAT_SCOPE} {GREAT_SPEED} {GREAT_STREAK}"] if self.great else []))
 
     def words(self, killers=True):
         """What it keeps after "kills", the killers too if killers: " by
@@ -397,7 +425,7 @@ def summarize(index):
     they're shown, and its kills for the kill filter: [(killer, clean
     killer, clean victim, weapon, whether made while the killer is shown,
     level, whether a slow snipe)]."""
-    kill_levels(index)
+    kill_streaks(kill_levels(index))
     players = {}
 
     def add(name, kills=0):
@@ -1455,7 +1483,7 @@ def planned_kills(index, only, player="", kill_filter=None):
     whether the player shown changing cuts joined clips (when they're
     someone's)."""
     kill_filter = kill_filter or KillFilter()
-    kill_levels(index)
+    kill_streaks(kill_levels(index))
     whoever = only.startswith("shown")
     if whoever or player or kill_filter.by_shown():
         kills = [(k, start, end) for k, start, end in shown_kills(index)
@@ -1965,9 +1993,9 @@ class Window(QMainWindow):
         self.obj.toggled.connect(self.kill_filter_timer.start)
         self.great = QCheckBox("Great frags")
         self.great.setToolTip("Leaves out the sniper frags made with the scope on for over a second while standing "
-                              "still, as the fragger's view shows them: no-scopes, quick scopes and shots on the move "
-                              "stay, and so do the frags of other weapons and those the demo doesn't show from the "
-                              "fragger's view")
+                              "still, as the fragger's view shows them: no-scopes, quick scopes, shots on the move and "
+                              "streaks (frags at most 5 s apart) stay, and so do the frags of other weapons and those "
+                              "the demo doesn't show from the fragger's view")
         self.great.toggled.connect(self.kill_filter_timer.start)
         left = QWidget()
         box = QVBoxLayout(left)
@@ -2470,7 +2498,7 @@ class Window(QMainWindow):
 
     def load_index(self, demo):
         index = self.game.read_json("demoindex.json")
-        self.index = kill_levels(index) if index and index.get("demo") == demo else None
+        self.index = kill_streaks(kill_levels(index)) if index and index.get("demo") == demo else None
         self.pending_demo = None
         self.statusBar().showMessage("Playing " + demo)
         self.fill_index()

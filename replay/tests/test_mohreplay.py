@@ -352,7 +352,7 @@ class TestFunctions(unittest.TestCase):
 
     def test_great_frags(self):
         """Great frags: not the sniper frags seen scoped for over a
-        second while standing still."""
+        second while standing still, but those of a streak."""
         slow = mohreplay.slow_snipe
         self.assertTrue(slow({"weapon": "sniper", "scope": 1001, "speed": 30}))
         # quick scopes, no-scopes, shots on the move, other weapons, frags not
@@ -362,11 +362,12 @@ class TestFunctions(unittest.TestCase):
                      {"weapon": "sniper"}):
             self.assertFalse(slow(kill), kill)
         snipes = json.loads(json.dumps(DEMO))
-        for kill, scope, speed in zip(snipes["kills"], (1500, 2500, 400), (0, 10, 0)):
-            kill.update(weapon="sniper", scope=scope, speed=speed)
+        # 10 s apart, not a streak
+        for kill, time, scope, speed in zip(snipes["kills"], (10000, 20000, 30000), (1500, 2500, 400), (0, 10, 0)):
+            kill.update(time=time, weapon="sniper", scope=scope, speed=speed)
         great = mohreplay.KillFilter(["t-"], great=True)
         self.assertTrue(mohreplay.KillFilter(great=True))
-        self.assertEqual(great.commands()[-1], "demofilter great 1000 30")
+        self.assertEqual(great.commands()[-1], "demofilter great 1000 30 5000")
         self.assertEqual(great.words(), " by t-, great ones")
         # t-'s 3 frags while shown, the first 2 slow snipes
         summary = mohreplay.summarize(snipes)
@@ -374,6 +375,20 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(summary, great), (1, {"t-": ["t-", 1]}))
         self.assertEqual(mohreplay.demoonly_plan(snipes, "kills", "t-", kill_filter=great)[0], 1)
         self.assertEqual([great.keeps(kill) for kill in snipes["kills"][:3]], [False, False, True])
+        # the second slow snipe in a streak with the third frag, at most 5 s
+        # before it, and not when that's a team kill or a grenade kill
+        for time, change, streak in ((24000, {}, True), (25000, {}, True), (25001, {}, False),
+                                     (24000, {"teamKill": True}, False),
+                                     (24000, {"weapon": "grenade", "grenade": True}, False)):
+            streaks = json.loads(json.dumps(snipes))
+            streaks["kills"][2].update(time=time, **change)
+            mohreplay.kill_streaks(streaks)
+            self.assertEqual(great.keeps(streaks["kills"][1]), streak, (time, change))
+            self.assertFalse(great.keeps(streaks["kills"][0]))
+        streaks = json.loads(json.dumps(snipes))
+        streaks["kills"][2]["time"] = 24000
+        self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), great), (2, {"t-": ["t-", 2]}))
+        self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", "t-", kill_filter=great)[0], 2)
 
     def test_weapons(self):
         self.assertEqual([mohreplay.weapon_of(kill) for kill in DEMO["kills"]],
@@ -1254,10 +1269,10 @@ class TestLibrary(FakeGameCase):
 
     def test_great_frags(self):
         """Great frags, in the list and the demo playing: snipes has two
-        slow snipes of t-'s 3 frags."""
+        slow snipes of t-'s 3 frags, 10 s apart."""
         snipes = json.loads(json.dumps(DEMO))
-        for kill, scope in zip(snipes["kills"], (1500, 2500, 400)):
-            kill.update(weapon="sniper", scope=scope, speed=0)
+        for kill, time, scope in zip(snipes["kills"], (10000, 20000, 30000), (1500, 2500, 400)):
+            kill.update(time=time, weapon="sniper", scope=scope, speed=0)
         self.add_demo("snipes", snipes)
         window = self.window()
         self.indexed(window, ("first", "other", "snipes"))
@@ -1271,7 +1286,7 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(self.shown(window), ["snipes"])
         self.playing(window, "snipes")
         self.assertEqual(window.kills.topLevelItemCount(), 1)
-        self.assertTrue(wait_until(lambda: "demofilter great 1000 30" in self.commands(window.game)))
+        self.assertTrue(wait_until(lambda: "demofilter great 1000 30 5000" in self.commands(window.game)))
         self.choose(window, great=False)
         self.assertEqual(window.kills.topLevelItemCount(), 3)
 

@@ -39,9 +39,10 @@ keeps the frags made on the objective maps (the levels in `obj/`, as
 obj_team4 or harbor), not on the deathmatch ones (`dm/`), as a demo can
 have both. Great frags leaves out the slow scoped snipes: sniper frags made
 with the scope on for over a second while standing still, as the fragger's
-view shows them; no-scopes, quick scopes and shots on the move stay, and so
-do the frags of other weapons and those the demo doesn't show from the
-fragger's view (demos indexed by an older version are indexed again once
+view shows them; no-scopes, quick scopes, shots on the move and streaks
+(frags of the same fragger at most 5 s apart, which one clip shows) stay,
+and so do the frags of other weapons and those the demo doesn't show from
+the fragger's view (demos indexed by an older version are indexed again once
 for it). The list then shows
 only the demos with such frags, with how many of each fragger, and the
 demo playing lists only those. A player's frags are only those made while the
