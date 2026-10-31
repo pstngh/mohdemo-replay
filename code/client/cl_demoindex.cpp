@@ -37,6 +37,22 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // without
 #define DI_SCOPE_FOV 60
 
+// a player's bone controllers that follow their view and lean: head, torso,
+// arms and pelvis (HEAD_TAG to PELVIS_TAG), the pelvis' roll being 0.8 of
+// their lean
+#define DI_BODY_BONES 4
+#define DI_PELVIS     3
+
+// what a player's entity shows of their input: their place, view, lean,
+// animations and box, which crouching lowers
+typedef struct {
+    vec3_t origin;
+    vec3_t angles;
+    vec3_t bones[DI_BODY_BONES];
+    int    anims[MAX_FRAMEINFOS];
+    int    solid;
+} diPose_t;
+
 typedef struct {
     qboolean      valid;
     int           messageNum;
@@ -79,6 +95,9 @@ typedef struct {
     int      level; // the map event of the level playing, -1 before the first
     int      teams[MAX_CLIENTS]; // the team each player was last seen on, TEAM_NONE if not seen
     int      unscopedTime; // the last snapshot of the player in view without a scope on
+    diPose_t poses[MAX_CLIENTS]; // each player as last seen
+    int      seenTime[MAX_CLIENTS]; // the snapshot each player was last seen in, 0 if not since the level started
+    int      inputTime[MAX_CLIENTS]; // the last snapshot showing each player's input
 
     diName_t knownNames[DI_KNOWN_NAMES];
     int      numKnownNames;
@@ -109,6 +128,7 @@ static demoEvent_t *DI_AddEvent(diParser_t *p, demoEventType_t type)
     ev->other  = -1;
     ev->scope  = -1;
     ev->speed  = -1;
+    ev->idle   = -1;
     return ev;
 }
 
@@ -776,6 +796,7 @@ static qboolean DI_ParseGamestate(diParser_t *p, msg_t *msg)
     memset(&p->gameState, 0, sizeof(p->gameState));
     memset(p->baselines, 0, sizeof(p->baselines));
     memset(p->teams, 0, sizeof(p->teams));
+    memset(p->seenTime, 0, sizeof(p->seenTime));
     // a level starts with who is shown, as kills are only looked up in theirs
     p->watched = -2;
     p->snap.valid = qfalse;
@@ -1025,6 +1046,52 @@ static void DI_UpdateTeams(diParser_t *p)
 
 /*
 ===============
+DI_UpdateIdle
+
+When each player in view last gave input, as far as their entity shows it,
+up to the last snapshot, lastTime being the one before: moving, turning,
+firing and all else that changes their animations change their pose, and
+crouching or leaning holds a key, so idle players stand upright, their pose
+not changing. A player out of view in the snapshot before counts as giving
+input when seen again.
+===============
+*/
+static void DI_UpdateIdle(diParser_t *p, int lastTime)
+{
+    const entityState_t *ent;
+    diPose_t             pose;
+    vec3_t               mins, maxs;
+    int                  i, j;
+
+    for (i = 0; i < p->snap.numEntities; i++) {
+        ent = &p->parseEntities[(p->snap.parseEntitiesNum + i) & (DI_PARSE_ENTITIES - 1)];
+        if (ent->number < 0 || ent->number >= MAX_CLIENTS) {
+            continue;
+        }
+
+        memset(&pose, 0, sizeof(pose));
+        VectorCopy(ent->netorigin, pose.origin);
+        VectorCopy(ent->netangles, pose.angles);
+        for (j = 0; j < DI_BODY_BONES; j++) {
+            VectorCopy(ent->bone_angles[j], pose.bones[j]);
+        }
+        for (j = 0; j < MAX_FRAMEINFOS; j++) {
+            pose.anims[j] = ent->frameInfo[j].index;
+        }
+        pose.solid = ent->solid;
+        IntegerToBoundingBox(ent->solid, mins, maxs);
+
+        if (p->seenTime[ent->number] != lastTime || memcmp(&pose, &p->poses[ent->number], sizeof(pose))
+            || maxs[2] <= CROUCH_RUN_MAXS_Z || ent->bone_angles[DI_PELVIS][2]) {
+            p->inputTime[ent->number] = p->snap.serverTime;
+        }
+        p->poses[ent->number]    = pose;
+        p->seenTime[ent->number] = p->snap.serverTime;
+    }
+}
+
+/*
+===============
 DI_CountRulesSpeed
 
 Realism servers change the top speeds: the StG 44 and BAR run at 233 and
@@ -1140,6 +1207,32 @@ static void DI_SetKillAims(diParser_t *p, const diSnapshot_t *snap)
 
 /*
 ===============
+DI_SetKillIdles
+
+The kills waiting for the next snapshot: how long their victim had given no
+input, if in view in the last snapshot, the one before the shot's.
+===============
+*/
+static void DI_SetKillIdles(diParser_t *p)
+{
+    demoEvent_t *ev;
+    int          i;
+
+    if (!p->snap.valid) {
+        return;
+    }
+
+    for (i = p->firstUntimed; i < p->index->numEvents; i++) {
+        ev = &p->index->events[i];
+        if (ev->type == DEMOEVENT_KILL && ev->other >= 0 && ev->other < MAX_CLIENTS
+            && p->seenTime[ev->other] == p->snap.serverTime) {
+            ev->idle = p->snap.serverTime - p->inputTime[ev->other];
+        }
+    }
+}
+
+/*
+===============
 DI_ParseSnapshot
 
 Like CL_ParseSnapshot
@@ -1154,6 +1247,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
     int                   deltaNum;
     int                   numSounds;
     int                   len;
+    int                   lastTime;
     int                   i;
 
     memset(&newSnap, 0, sizeof(newSnap));
@@ -1202,6 +1296,9 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
     }
     p->lastTime = newSnap.serverTime;
     DI_SetKillAims(p, &newSnap);
+    if (newSnap.valid) {
+        DI_SetKillIdles(p);
+    }
     DI_SetEventTimes(p, newSnap.serverTime);
 
     if (!newSnap.valid) {
@@ -1222,6 +1319,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
         DI_AddEvent(p, DEMOEVENT_ROUNDSTART);
     }
 
+    lastTime = p->snap.valid ? p->snap.serverTime : -1;
     if (!p->snap.valid || DI_InView(p, &p->snap.ps) != DI_InView(p, &newSnap.ps) || newSnap.ps.fov >= DI_SCOPE_FOV) {
         p->unscopedTime = newSnap.serverTime;
     }
@@ -1229,6 +1327,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
     p->snapshots[newSnap.messageNum & PACKET_MASK] = newSnap;
     DI_CountRulesSpeed(p, &newSnap.ps);
     DI_UpdateTeams(p);
+    DI_UpdateIdle(p, lastTime);
 
     if (p->started) {
         DI_UpdateWatched(p);
@@ -1487,6 +1586,9 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             DI_Printf(b, ", \"weapon\": \"%s\"", DemoIndex_WeaponName(ev->weapon));
             if (ev->scope >= 0) {
                 DI_Printf(b, ", \"scope\": %d, \"speed\": %d", ev->scope, ev->speed);
+            }
+            if (ev->idle >= 0) {
+                DI_Printf(b, ", \"idle\": %d", ev->idle);
             }
             break;
         case DEMOEVENT_ROUNDSTART:

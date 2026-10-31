@@ -153,6 +153,8 @@ static bool TestDemo(const char *demo, bool json)
                    && (ev->client == index.events[seen].client
                        || (index.events[seen].name[0] && !strcmp(ev->name, index.events[seen].name)));
             ok &= Check(demo, ev->scope < 0 || byShown, "a kill with a scope time isn't by the player shown");
+            ok &= Check(demo, ev->idle >= -1 && ev->idle <= index.duration && (ev->idle < 0 || ev->other >= 0),
+                        "a kill's idle time is wrong");
             unknownWeapons += ev->weapon == DEMOWEAPON_UNKNOWN;
             kills++;
             break;

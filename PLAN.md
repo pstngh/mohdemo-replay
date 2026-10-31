@@ -89,7 +89,9 @@ taken for the game; CI now builds `main` for macOS too.
      `teamKill` when both were last seen on the same team, from the
      recorder's `STAT_TEAM` and the others' `EF_ALLIES`/`EF_AXIS`; for a
      kill seen from the killer's view, `scope`, the msec they had a scope on
-     before the shot, 0 for none, and `speed`, theirs then),
+     before the shot, 0 for none, and `speed`, theirs then; for a kill whose
+     victim was in view just before, `idle`, the msec their entity showed no
+     input: the same place, view, animations and box, standing, no lean),
      `rounds` (when the level restarts: snapshots toggle
      `SNAPFLAG_SERVERCOUNT`, about 3.3 s after a round end, also without
      one, like at the start of a match) and `roundEnds` (`text`: "Axis

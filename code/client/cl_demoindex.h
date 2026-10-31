@@ -71,6 +71,9 @@ typedef struct {
     // and their speed then; -1 when not seen
     int scope;
     int speed;
+    // for a kill whose victim was in view before it: msec they had given
+    // no input then, as their entity shows it; -1 when not seen
+    int idle;
     // for a level: the recorder's snapshots at a top speed only realism
     // servers give, and at one only default servers give
     int realismTicks;
