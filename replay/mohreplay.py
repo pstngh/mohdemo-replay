@@ -181,8 +181,9 @@ OBJ_LEVELS = "obj/"
 # view with the scope on for longer than this, in msec, and the fragger at
 # this speed or slower, the slow scoped shots of someone standing still,
 # but not those of a streak: with another frag of the fragger at most
-# GREAT_STREAK msec before or after, as one clip shows them
-GREAT_SCOPE, GREAT_SPEED, GREAT_STREAK = 1000, 30, 5000
+# GREAT_STREAK msec before or after, as one clip shows them; and the frags
+# of victims who had given no input for over GREAT_IDLE msec, AFK
+GREAT_SCOPE, GREAT_SPEED, GREAT_STREAK, GREAT_IDLE = 1000, 30, 5000, 5000
 
 
 def kill_levels(index):
@@ -201,11 +202,13 @@ def kill_streaks(index):
     """Tells each kill of index whether it's in a streak, "streak": with
     another kill of its killer at most GREAT_STREAK msec before or after it,
     as the engine looks them up (CL_DemoInMultiKill); team kills, grenade
-    kills and the deaths of the player shown don't count. Returns index."""
+    kills, the deaths of the player shown and the kills of idle victims
+    don't count. Returns index."""
     deaths = deaths_shown(index)
 
     def counts(kill):
-        return kill["killerName"] and not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths
+        return (kill["killerName"] and not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths
+                and not idle_victim(kill))
     times = {}
     for kill in index.get("kills", []):
         if counts(kill):
@@ -229,6 +232,18 @@ def slow_snipe(kill):
     were."""
     return (weapon_of(kill) == "sniper" and kill.get("scope", -1) > GREAT_SCOPE and kill.get("speed", 0) <= GREAT_SPEED
             and not kill.get("streak"))
+
+
+def idle_victim(kill):
+    """Whether kill's victim had given no input for over GREAT_IDLE msec
+    before it, AFK, as its index saw them. Not when not seen."""
+    return kill.get("idle", -1) > GREAT_IDLE
+
+
+def poor_frag(kill):
+    """Whether Great frags leaves kill out: a slow snipe or the frag of an
+    idle victim."""
+    return slow_snipe(kill) or idle_victim(kill)
 
 
 def same_player(a, b):
@@ -261,7 +276,8 @@ class KillFilter:
     of killers in them, while they're shown, as a player's kills are, or by
     whoever is shown (shown), of players whose names have one of victims,
     made with one of weapons (keys of WEAPONS), on the objective maps only if
-    obj, great ones only if great (not slow snipes). Names are parts of
+    obj, great ones only if great (not slow snipes nor frags of AFK
+    players). Names are parts of
     names as the search takes its words; none is anyone, no weapons any
     weapon. The game is told it with demofilter."""
 
@@ -288,20 +304,20 @@ class KillFilter:
         shown."""
         return not self.killers or any(part in killer for part in self.killers)
 
-    def has(self, victim, weapon, level="", slow=False):
+    def has(self, victim, weapon, level="", poor=False):
         """Whether a kill of a victim (clean name) made with weapon in a level
-        (lower case), a slow snipe or not, is one of its, whoever the
+        (lower case), poor (poor_frag) or not, is one of its, whoever the
         killer."""
         return ((not self.weapons or weapon in self.weapons)
                 and (not self.victims or any(part in victim for part in self.victims))
-                and (not self.obj or OBJ_LEVELS in level) and not (self.great and slow))
+                and (not self.obj or OBJ_LEVELS in level) and not (self.great and poor))
 
     def keeps(self, kill, killer=True):
         """Whether kill, given its level (kill_levels), is one of its, whoever
         the killer unless killer."""
         return ((not killer or self.has_killer(clean_name(kill["killerName"])))
                 and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill), kill.get("level", ""),
-                             slow_snipe(kill)))
+                             poor_frag(kill)))
 
     def commands(self):
         """The demofilter commands telling it to the game."""
@@ -310,7 +326,7 @@ class KillFilter:
                 + ["demofilter victim " + quoted(name) for name in self.victim_names]
                 + (["demofilter weapon " + " ".join(self.weapons)] if self.weapons else [])
                 + (["demofilter level " + OBJ_LEVELS] if self.obj else [])
-                + ([f"demofilter great {GREAT_SCOPE} {GREAT_SPEED} {GREAT_STREAK}"] if self.great else []))
+                + ([f"demofilter great {GREAT_SCOPE} {GREAT_SPEED} {GREAT_STREAK} {GREAT_IDLE}"] if self.great else []))
 
     def words(self, killers=True):
         """What it keeps after "kills", the killers too if killers: " by
@@ -424,7 +440,7 @@ def summarize(index):
     players, {clean name: [name, kills]}, counting the kills made while
     they're shown, and its kills for the kill filter: [(killer, clean
     killer, clean victim, weapon, whether made while the killer is shown,
-    level, whether a slow snipe)]."""
+    level, whether poor (poor_frag))]."""
     kill_streaks(kill_levels(index))
     players = {}
 
@@ -450,7 +466,7 @@ def summarize(index):
     return {"maps": [m["map"] for m in index.get("maps", [])], "duration": index.get("duration", 0),
             "recorder": index.get("recorder", {}).get("name", ""), "players": players, "rules": rules,
             "kills": [(kill["killerName"], clean_name(kill["killerName"]), clean_name(kill.get("victimName", "")),
-                       weapon_of(kill), id(kill) in shown, kill["level"], slow_snipe(kill)) for kill in kills]}
+                       weapon_of(kill), id(kill) in shown, kill["level"], poor_frag(kill)) for kill in kills]}
 
 
 def filter_kills(summary, kill_filter):
@@ -458,8 +474,8 @@ def filter_kills(summary, kill_filter):
     their killers, {clean name: [name, kills]}."""
     count, killers = 0, {}
     by_shown = kill_filter.by_shown()
-    for name, killer, victim, weapon, shown, level, slow in summary.get("kills", []):
-        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon, level, slow):
+    for name, killer, victim, weapon, shown, level, poor in summary.get("kills", []):
+        if (shown or not by_shown) and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon, level, poor):
             count += 1
             if name:
                 killers.setdefault(killer, [name, 0])[1] += 1
@@ -1995,7 +2011,8 @@ class Window(QMainWindow):
         self.great.setToolTip("Leaves out the sniper frags made with the scope on for over a second while standing "
                               "still, as the fragger's view shows them: no-scopes, quick scopes, shots on the move and "
                               "streaks (frags at most 5 s apart) stay, and so do the frags of other weapons and those "
-                              "the demo doesn't show from the fragger's view")
+                              "the demo doesn't show from the fragger's view. Leaves out the frags of AFK players too, "
+                              "who had given no input for over 5 s")
         self.great.toggled.connect(self.kill_filter_timer.start)
         left = QWidget()
         box = QVBoxLayout(left)

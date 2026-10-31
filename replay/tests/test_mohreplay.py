@@ -352,7 +352,8 @@ class TestFunctions(unittest.TestCase):
 
     def test_great_frags(self):
         """Great frags: not the sniper frags seen scoped for over a
-        second while standing still, but those of a streak."""
+        second while standing still, but those of a streak, nor the frags of
+        AFK victims."""
         slow = mohreplay.slow_snipe
         self.assertTrue(slow({"weapon": "sniper", "scope": 1001, "speed": 30}))
         # quick scopes, no-scopes, shots on the move, other weapons, frags not
@@ -367,7 +368,7 @@ class TestFunctions(unittest.TestCase):
             kill.update(time=time, weapon="sniper", scope=scope, speed=speed)
         great = mohreplay.KillFilter(["t-"], great=True)
         self.assertTrue(mohreplay.KillFilter(great=True))
-        self.assertEqual(great.commands()[-1], "demofilter great 1000 30 5000")
+        self.assertEqual(great.commands()[-1], "demofilter great 1000 30 5000 5000")
         self.assertEqual(great.words(), " by t-, great ones")
         # t-'s 3 frags while shown, the first 2 slow snipes
         summary = mohreplay.summarize(snipes)
@@ -389,6 +390,16 @@ class TestFunctions(unittest.TestCase):
         streaks["kills"][2]["time"] = 24000
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), great), (2, {"t-": ["t-", 2]}))
         self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", "t-", kill_filter=great)[0], 2)
+        # a victim idle for over 5 s: never great, whatever the weapon, and
+        # makes no streak
+        self.assertTrue(mohreplay.idle_victim({"weapon": "rifle", "idle": 5001}))
+        self.assertFalse(mohreplay.idle_victim({"idle": 5000}) or mohreplay.idle_victim({}))
+        streaks["kills"][2]["idle"] = 5001
+        mohreplay.kill_streaks(streaks)
+        self.assertEqual([great.keeps(kill) for kill in streaks["kills"][:3]], [False, False, False])
+        self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), great)[0], 0)
+        self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), mohreplay.KillFilter(["t-"]))[0], 3)
+        self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", "t-", kill_filter=great)[0], 0)
 
     def test_weapons(self):
         self.assertEqual([mohreplay.weapon_of(kill) for kill in DEMO["kills"]],
@@ -1286,7 +1297,7 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(self.shown(window), ["snipes"])
         self.playing(window, "snipes")
         self.assertEqual(window.kills.topLevelItemCount(), 1)
-        self.assertTrue(wait_until(lambda: "demofilter great 1000 30 5000" in self.commands(window.game)))
+        self.assertTrue(wait_until(lambda: "demofilter great 1000 30 5000 5000" in self.commands(window.game)))
         self.choose(window, great=False)
         self.assertEqual(window.kills.topLevelItemCount(), 3)
 

@@ -42,8 +42,10 @@ with the scope on for over a second while standing still, as the fragger's
 view shows them; no-scopes, quick scopes, shots on the move and streaks
 (frags of the same fragger at most 5 s apart, which one clip shows) stay,
 and so do the frags of other weapons and those the demo doesn't show from
-the fragger's view (demos indexed by an older version are indexed again once
-for it). The list then shows
+the fragger's view. It leaves out the frags of AFK players too, any weapon:
+victims who had given no input for over 5 s, not moving, turning, firing,
+crouching or leaning, as long as the demo showed them (demos indexed by an
+older version are indexed again once for it). The list then shows
 only the demos with such frags, with how many of each fragger, and the
 demo playing lists only those. A player's frags are only those made while the
 demo shows them (the recorder playing, or the player the recorder follows),
